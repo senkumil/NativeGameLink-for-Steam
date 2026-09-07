@@ -1065,8 +1065,8 @@ try {
 		'classes.Achievement', 'classes.Community', 'classes.GameInfo',
 		'PartnerEventMediumImage_Container', 'AchievementCarouselItem', 'CommunityItem', 'AppGameInfoContainer',
 		'function ActivityTab(', 'function StuffTab(', 'function CommunityTab(', 'function InfoTab(',
-		'function AchievementsSection(', 'function TradingCardsSection(', 'function MediaSection(',
-		"AppDetails_SectionTitle_TradingCards", "AppDetails_SectionTitle_Media", "AppDetails_SectionTitle_GameNotes",
+		'function AchievementsSection(', 'function TradingCardsSection(',
+		"AppDetails_SectionTitle_TradingCards",
 	].every(token => nativeDetailsSource.includes(token));
 	const settingsPrimitives = ['PanelSection', 'PanelSectionRow', 'Field'].some(token => nativeDetailsSource.includes(token));
 	if (!completeNativeSections || settingsPrimitives) {

@@ -26,10 +26,50 @@ function isSteamControllerConnected(ctrl: any): boolean {
 	return false;
 }
 
-export function detectConnectedController(_doc?: Document): ConnectedControllerInfo {
-	// 1. Check Web Gamepad API (direct Chromium / hardware detection)
+function getSteamControllerStore(doc?: Document): any {
 	try {
-		const gamepads = typeof navigator.getGamepads === 'function' ? navigator.getGamepads() : [];
+		const win = doc?.defaultView || (typeof window !== 'undefined' ? window : null);
+		if (win) {
+			if ((win as any).ControllerStore) return (win as any).ControllerStore;
+			if ((win as any).opener && (win as any).opener.ControllerStore) return (win as any).opener.ControllerStore;
+			if ((win as any).parent && (win as any).parent.ControllerStore) return (win as any).parent.ControllerStore;
+			if ((win as any).top && (win as any).top.ControllerStore) return (win as any).top.ControllerStore;
+		}
+	} catch {}
+	return null;
+}
+
+export function detectConnectedController(doc?: Document): ConnectedControllerInfo {
+	// 1. Check official Steam ControllerStore (instantaneous & accurate)
+	try {
+		const store = getSteamControllerStore(doc);
+		if (store) {
+			const list = typeof store.GetControllers === 'function' ? store.GetControllers() : store.m_controllerList;
+			if (Array.isArray(list) && list.length > 0) {
+				const active = list.filter(isSteamControllerConnected);
+				const candidate = active.length > 0 ? active[0] : list[0];
+				const eType = Number(candidate?.eControllerType || 0);
+				let type: ControllerType = 'xbox';
+				if (eType === 33 || eType === 34 || eType === 45 || eType === 47 || eType === 48) {
+					type = 'playstation';
+				} else if (eType === 38 || eType === 39 || eType === 40 || eType === 41 || eType === 42 || eType === 44 || eType === 51) {
+					type = 'switch';
+				} else {
+					type = 'xbox';
+				}
+				return { connected: true, name: candidate?.strName || 'Controller', type };
+			}
+			if (typeof store.BHasExternalGamepadConnected === 'function' && store.BHasExternalGamepadConnected()) {
+				return { connected: true, name: 'Controller', type: 'xbox' };
+			}
+		}
+	} catch {}
+
+	// 2. Check Web Gamepad API (direct Chromium / hardware detection)
+	try {
+		const win = doc?.defaultView || (typeof window !== 'undefined' ? window : null);
+		const nav = win?.navigator || (typeof navigator !== 'undefined' ? navigator : null);
+		const gamepads = typeof nav?.getGamepads === 'function' ? nav.getGamepads() : [];
 		for (const gp of gamepads) {
 			if (gp && gp.connected) {
 				const id = (gp.id || '').toLowerCase();
@@ -38,8 +78,6 @@ export function detectConnectedController(_doc?: Document): ConnectedControllerI
 					type = 'playstation';
 				} else if (id.includes('switch') || id.includes('nintendo') || id.includes('joy-con') || id.includes('057e')) {
 					type = 'switch';
-				} else if (id.includes('xbox') || id.includes('xinput') || id.includes('045e')) {
-					type = 'xbox';
 				} else {
 					type = 'xbox';
 				}
@@ -48,26 +86,12 @@ export function detectConnectedController(_doc?: Document): ConnectedControllerI
 		}
 	} catch {}
 
-	// 2. Check SteamClient.Input (Steam's internal controller service)
+	// 3. Check SteamClient.Input (Steam's internal controller service)
 	try {
 		const steamInput = (window as any).SteamClient?.Input;
-		if (typeof steamInput?.GetControllers === 'function') {
-			const list = steamInput.GetControllers();
-			if (Array.isArray(list) && list.length > 0) {
-				const active = list.filter(isSteamControllerConnected);
-				if (active.length > 0) {
-					const first = active[0];
-					const eType = Number(first?.eControllerType || 0);
-					let type: ControllerType = 'xbox';
-					if (eType === 33 || eType === 34 || eType === 45 || eType === 48) {
-						type = 'playstation';
-					} else if (eType === 38 || eType === 39 || eType === 40 || eType === 41 || eType === 42) {
-						type = 'switch';
-					} else {
-						type = 'xbox';
-					}
-					return { connected: true, name: first?.strName || 'Controller', type };
-				}
+		if (steamInput) {
+			if (Array.isArray(steamInput.m_unboundControllerList) && steamInput.m_unboundControllerList.length > 0) {
+				return { connected: true, name: 'Controller', type: 'xbox' };
 			}
 		}
 	} catch {}
@@ -87,27 +111,45 @@ export function subscribeControllerChanges(doc: Document, onChange: (info: Conne
 		}
 	};
 
+	check();
+
 	const onGamepadEvent = () => {
-		setTimeout(check, 50);
-		setTimeout(check, 250);
+		check();
+		setTimeout(check, 30);
+		setTimeout(check, 100);
 	};
 
-	window.addEventListener('gamepadconnected', onGamepadEvent);
-	window.addEventListener('gamepaddisconnected', onGamepadEvent);
+	const win = doc.defaultView || (typeof window !== 'undefined' ? window : null);
+	if (typeof window !== 'undefined') {
+		window.addEventListener('gamepadconnected', onGamepadEvent);
+		window.addEventListener('gamepaddisconnected', onGamepadEvent);
+	}
+	if (win && win !== window) {
+		win.addEventListener('gamepadconnected', onGamepadEvent);
+		win.addEventListener('gamepaddisconnected', onGamepadEvent);
+	}
 
 	let unregisterSteam: any = null;
 	try {
 		const steamInput = (window as any).SteamClient?.Input;
-		if (typeof steamInput?.RegisterForControllerListChanges === 'function') {
-			unregisterSteam = steamInput.RegisterForControllerListChanges(() => {
-				setTimeout(check, 50);
+		if (typeof steamInput?.RegisterForUnboundControllerListChanges === 'function') {
+			unregisterSteam = steamInput.RegisterForUnboundControllerListChanges(() => {
+				onGamepadEvent();
 			});
 		}
 	} catch {}
 
+	timer = setInterval(check, 100);
+
 	return () => {
-		window.removeEventListener('gamepadconnected', onGamepadEvent);
-		window.removeEventListener('gamepaddisconnected', onGamepadEvent);
+		if (typeof window !== 'undefined') {
+			window.removeEventListener('gamepadconnected', onGamepadEvent);
+			window.removeEventListener('gamepaddisconnected', onGamepadEvent);
+		}
+		if (win && win !== window) {
+			win.removeEventListener('gamepadconnected', onGamepadEvent);
+			win.removeEventListener('gamepaddisconnected', onGamepadEvent);
+		}
 		if (timer) clearInterval(timer);
 		if (unregisterSteam && typeof unregisterSteam.unregister === 'function') {
 			try { unregisterSteam.unregister(); } catch {}

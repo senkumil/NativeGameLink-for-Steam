@@ -69,9 +69,6 @@ export function hasVisibleNativeLinksBar(doc: Document): boolean {
  */
 export function isPublicSteamLibraryRoute(doc: Document): boolean {
 	const appId = routedSteamAppId(doc);
-	// A concrete public AppID is stronger than a shortcut notice left in the DOM
-	// for one React commit. Otherwise A's old notice can make a native B route
-	// look injectable during the transition.
 	if (appId !== null && appId > 0 && appId < 2147483648) return true;
 	if (findNonSteamNotice(doc)) return false;
 	if (hasVisibleNativeLinksBar(doc)) return true;

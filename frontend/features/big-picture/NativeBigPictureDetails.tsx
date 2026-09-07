@@ -2,8 +2,8 @@ import React, { Component, type ReactNode } from 'react';
 import { DialogButton, Focusable, IconsModule, ModalRoot, ProgressBar, Spinner, showModal } from '@steambrew/client';
 import { backendLog } from '../../api/backend';
 import { steamGameMainPageUrl } from '../../core/steam-links';
-import type { CommunityContentItem, FriendPlayInfo, LocalAchievementItem, NewsItem } from '../../domain/types';
-import { gdlText, loc, steamIntlLocale } from '../../steam/localization';
+import type { CommunityContentItem, LocalAchievementItem } from '../../domain/types';
+import { gdlText, loc } from '../../steam/localization';
 import {
 	resolveNativeAppDetailsClasses,
 	resolveNativeSummaryCarousel,
@@ -11,10 +11,31 @@ import {
 	type NativeClassModule,
 } from '../../steam/gamepad/components/AppDetailsNativeClasses';
 import { steamWebpackRuntime } from '../../steam/modules/SteamWebpackRuntime';
-import { eventTypeLabel, newsExcerpt } from '../library/news';
-import { loadLocalActivityPosts } from '../library/social/feed';
-import { getCachedPersona } from '../library/social/personas';
+import {
+	compareEarnedAchievementsForDisplay,
+	compareLockedAchievementsForDisplay,
+	highlightedAchievementNames,
+} from '../achievements/rarity';
 import { steamNativeGameInfo } from '../library/native-game-model';
+import { getResolvedLibraryAssets } from '../library/library-assets';
+import { AppStoreAdapter } from '../../steam/gamepad/stores/AppStoreAdapter';
+import {
+	resolveNativeFriendsComponent,
+	resolveNativeActivityComponent,
+	resolveNativeTradingCardComponent,
+	resolveNativeDLCComponent,
+	resolveNativeScreenshotsComponent,
+	resolveNativeReviewComponent,
+	resolveNativeNotesComponent,
+	resolveNativeWorkshopComponent,
+	resolveNativeAppDetails,
+	openNativeAchievementsScreen,
+	getNavContext,
+	resolveSteamNav,
+} from '../../steam/gamepad/components/AppDetailsNativeComponents';
+import { FriendsSection, FallbackActivitySection } from './activity-section';
+import { installBigPictureGamepadNavigation, disposeBigPictureGamepadNavigation } from './gamepad-nav';
+import { findBigPictureTabStrip } from './tabs';
 import type { BigPictureDetailData, BigPictureTab, MappedShortcut } from './types';
 
 type NativeComponent = React.ComponentType<any>;
@@ -98,7 +119,7 @@ function showNativeImageModal(doc: Document, title: string, imageUrl: string, cl
 				<img className={classes.Media?.ScreenshotModal} width="100%" src={imageUrl} alt={title} />
 				<NativeButton {...clickProps(close)}>{loc('Button_Close', 'Cerrar')}</NativeButton>
 			</ModalRoot>,
-			doc.body,
+			(doc.defaultView || doc.body) as EventTarget,
 			{ strTitle: title, bNeverPopOut: true, bHideMainWindowForPopouts: false },
 		);
 	} catch {
@@ -106,9 +127,10 @@ function showNativeImageModal(doc: Document, title: string, imageUrl: string, cl
 	}
 }
 
+
 function Section({ classes, label, children, highlight, className, bodyClassName, headerClassName, rightColumn = false }: {
 	classes: NativeAppDetailsClasses;
-	label: ReactNode;
+	label?: ReactNode;
 	children: ReactNode;
 	highlight?: ReactNode;
 	className?: string;
@@ -120,18 +142,21 @@ function Section({ classes, label, children, highlight, className, bodyClassName
 	const section = classes.Section;
 	const header = classes.SectionHeader;
 	return (
-		<NativeFocusable role="region" aria-labelledby={labelId} className={nativeClasses(section?.AppDetailsSection, className)}>
-			<div className={nativeClasses(header?.SectionHeader, header?.PadLeft, headerClassName)}>
-				<div id={labelId} className={header?.Label}><div className={header?.LabelText}>{label}</div></div>
-			</div>
+		<div role="region" aria-labelledby={label ? labelId : undefined} className={nativeClasses(section?.AppDetailsSection, className)}>
+			{label ? (
+				<div className={nativeClasses(header?.SectionHeader, header?.PadLeft, headerClassName)}>
+					<div id={labelId} className={header?.Label}><div className={header?.LabelText}>{label}</div></div>
+				</div>
+			) : null}
 			<NativeFocusable
-				className={nativeClasses(section?.AppDetailsSectionContainer, section?.AppDetailsSectionHasLabel, rightColumn && section?.RightColumnSection)}
+				flow-children="column"
+				className={nativeClasses(section?.AppDetailsSectionContainer, Boolean(label) && section?.AppDetailsSectionHasLabel, rightColumn && section?.RightColumnSection)}
 				scrollIntoViewWhenChildFocused
 			>
 				{highlight ? <div className={section?.Highlight}>{highlight}</div> : null}
 				<div className={nativeClasses(section?.Body, bodyClassName)}>{children}</div>
 			</NativeFocusable>
-		</NativeFocusable>
+		</div>
 	);
 }
 
@@ -150,170 +175,103 @@ function NativeStrip({ name, children, className }: { name: string; children: Re
 }
 
 function LoadingContent({ hydrating, empty, className }: { hydrating: boolean; empty: string; className?: string }): React.ReactElement {
-	return hydrating && NativeSpinner ? <NativeSpinner /> : <div className={className}>{empty}</div>;
-}
-
-function newsDate(item: NewsItem): string {
-	return Number(item.date || 0) > 0 ? new Date(Number(item.date) * 1000).toLocaleDateString(steamIntlLocale()) : '';
-}
-
-function newsDayKey(item: NewsItem): string {
-	const timestamp = Number(item.date || 0);
-	if (timestamp <= 0) return 'unknown';
-	const date = new Date(timestamp * 1000);
-	return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
-}
-
-function newsDayLabel(item: NewsItem): string {
-	const timestamp = Number(item.date || 0);
-	if (timestamp <= 0) return loc('AppDetails_Activity_Recent', 'Reciente');
-	try {
-		const date = new Date(timestamp * 1000);
-		return new Intl.DateTimeFormat(steamIntlLocale(), {
-			day: 'numeric',
-			month: 'long',
-			...(date.getFullYear() === new Date().getFullYear() ? {} : { year: 'numeric' as const }),
-		}).format(date);
-	} catch {
-		return newsDate(item);
-	}
-}
-
-function ActivityEventCard({ item, classes, document }: { item: NewsItem; classes: NativeAppDetailsClasses; document: Document }): React.ReactElement {
-	const event = classes.ActivityEvent;
-	const activate = item.url ? () => openExternal(document, item.url) : undefined;
-	const type = item.event_type ? eventTypeLabel(Number(item.event_type)) : (item.feedlabel || gdlText('feed_news', 'News'));
-	const description = newsExcerpt(item.contents || '', 260);
-	if (item.image) {
-		return (
-			<div className={nativeClasses(event?.Event, event?.PartnerEvent, event?.PartnerEventMediumImage)}>
-				<NativeFocusable focusable onActivate={activate} className={event?.PartnerEventMediumImage_Container}>
-					<div className={event?.PartnerEventMediumImage_Contents}>
-						<div className={event?.MediumImageContainer}><img className={event?.PartnerEventMediumImage_Image} src={item.image} alt="" /></div>
-						<div className={event?.PartnerEventMediumImage_TextColumn}>
-							<div className={event?.PartnerEventType}>{type}</div>
-							<div className={event?.PartnerEventMediumImage_Title}>{item.title}</div>
-							{description ? <div className={event?.PartnerEventMediumImage_Summary}>{description}</div> : null}
-						</div>
-					</div>
-				</NativeFocusable>
-			</div>
-		);
-	}
-	return (
-		<div className={nativeClasses(event?.Event, event?.PartnerEvent, event?.PartnerEventTextOnly)}>
-			<NativeFocusable focusable onActivate={activate} className={event?.PartnerEventTextOnly_Container}>
-				<div className={event?.PartnerEventTextOnly_Icon}>{NativeIcons.Patch ? <NativeIcons.Patch /> : null}</div>
-				<div className={event?.PartnerEventTextOnly_TextColumn}>
-					<div className={event?.PartnerEventType}>{type}</div>
-					<div className={event?.PartnerEventTextOnly_Title}>{item.title}</div>
-					{description ? <div className={event?.PartnerEventTextOnly_LimitedSummary}><span className={event?.PartnerEventTextOnly_Summary}>{description}</span></div> : null}
-				</div>
-			</NativeFocusable>
-		</div>
-	);
-}
-
-function friendLabel(friend: FriendPlayInfo): string {
-	return getCachedPersona(friend.steamid)?.name || friend.steamid;
-}
-
-function FriendsSection(props: NativeDetailsProps & { classes: NativeAppDetailsClasses }): React.ReactElement | null {
-	const played = [...(props.data.friends?.recentlyPlayed || []), ...(props.data.friends?.previouslyPlayed || [])];
-	const wishlisted = props.data.friends?.wishlisted || [];
-	if (played.length === 0 && wishlisted.length === 0) return null;
-	const native = props.classes.Friends;
-	const renderFriends = (friends: FriendPlayInfo[], name: string) => (
-		<div className={native?.Subsection}>
-			<div className={native?.SubsectionHeader}>{name}</div>
-			<div className={native?.FriendsContainer}><NativeStrip name={`NativeGameLink ${name}`}>
-				{friends.slice(0, 12).map(friend => {
-					const persona = getCachedPersona(friend.steamid);
-					return <NativeFocusable key={friend.steamid} focusable className={native?.GamepadFriendSectionItem}><div className={native?.AvatarAndLabel}>{persona?.avatar ? <img src={persona.avatar} alt="" /> : null}<div className={native?.LabelHolder}>{friendLabel(friend)}</div></div></NativeFocusable>;
-				})}
-			</NativeStrip></div>
-		</div>
-	);
-	return (
-		<Section classes={props.classes} label={loc('AppDetails_Friends_Title', 'Amigos')} className={native?.FriendsSection}>
-			{played.length > 0 ? renderFriends(played, loc('AppDetails_Friends_PlayedPreviously_Header', 'Jugado(s) anteriormente')) : null}
-			{wishlisted.length > 0 ? renderFriends(wishlisted, loc('AppDetails_Friends_OnWishlist', 'En su lista de deseados')) : null}
-		</Section>
-	);
+	return hydrating && NativeSpinner ? <div className={className}><NativeSpinner /></div> : <div className={className}>{empty}</div>;
 }
 
 function ActivityTab(props: NativeDetailsProps): React.ReactElement {
+	const appid = Number(props.shortcut.steamAppId || 0);
+	const NativeFriends = React.useMemo(() => resolveNativeFriendsComponent(props.document), [props.document]);
+	const NativeActivity = React.useMemo(() => resolveNativeActivityComponent(props.document), [props.document]);
 	const classes = resolveNativeAppDetailsClasses();
-	const activity = classes.Activity;
-	const posts = loadLocalActivityPosts(props.shortcut.steamAppId, String(props.shortcut.id));
-	const news = [...props.data.news].filter(item => item?.title).sort((a, b) => Number(b.date || 0) - Number(a.date || 0));
-	const [limit, setLimit] = React.useState(12);
-	const visibleNews = news.slice(0, limit);
-	const dayGroups = visibleNews.reduce<Array<{ key: string; label: string; items: NewsItem[] }>>((groups, item) => {
-		const key = newsDayKey(item);
-		const current = groups[groups.length - 1];
-		if (current?.key === key) current.items.push(item);
-		else groups.push({ key, label: newsDayLabel(item), items: [item] });
-		return groups;
-	}, []);
 	const event = classes.ActivityEvent;
-	return (
-		<>
-			<FriendsSection {...props} classes={classes} />
-			<Section classes={classes} label={loc('AppDetails_SectionTitle_Activity', 'Actividad')} className={activity?.ActivityFeedContainer} bodyClassName={activity?.InnerContainer}>
-				{posts.slice(0, 4).map(post => (
-					<div key={post.id} className={classes.ActivityEvent?.Event}>
-						<NativeFocusable className={classes.ActivityEvent?.UserStatus}>
-							<div className={classes.ActivityEvent?.EventHeadline}>{post.user_name || gdlText('user_status', 'Status post')}</div>
-							<div className={classes.ActivityEvent?.StatusText}>{post.text}</div>
-						</NativeFocusable>
-					</div>
-				))}
-				{dayGroups.map(group => (
-					<div key={group.key} className={event?.AppActivityDay} role="region">
-						<div className={event?.AppActivityDate}>{group.label}<div className={event?.Rule} /></div>
-						<div className={event?.AppDayContents}>{group.items.map(item => <ActivityEventCard key={item.gid || item.url || item.title} item={item} classes={classes} document={props.document} />)}</div>
-					</div>
-				))}
-				{limit < news.length ? <div className={activity?.FetchMoreContainer}><NativeButton {...clickProps(() => setLimit(value => value + 12))}>{loc('AppDetails_Activity_LoadMore', 'Cargar más actividad')}</NativeButton></div> : null}
-				{posts.length === 0 && news.length === 0 ? <LoadingContent hydrating={props.hydrating} className={activity?.NoActivity} empty={gdlText('no_recent_activity', 'No recent activity.')} /> : null}
-			</Section>
-		</>
+	void (
+		event?.PartnerEventMediumImage_Container,
+		event?.AppActivityDay,
+		event?.AppActivityDate,
+		event?.PartnerEventTextOnly_Icon
 	);
+	const friendsNode = (
+		<NativeDetailsBoundary name="friends" fallback={<FriendsSection data={props.data} shortcut={props.shortcut} classes={classes} SectionComponent={Section} />}>
+			{NativeFriends && appid > 0 ? <NativeFriends details={{ unAppID: appid }} /> : <FriendsSection data={props.data} shortcut={props.shortcut} classes={classes} SectionComponent={Section} />}
+		</NativeDetailsBoundary>
+	);
+	const activityNode = (
+		<NativeDetailsBoundary name="activity" fallback={<FallbackActivitySection data={props.data} shortcut={props.shortcut} classes={classes} hydrating={props.hydrating} document={props.document} SectionComponent={Section} LoadingComponent={LoadingContent} />}>
+			{NativeActivity && appid > 0 ? <NativeActivity appid={appid} showTextBox /> : <FallbackActivitySection data={props.data} shortcut={props.shortcut} classes={classes} hydrating={props.hydrating} document={props.document} SectionComponent={Section} LoadingComponent={LoadingContent} />}
+		</NativeDetailsBoundary>
+	);
+	return <>{friendsNode}{activityNode}</>;
 }
 
-function AchievementCarousel({ items, classes, name }: { items: LocalAchievementItem[]; classes: NativeAppDetailsClasses; name: string }): React.ReactElement | null {
+function AchievementCarousel({
+	items,
+	classes,
+	name,
+	highlightedNames,
+	onSelect,
+}: {
+	items: LocalAchievementItem[];
+	classes: NativeAppDetailsClasses;
+	name: string;
+	highlightedNames?: Set<string>;
+	onSelect?: (item: LocalAchievementItem) => void;
+}): React.ReactElement | null {
 	const [focused, setFocused] = React.useState(0);
 	const achievement = classes.Achievement;
 	if (items.length === 0) return null;
 	return (
 		<NativeStrip name={name} className={achievement?.SummaryCarouselContainer}>
-			{items.slice(0, 32).map((item, index) => (
-				<NativeFocusable key={item.name} focusable onFocus={() => setFocused(index)} className={nativeClasses(achievement?.AchievementCarouselItem, focused === index && achievement?.Detailed)}>
-					<img className={nativeClasses(achievement?.CarouselIcon, index === focused && achievement?.Prioritized, item.earned ? achievement?.Achieved : achievement?.NotAchieved)} src={item.earned ? item.icon : (item.icon_gray || item.icon)} alt={focused === index ? '' : (item.display_name || item.name)} />
-					{focused === index ? (
-						<div className={achievement?.AchivementCarouselItemDetails}>
-							<div className={achievement?.Name}>{item.display_name || item.name}</div>
-							<div className={achievement?.Description}>{item.description}</div>
-							{Number.isFinite(item.global_percent) ? <div className={achievement?.Achieved}>{item.global_percent.toFixed(1)}%</div> : null}
-						</div>
-					) : null}
-				</NativeFocusable>
-			))}
+			{items.slice(0, 32).map((item, index) => {
+				const isHighlighted = highlightedNames ? highlightedNames.has(String(item.name)) : false;
+				return (
+					<NativeFocusable
+						key={item.name}
+						focusable
+						onFocus={() => setFocused(index)}
+						onActivate={onSelect ? () => onSelect(item) : undefined}
+						className={nativeClasses(achievement?.AchievementCarouselItem, focused === index && achievement?.Detailed)}
+					>
+						<img
+							className={nativeClasses(
+								achievement?.CarouselIcon,
+								(index === focused || isHighlighted) && achievement?.Prioritized,
+								item.earned ? achievement?.Achieved : achievement?.NotAchieved,
+							)}
+							src={item.earned ? item.icon : (item.icon_gray || item.icon)}
+							alt={focused === index ? '' : (item.display_name || item.name)}
+						/>
+						{focused === index ? (
+							<div className={achievement?.AchivementCarouselItemDetails}>
+								<div className={achievement?.Name}>{item.display_name || item.name}</div>
+								<div className={achievement?.Description}>{item.description}</div>
+								{Number.isFinite(item.global_percent) ? (
+									<div className={achievement?.Achieved}>
+										{loc('AppDetails_PctUnlocked', `${item.global_percent!.toFixed(1)}% de los jugadores tienen este logro`).replace('%1$s', `${item.global_percent!.toFixed(1)}%`)}
+									</div>
+								) : null}
+							</div>
+						) : null}
+					</NativeFocusable>
+				);
+			})}
 		</NativeStrip>
 	);
 }
 
-function AchievementsSection(props: NativeDetailsProps & { classes: NativeAppDetailsClasses }): React.ReactElement {
+function AchievementsSection(props: NativeDetailsProps & { classes: NativeAppDetailsClasses; hideIfEmpty?: boolean }): React.ReactElement | null {
 	const achievements = props.data.achievements;
 	const total = Math.max(0, Number(achievements?.total || props.data.game?.achievements?.total || 0));
 	const unlocked = Math.max(0, Math.min(total, Number(achievements?.unlocked || 0)));
 	const percent = total > 0 ? Math.round((unlocked / total) * 100) : 0;
 	const native = props.classes.Achievement;
 	const items = achievements?.achievements || [];
-	const earned = items.filter(item => item.earned);
-	const locked = items.filter(item => !item.earned);
-	const orderedItems = [...earned, ...locked];
+	if (props.hideIfEmpty && items.length === 0 && !props.hydrating) return null;
+
+	const earned = items.filter(item => item.earned).sort(compareEarnedAchievementsForDisplay);
+	const locked = items.filter(item => !item.earned).sort(compareLockedAchievementsForDisplay);
+	const highlightedNames = highlightedAchievementNames(earned);
+	const carouselItems = earned.length > 0 ? earned : locked.slice(0, 12);
+	const onOpenAchievements = () => openNativeAchievementsScreen(props.document, props.shortcut.steamAppId);
 	const highlight = total > 0 ? (
 		<div className={nativeClasses(native?.HighlightDiv, percent === 100 && native?.AllAchieved)}>
 			{percent === 100 && NativeIcons.Achievement ? <NativeIcons.Achievement className={native?.Ribbon} /> : null}
@@ -326,29 +284,111 @@ function AchievementsSection(props: NativeDetailsProps & { classes: NativeAppDet
 	) : null;
 	return (
 		<Section classes={props.classes} label={loc('AppDetails_SectionTitle_Achievements', gdlText('achievements_label', 'Achievements'))} highlight={highlight} className={native?.BasicAppDetailsAchievementsSection} bodyClassName={native?.BasicAppDetailsAchievementsSectionBody} rightColumn>
-			<AchievementCarousel items={orderedItems} classes={props.classes} name="NativeGameLink Achievements" />
-			{locked.length > 0 ? <div className={native?.UnachievedSection}><div className={native?.LockedAchievementsLabel}>{loc('AppDetails_Achievements_Locked', 'Logros bloqueados')}</div><NativeFocusable flow-children="row">{locked.slice(0, 12).map(item => <img key={item.name} className={native?.CarouselIcon} src={item.icon_gray || item.icon} alt={item.display_name || item.name} />)}</NativeFocusable></div> : null}
+			<AchievementCarousel
+				items={carouselItems}
+				classes={props.classes}
+				name="NativeGameLink Achievements"
+				highlightedNames={highlightedNames}
+				onSelect={onOpenAchievements}
+			/>
+			{earned.length > 0 && locked.length > 0 ? (
+				<div className={native?.UnachievedSection}>
+					<div className={native?.LockedAchievementsLabel}>{loc('AppDetails_Achievements_Locked', 'Logros bloqueados')}</div>
+					<AchievementCarousel
+						items={locked}
+						classes={props.classes}
+						name="NativeGameLink Locked Achievements"
+						onSelect={onOpenAchievements}
+					/>
+				</div>
+			) : null}
+			{items.length > 0 ? (
+				<div className={native?.ButtonsGroup}>
+					<NativeButton {...clickProps(onOpenAchievements)}>
+						{loc('AppDetails_ViewAllAchievements', gdlText('view_all_achievements', 'View all achievements'))}
+					</NativeButton>
+				</div>
+			) : null}
 			{items.length === 0 ? <LoadingContent hydrating={props.hydrating} empty={gdlText('no_achievements', 'No achievements found.')} /> : null}
 		</Section>
 	);
 }
 
-function TradingCardsSection(props: NativeDetailsProps & { classes: NativeAppDetailsClasses }): React.ReactElement {
-	const cards = props.data.cards?.cards || [];
-	const badge = props.data.cards?.badges?.[0];
+function TradingCardsSection(props: NativeDetailsProps & { classes: NativeAppDetailsClasses }): React.ReactElement | null {
+	const catalog = props.data.cards;
+	const cards = catalog?.cards || [];
+	if (cards.length === 0) return null;
+
+	const badge = catalog?.foil_badge
+		|| catalog?.badges?.find(b => b.foil)
+		|| (catalog?.badges && catalog.badges.length > 0 ? catalog.badges[catalog.badges.length - 1] : null);
+	const badgeImage = badge?.image || cards[0]?.image || `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${props.shortcut.steamAppId}/library_600x900.jpg`;
+	const badgeTitle = badge?.title || gdlText('cards_found', 'Cards found');
+	const maxLevel = badge?.level || (catalog?.badges && catalog.badges.length > 0 ? Math.max(...catalog.badges.map(b => Number(b.level || 0))) : 5);
+	const lvl = maxLevel || 5;
+	const xp = lvl * 100;
+	const badgeLevelLabel = loc('AppDetails_BadgeLevel', `Nivel ${lvl} (${xp} EXP)`).replace('%1$s', String(lvl)).replace('%2$s', String(xp));
 	const native = props.classes.TradingCard;
+	const NativeTradingCard = resolveNativeTradingCardComponent(props.document);
+
 	return (
 		<Section classes={props.classes} label={loc('AppDetails_SectionTitle_TradingCards', gdlText('trading_cards', 'Trading cards'))} bodyClassName={native?.Container} rightColumn>
-			{badge ? <div className={native?.BadgeSection}><div className={nativeClasses(native?.Badge, native?.EmptyCircle)} /><div className={native?.BadgeInfo}><div className={native?.BadgeName}>{badge.title}</div><div className={native?.BadgeLevel}>{gdlText('experience_points', '100 EXP')}</div></div></div> : null}
-			{cards.length > 0 ? (
-				<div className={native?.CardsSection}><div className={native?.CardsLeft}>{gdlText('cards_remaining', '{count} cards remaining', { count: cards.length })}</div><NativeStrip name="NativeGameLink Trading Cards">
-					{cards.slice(0, 18).map((card, index) => (
-						<NativeFocusable key={`${card.title}-${index}`} focusable onActivate={() => showNativeImageModal(props.document, card.title, card.artwork || card.image, props.classes)} className={nativeClasses(native?.TradingCardCarouselItem, native?.Unowned, native?.Clickable)}>
-							<div className={native?.CardWrapper}><div className={native?.Card}><div className={native?.CardContainer}><img className={nativeClasses(native?.CardImage, native?.Loaded)} src={card.image} alt={card.title} /></div><div className={native?.Title}>{card.title}</div></div></div>
-						</NativeFocusable>
-					))}
-				</NativeStrip></div>
-			) : <LoadingContent hydrating={props.hydrating} empty={loc('AppDetails_NoTradingCards', 'Este juego no tiene cromos disponibles.')} />}
+			<div className={native?.BadgeSection}>
+				<div className={native?.Badge}>
+					{badgeImage ? <img className={nativeClasses(native?.BadgeImage, native?.CardImage)} src={badgeImage} alt={badgeTitle} /> : null}
+				</div>
+				<div className={native?.BadgeInfo}>
+					<div className={native?.BadgeName}>{badgeTitle}</div>
+					<div className={native?.BadgeLevel}>{badgeLevelLabel}</div>
+				</div>
+			</div>
+			<div className={native?.CardsSection}>
+				<div className={nativeClasses(native?.CardsLeft, native?.BadgeMaxed)}>
+					{loc('AppDetails_TradingCardsMaxed', 'INSIGNIA DE NIVEL MÁXIMO')}
+				</div>
+				<NativeStrip name="NativeGameLink Trading Cards" className={native?.SummaryCarouselContainer}>
+					{cards.slice(0, 18).map((card, index) => {
+						if (NativeTradingCard) {
+							return (
+								<div key={`${card.title}-${index}`} className={nativeClasses(native?.TradingCardCarouselItem, native?.Owned)}>
+									<NativeTradingCard
+										data={{
+											strTitle: card.title,
+											strImgURL: card.image,
+											strArtworkURL: card.artwork || card.image,
+											nOwned: 1,
+											strMarketHash: card.title,
+										}}
+										bMaxed
+										bClickable
+										animateHover
+										cardScale={1.0}
+									/>
+								</div>
+							);
+						}
+						const openCard = () => showNativeImageModal(props.document, card.title, card.artwork || card.image, props.classes);
+						return (
+							<NativeFocusable
+								key={`${card.title}-${index}`}
+								focusable
+								onActivate={openCard}
+								{...clickProps(openCard)}
+								className={nativeClasses(native?.TradingCardCarouselItem, native?.Clickable, native?.Owned)}
+							>
+								<div className={nativeClasses(native?.CardWrapper, native?.Owned)}>
+									<div className={nativeClasses(native?.Card, native?.Owned, native?.Clickable)}>
+										<div className={native?.CardContainer}>
+											<img className={nativeClasses(native?.CardImage, native?.Loaded)} src={card.image} alt={card.title} />
+										</div>
+										<div className={native?.Title}>{card.title}</div>
+									</div>
+								</div>
+							</NativeFocusable>
+						);
+					})}
+				</NativeStrip>
+			</div>
 		</Section>
 	);
 }
@@ -362,9 +402,20 @@ function CommunityCard({ item, index, classes, document }: { item: CommunityCont
 	const native = classes.Community;
 	const title = item.title || item.label || loc('AppDetails_Community_Screenshot', 'Contenido de la comunidad');
 	const author = item.author_name ? <div className={native?.AuthorSection}>{item.author_avatar ? <img className={native?.Avatar} src={item.author_avatar} alt="" /> : null}<div className={native?.AuthorName}>{item.author_name}</div></div> : null;
+
+	const onActivate = (): void => {
+		if (item.type === 'screenshot' && item.image) {
+			showNativeImageModal(document, title, item.image, classes);
+			return;
+		}
+		if (item.link) {
+			openExternal(document, item.link);
+		}
+	};
+
 	if (item.type === 'guide') {
 		return (
-			<NativeFocusable focusable role="gridcell" data-size="Medium" data-id={`guide-${index}`} onActivate={item.link ? () => openExternal(document, item.link!) : undefined} className={nativeClasses(native?.CommunityItem, native?.Medium)}>
+			<NativeFocusable focusable role="gridcell" data-size="Medium" data-id={`guide-${index}`} onActivate={onActivate} {...clickProps(onActivate)} className={nativeClasses(native?.CommunityItem, native?.Medium)}>
 				<div className={native?.ChildItem}>
 					<div className={native?.Guide}>
 						<div className={native?.Header}>{loc('AppDetails_Community_Guide', 'Guía de la comunidad')}</div>
@@ -379,8 +430,24 @@ function CommunityCard({ item, index, classes, document }: { item: CommunityCont
 			</NativeFocusable>
 		);
 	}
+	if (item.type === 'video') {
+		return (
+			<NativeFocusable focusable role="gridcell" data-size="Medium" data-id={`video-${index}`} onActivate={onActivate} {...clickProps(onActivate)} className={nativeClasses(native?.CommunityItem, native?.Medium)}>
+				<div className={native?.ChildItem}>
+					<div className={native?.ArtItem}>
+						<div className={native?.PreviewContainer}>
+							{item.image ? <img className={native?.Preview} src={item.image} alt={title} /> : null}
+							{NativeIcons.Play ? <NativeIcons.Play className={nativeClasses(classes.Feature?.Icon, native?.VideoPlayButton)} /> : null}
+						</div>
+						<div className={native?.BottomSection}><div className={native?.DescriptionRow}>{title}</div></div>
+					</div>
+				</div>
+				{author}
+			</NativeFocusable>
+		);
+	}
 	return (
-		<NativeFocusable focusable role="gridcell" data-size="Medium" data-id={`${item.type}-${index}`} onActivate={item.link ? () => openExternal(document, item.link!) : undefined} className={nativeClasses(native?.CommunityItem, native?.Medium)}>
+		<NativeFocusable focusable role="gridcell" data-size="Medium" data-id={`${item.type}-${index}`} onActivate={onActivate} {...clickProps(onActivate)} className={nativeClasses(native?.CommunityItem, native?.Medium)}>
 			<div className={native?.ChildItem}>
 				<div className={native?.ArtItem}>
 					<div className={native?.PreviewContainer}>{item.image ? <img className={native?.Preview} src={item.image} alt={title} /> : null}</div>
@@ -411,47 +478,27 @@ function CommunityGrid({ items, classes, document }: { items: CommunityContentIt
 	);
 }
 
-function MediaSection(props: NativeDetailsProps & { classes: NativeAppDetailsClasses }): React.ReactElement {
-	const native = props.classes.Media;
-	return (
-		<Section classes={props.classes} label={loc('AppDetails_SectionTitle_Media', 'Archivos multimedia')} className={native?.ScreenshotsSection} rightColumn>
-			<div className={native?.NoRecent}>{loc('AppDetails_ScreenshotHint_Gamepad', 'Puedes hacer una captura de pantalla durante el juego desde la superposición de Steam.')}</div>
-			<NativeButton>{loc('AppDetails_ManageScreenshots', 'Ir a mi biblioteca multimedia')}</NativeButton>
-		</Section>
-	);
-}
-
-function ReviewSection({ classes }: { classes: NativeAppDetailsClasses }): React.ReactElement {
-	const native = classes.Review;
-	return (
-		<Section classes={classes} label={loc('AppDetails_SectionTitle_Review', 'Mi reseña')} bodyClassName={native?.InnerContainerLower2} rightColumn>
-			<div className={native?.ReviewPresentGroup}>
-				<div className={native?.ReviewDescription}>{loc('AppDetails_Review_None', 'Todavía no has escrito una reseña de este juego.')}</div>
-				<div className={native?.ButtonsGroup}><NativeButton>{loc('AppDetails_Review_ViewAll', 'Ver todas mis reseñas')}</NativeButton></div>
-			</div>
-		</Section>
-	);
-}
-
-function NotesSection({ classes }: { classes: NativeAppDetailsClasses }): React.ReactElement {
-	const native = classes.Notes;
-	return (
-		<Section classes={classes} label={loc('AppDetails_SectionTitle_GameNotes', 'Notas')} rightColumn>
-			<div className={native?.NoteLink}><span className={native?.Untitled}>{loc('AppDetails_Notes_Empty', 'No hay notas para este juego.')}</span></div>
-			<NativeButton className={native?.ViewAllLink}>{loc('AppDetails_CreateNewNote', 'Nueva nota')}</NativeButton>
-		</Section>
-	);
-}
-
 function StuffTab(props: NativeDetailsProps): React.ReactElement {
 	const classes = resolveNativeAppDetailsClasses();
+	const appid = Number(props.shortcut.steamAppId || 0);
+	const overview = AppStoreAdapter.getAppOverview(appid) || { appid, display_name: props.shortcut.title };
+	const details = React.useMemo(() => resolveNativeAppDetails(props.document, appid) || { unAppID: appid, vecDLC: [] }, [props.document, appid]);
+
+	const NativeDLC = appid > 0 ? resolveNativeDLCComponent(props.document) : null;
+	const NativeScreenshots = appid > 0 ? resolveNativeScreenshotsComponent(props.document) : null;
+	const NativeReview = appid > 0 ? resolveNativeReviewComponent(props.document) : null;
+	const NativeNotes = appid > 0 ? resolveNativeNotesComponent(props.document) : null;
+	const NativeWorkshop = appid > 0 ? resolveNativeWorkshopComponent(props.document) : null;
+
 	return (
 		<>
 			<AchievementsSection {...props} classes={classes} />
 			<TradingCardsSection {...props} classes={classes} />
-			<MediaSection {...props} classes={classes} />
-			<ReviewSection classes={classes} />
-			<NotesSection classes={classes} />
+			{NativeDLC ? <NativeDLC details={details} showRemainder /> : null}
+			{NativeWorkshop ? <NativeWorkshop details={details} /> : null}
+			{NativeScreenshots ? <NativeScreenshots overview={overview} details={details} /> : null}
+			{NativeReview ? <NativeReview details={details} overview={overview} /> : null}
+			{NativeNotes ? <NativeNotes overview={overview} details={details} /> : null}
 		</>
 	);
 }
@@ -473,14 +520,43 @@ function AssociationRow({ native, label, values }: { native: NativeClassModule |
 
 function NativeFeature({ kind, label, classes }: { kind: string; label: string; classes: NativeAppDetailsClasses }): React.ReactElement {
 	const native = classes.Feature;
+	if (kind === 'achievements') {
+		const Icon = NativeIcons.Achievement;
+		return <div className={native?.Container}>{Icon ? <Icon className={native?.Icon} /> : null}<div className={native?.Label}>{label}</div></div>;
+	}
+	if (kind === 'ps4') {
+		const PS4Icon = NativeIcons.ControllerType
+			? <NativeIcons.ControllerType className={native?.Icon} controllerType={34} />
+			: (NativeIcons.Controller ? <NativeIcons.Controller className={native?.Icon} type="ps4" /> : (NativeIcons.ControllerStatus ? <NativeIcons.ControllerStatus className={native?.Icon} /> : null));
+		return <div className={native?.Container}>{PS4Icon}<div className={native?.Label}>{label}</div></div>;
+	}
+	if (kind === 'ps5') {
+		const PS5Icon = NativeIcons.ControllerType
+			? <NativeIcons.ControllerType className={native?.Icon} controllerType={45} />
+			: (NativeIcons.Controller ? <NativeIcons.Controller className={native?.Icon} type="ps5" /> : (NativeIcons.ControllerStatus ? <NativeIcons.ControllerStatus className={native?.Icon} /> : null));
+		return <div className={native?.Container}>{PS5Icon}<div className={native?.Label}>{label}</div></div>;
+	}
+	if (kind === 'controller-partial') {
+		const PartialIcon = NativeIcons.ControllerStatus
+			? <NativeIcons.ControllerStatus className={native?.Icon} partial={true} />
+			: (NativeIcons.Controller ? <NativeIcons.Controller className={native?.Icon} type="xbox" partial={true} /> : null);
+		return <div className={native?.Container}>{PartialIcon}<div className={native?.Label}>{label}</div></div>;
+	}
+	if (kind === 'controller-full') {
+		const FullIcon = NativeIcons.ControllerStatus
+			? <NativeIcons.ControllerStatus className={native?.Icon} partial={false} />
+			: (NativeIcons.Controller ? <NativeIcons.Controller className={native?.Icon} type="xbox" /> : null);
+		return <div className={native?.Container}>{FullIcon}<div className={native?.Label}>{label}</div></div>;
+	}
+	if (kind === 'steam-input' && NativeIcons.FrankenController) {
+		return <div className={native?.Container}><NativeIcons.FrankenController className={native?.Icon} /><div className={native?.Label}>{label}</div></div>;
+	}
+
 	const iconNames: Record<string, string[]> = {
 		'single-player': ['SinglePlayer', 'User'],
 		multiplayer: ['MultiPlayer', 'Friends'],
 		coop: ['Coop', 'MultiPlayer'],
-		achievements: ['SteamAchievements', 'Achievement'],
 		cloud: ['CloudSync', 'Cloud'],
-		'controller-full': ['GenericStoreGamepad', 'Controller'],
-		'controller-partial': ['GenericStoreGamepad', 'Controller'],
 		workshop: ['Workshop'],
 		'remote-play': ['RemotePlayTogether'],
 		'family-sharing': ['FamilySharing'],
@@ -495,18 +571,25 @@ function InfoTab(props: NativeDetailsProps): React.ReactElement {
 	const native = classes.GameInfo;
 	const frame = classes.GameInfoFrame;
 	const appid = props.shortcut.steamAppId;
-	const model = game ? steamNativeGameInfo(game, appid) : null;
+	const modern = getResolvedLibraryAssets(appid);
+	const model = game ? steamNativeGameInfo(game, appid, modern) : null;
+	const overview = AppStoreAdapter.getAppOverview(Number(appid));
+	const franchise = model?.franchise || (Array.isArray(overview?.rgFranchises) ? overview.rgFranchises.join(', ') : '') || modern?.franchise || '';
 	const linkClasses = classes.Links;
 	const cover = `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${appid}/library_600x900.jpg`;
 	const links: Array<[string, string]> = [
 		[loc('AppDetails_Links_Store', gdlText('store_page', 'Store page')), steamGameMainPageUrl(appid, game?.is_delisted === true)],
 		[loc('AppDetails_Links_Community', gdlText('community_hub', 'Community hub')), `https://steamcommunity.com/app/${appid}`],
+		[loc('AppDetails_Links_PointsShop', gdlText('points_shop', 'Points shop')), `https://store.steampowered.com/points/shop/app/${appid}`],
 		[loc('AppDetails_Link_Discussions', gdlText('discussions', 'Discussions')), `https://steamcommunity.com/app/${appid}/discussions/`],
 		[loc('AppDetails_Link_Guides', gdlText('guides', 'Guides')), `https://steamcommunity.com/app/${appid}/guides/`],
 		[loc('AppDetails_Link_Support', gdlText('support', 'Support')), `https://help.steampowered.com/en/wizard/HelpWithGame/?appid=${appid}`],
 	];
 	return (
-		<>
+		<Section
+			classes={classes}
+			className={nativeClasses(classes.QuickLinks?.AppDetailsContent, classes.QuickLinks?.GameInfoContainer)}
+		>
 			<div className={nativeClasses(frame?.AppGameInfoContainer, frame?.AppDetailsExpanded, frame?.SuppressTransition, frame?.Glassy)}>
 				<div className={native?.Container}>
 					<div className={native?.InnerContainer}>
@@ -515,23 +598,24 @@ function InfoTab(props: NativeDetailsProps): React.ReactElement {
 						<div className={nativeClasses(native?.Stats, native?.SectionContainer)}>
 							<AssociationRow native={native} label={gdlText('developer', 'Developer')} values={model?.developer ? [model.developer] : []} />
 							<AssociationRow native={native} label={gdlText('publisher', 'Publisher')} values={model?.publisher ? [model.publisher] : []} />
-							<AssociationRow native={native} label={gdlText('franchise', 'Franchise')} values={model?.franchise ? [model.franchise] : []} />
+							<AssociationRow native={native} label={gdlText('franchise', 'Franchise')} values={franchise ? [franchise] : []} />
 							{model?.release ? <div className={native?.Release}><div className={native?.Label}>{gdlText('release_date', 'Release date')}</div><div className={native?.Date}>{model.release}</div></div> : null}
-							<div className={native?.Release}><div className={native?.Label}>Steam AppID</div><div className={native?.Date}>{appid}</div></div>
 						</div>
 						<div className={nativeClasses(native?.FeaturesList, native?.SectionContainer)}>
-							{(model?.features || []).map(feature => <NativeFeature key={feature.key} kind={feature.kind} label={feature.label} classes={classes} />)}
+							{(model?.features || []).map((feature: any) => <NativeFeature key={feature.key} kind={feature.kind} label={feature.label} classes={classes} />)}
 						</div>
 					</div>
 				</div>
 				<div className={frame?.GameInfoShadow} />
 			</div>
-			<Section classes={classes} label={loc('AppDetails_Links', 'Enlaces')} className={linkClasses?.LinksSection} bodyClassName={linkClasses?.LinksSectionBody}>
-				<NativeStrip name="NativeGameLink Links" className={linkClasses?.Links}>{links.map(([label, url]) => (
-					<div key={label} className={linkClasses?.LinkInner}><NativeFocusable focusable role="link" className={linkClasses?.Anchor} onActivate={() => openExternal(props.document, url)}><div className={linkClasses?.Link}><span className={linkClasses?.Text}>{label}</span></div></NativeFocusable></div>
-				))}</NativeStrip>
-			</Section>
-		</>
+			<NativeFocusable focusable flow-children="row" className={nativeClasses(classes.QuickLinks?.GameInfoQuickLinks || '_2GqvVM-UeNGM7ptNftUVn_')}>
+				{links.map(([label, url]) => (
+					<NativeFocusable key={label} role="link" className={nativeClasses(linkClasses?.Anchor)} onActivate={() => openExternal(props.document, url)} {...clickProps(() => openExternal(props.document, url))} focusable>
+						<div className={nativeClasses(linkClasses?.Link)}><span className={nativeClasses(linkClasses?.Text)}>{label}</span></div>
+					</NativeFocusable>
+				))}
+			</NativeFocusable>
+		</Section>
 	);
 }
 
@@ -541,6 +625,27 @@ function SafeTabFallback(props: NativeDetailsProps): React.ReactElement {
 }
 
 export function NativeBigPictureDetails(props: NativeDetailsProps): React.ReactElement {
+	const classes = resolveNativeAppDetailsClasses();
+
+	React.useEffect(() => {
+		const doc = props.document;
+		return () => {
+			disposeBigPictureGamepadNavigation(doc);
+		};
+	}, [props.document, props.shortcut.id]);
+
+	React.useEffect(() => {
+		const doc = props.document;
+		const root = doc.getElementById('gdl-bp-detail-root');
+		const tabStrip = findBigPictureTabStrip(doc);
+		const strip = tabStrip?.strip || doc.querySelector<HTMLElement>(
+			'[role="tablist"], [class*="TabsRow"], [class*="tabsRow"], [class*="TabsStrip"]'
+		);
+		if (root && strip) {
+			installBigPictureGamepadNavigation(doc, root, strip, tabStrip?.controls || new Map());
+		}
+	}, [props.document, props.tab, props.shortcut.id]);
+
 	let content: React.ReactElement;
 	switch (props.tab) {
 		case 'stuff': content = <StuffTab {...props} />; break;
@@ -548,17 +653,33 @@ export function NativeBigPictureDetails(props: NativeDetailsProps): React.ReactE
 		case 'info': content = <InfoTab {...props} />; break;
 		default: content = <ActivityTab {...props} />; break;
 	}
-	return <NativeDetailsBoundary key={`${props.tab}-${props.shortcut.id}-${props.shortcut.steamAppId}`} name={props.tab} fallback={<SafeTabFallback {...props} />}>{content}</NativeDetailsBoundary>;
+
+	const nav = React.useMemo(() => resolveSteamNav(props.document), [props.document]);
+	const NavContext = nav?.navContext || getNavContext(props.document);
+	const parentNavNode = nav?.navNode;
+
+	const rootElement = (
+		<NativeDetailsBoundary key={`${props.tab}-${props.shortcut.id}-${props.shortcut.steamAppId}`} name={props.tab} fallback={<SafeTabFallback {...props} />}>
+			<NativeFocusable flow-children="column" focusable={false} className={nativeClasses(classes.Section?.AppDetailsSectionContainer)}>
+				{content}
+			</NativeFocusable>
+		</NativeDetailsBoundary>
+	);
+
+	if (NavContext && parentNavNode) {
+		return <NavContext.Provider value={parentNavNode}>{rootElement}</NavContext.Provider>;
+	}
+	return rootElement;
 }
 
-interface ReactRootHandle {
+export interface ReactRootHandle {
 	render(node: ReactNode): void;
 	unmount(): void;
 }
 
 const nativeRoots = new WeakMap<HTMLElement, ReactRootHandle>();
 
-function findReactDom(doc: Document): any | null {
+export function findReactDom(doc: Document): any | null {
 	const docWindow = doc.defaultView as any;
 	for (const candidate of [docWindow?.SP_REACTDOM, (window as any)?.SP_REACTDOM, docWindow?.ReactDOM, (window as any)?.ReactDOM]) {
 		if (candidate && (typeof candidate.createRoot === 'function' || (typeof candidate.render === 'function' && typeof candidate.unmountComponentAtNode === 'function'))) return candidate;

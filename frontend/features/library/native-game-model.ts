@@ -22,21 +22,43 @@ function mapNativeFeature(categoryId?: number): NativeGameFeature | null {
 		case 18: return nativeFeature('category:18', 'controller-partial', loc('AppDetails_Feature_PartialController', gdlText('partial_controller', 'Partial controller support')), 18);
 		case 30: return nativeFeature('category:30', 'workshop', loc('AppDetails_Feature_SteamWorkshop', 'Steam Workshop'), 30);
 		case 44: return nativeFeature('category:44', 'remote-play', loc('AppDetails_Feature_RemotePlayTogether', 'Remote Play Together'), 44);
+		case 55:
+		case 56: return nativeFeature(`category:${categoryId}`, 'ps4', loc('AppDetails_Feature_PS4', gdlText('controller_ps4', 'Compatibilidad con DUALSHOCK')), categoryId);
+		case 57:
+		case 58: return nativeFeature(`category:${categoryId}`, 'ps5', loc('AppDetails_Feature_PS5', gdlText('controller_ps5', 'Compatibilidad con DualSense')), categoryId);
 		case 62: return nativeFeature('category:62', 'family-sharing', loc('AppDetails_Feature_FamilySharing', gdlText('family_sharing', 'Family Sharing')), 62);
 		default: return null;
 	}
 }
 
-function uniqueNativeFeatures(values: NativeGameFeature[], legacy = false): NativeGameFeature[] {
+const FEATURE_ORDER: Record<string, number> = {
+	'single-player': 10,
+	multiplayer: 20,
+	coop: 30,
+	achievements: 40,
+	cloud: 50,
+	'family-sharing': 60,
+	workshop: 70,
+	'remote-play': 80,
+	'controller-full': 90,
+	'controller-partial': 95,
+	ps4: 100,
+	ps5: 110,
+};
+
+function uniqueNativeFeatures(values: NativeGameFeature[], _legacy = false): NativeGameFeature[] {
 	const seen = new Set<string>();
-	return values.filter(feature => {
-		// Only legacy records merge several metadata sources for one capability.
-		// Preserve the established key-based behavior for every other linked game.
-		const key = legacy ? (feature.kind || feature.key) : (feature.key || feature.kind);
+	const filtered = values.filter(feature => {
+		const key = feature.kind || feature.key;
 		if (!key || seen.has(key)) return false;
 		seen.add(key);
 		return Boolean(feature.label);
-	}).slice(0, 7);
+	});
+	return filtered.sort((a, b) => {
+		const orderA = FEATURE_ORDER[a.kind] ?? 999;
+		const orderB = FEATURE_ORDER[b.kind] ?? 999;
+		return orderA - orderB;
+	}).slice(0, 10);
 }
 
 function formatNativeRelease(value: string): string {
@@ -50,7 +72,8 @@ function formatNativeRelease(value: string): string {
 		}
 	} catch {}
 	// Store appdetails already localizes non-ISO release strings using Steam language.
-	return raw;
+	// Clean up comma formatting e.g. "4 Sep, 2025" -> "4 Sep 2025"
+	return raw.replace(/,\s*(\d{4})/g, ' $1');
 }
 
 export function steamNativeGameInfo(data: SteamGameData, steamAppId: string, modern?: SteamLibraryAssets | null): NativeGameInfo {

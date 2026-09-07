@@ -92,7 +92,7 @@ function renderLinkedPage(
 /** Remove GDL desktop-Library UI and restore Steam's original shortcut notice. */
 export function cleanupInjection(doc: Document): void {
 	cancelLinkedShortcutLoading(doc);
-	linkedRenderRetryState.delete(doc);
+	linkedRenderRetryState.delete(doc); routeMismatchRetryState.delete(doc);
 	navigationController.cancelCleanup(doc);
 	finishLibraryRouteExit(doc);
 	removeNativeGameChrome(doc, true);

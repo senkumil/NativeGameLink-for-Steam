@@ -20,6 +20,9 @@ export interface NativeAppDetailsClasses {
 	Links: NativeClassModule | null;
 	Review: NativeClassModule | null;
 	Notes: NativeClassModule | null;
+	QuickLinks: NativeClassModule | null;
+	FocusRing: NativeClassModule | null;
+	PostTextEntry: NativeClassModule | null;
 }
 
 type NativeClassFamily = keyof NativeAppDetailsClasses;
@@ -32,7 +35,7 @@ const signatures: Record<NativeClassFamily, readonly string[]> = {
 	Achievement: ['AchievementCarouselItem', 'CarouselIcon', 'AchivementCarouselItemDetails', 'BasicAppDetailsAchievementsSectionBody'],
 	Community: ['CommunityContentContainer', 'AppOverviewRow', 'CommunityItem', 'PreviewContainer', 'ChildItem'],
 	TradingCard: ['TradingCardCarouselItem', 'CardWrapper', 'Card', 'CardImage', 'Title', 'EmptyCircle'],
-	GameInfo: ['InnerContainer', 'GameDescription', 'FeaturesList', 'AssociationList', 'Release'],
+	GameInfo: ['Container', 'InnerContainer', 'SectionContainer', 'FeaturesList', 'Description', 'GameDescription', 'Stats', 'AssociationList', 'Release', 'Portrait', 'BoxArt'],
 	GameInfoFrame: ['AppGameInfoContainer', 'GameInfoShadow', 'Glassy', 'SuppressTransition'],
 	Friends: ['FriendsSection', 'FriendsContainer', 'GamepadFriendSectionItem', 'AvatarAndLabel'],
 	Media: ['ScreenshotsSection', 'Screenshots', 'Thumbnail', 'NoRecent'],
@@ -40,6 +43,9 @@ const signatures: Record<NativeClassFamily, readonly string[]> = {
 	Links: ['LinksSection', 'LinksSectionBody', 'Links', 'Anchor', 'Link', 'Text'],
 	Review: ['ReviewMetadata', 'ReviewDescription', 'ReviewPresentGroup', 'ButtonsGroup'],
 	Notes: ['NoteLink', 'Untitled', 'ViewAllLink'],
+	QuickLinks: ['GameInfoQuickLinks', 'GameInfoCollections', 'AppDetailsContent', 'GameInfoContainer'],
+	FocusRing: ['FocusRingRoot', 'FocusRing', 'blinker', 'growOutline', 'fadeOutline', 'flash'],
+	PostTextEntry: ['PostTextEntry', 'PostTextEntryArea', 'Controls', 'PostButton'],
 };
 
 const cache = new Map<NativeClassFamily, NativeClassModule | null>();
@@ -99,8 +105,27 @@ export function resolveNativeAppDetailsClasses(): NativeAppDetailsClasses {
 		Links: cache.get('Links') || null,
 		Review: cache.get('Review') || null,
 		Notes: cache.get('Notes') || null,
+		QuickLinks: cache.get('QuickLinks') || null,
+		PostTextEntry: cache.get('PostTextEntry') || null,
+		FocusRing: cache.get('FocusRing') || null,
 	};
 }
+
+export const FALLBACK_FOCUS_RING_CLASSES: Readonly<{
+	FocusRingRoot: string;
+	FocusRing: string;
+	flash: string;
+	growOutline: string;
+	fadeOutline: string;
+	blinker: string;
+}> = {
+	FocusRingRoot: '_3FIjYetykQsFYR08l1v7Ls',
+	FocusRing: '_1wPplsegQqCoe06wXPhzKT',
+	flash: '_1RqM3Kl3-lPbdsdw6xcEm9',
+	growOutline: '_2o99ScTho-Rc-AQV-VR68h',
+	fadeOutline: 'zn08hWW7ylBIurz-os7CM',
+	blinker: '_1aef_iRVYLxUpMGfUnxIdh',
+};
 
 /** Steam's AppDetails carousel is not the public Millennium Carousel. */
 export function resolveNativeSummaryCarousel(): ComponentType<any> | null {

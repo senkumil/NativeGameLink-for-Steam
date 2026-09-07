@@ -98,12 +98,18 @@ async function injectPlayBarAchievements(doc: Document, context: LinkedAchieveme
 	const statsRow = statRoot.parentElement;
 	if (!statsRow) return;
 
+	const controller = statsRow.querySelector<HTMLElement>('#gdl-bp-playbar-controller, [data-gdl-playbar-controller="1"]');
+	const insertTarget = controller && controller.parentElement === statsRow ? controller.nextSibling : statRoot.nextSibling;
+
 	const nativeBlueprint = buildNativeAchievementPlaybarBlueprint(doc, progress.unlocked, progress.total, open);
 	if (nativeBlueprint) {
 		const achievementGraphic = nativeBlueprint.querySelector<HTMLElement>('svg, img');
 		if (achievementGraphic?.parentElement) achievementGraphic.parentElement.dataset.gdlUiIconHost = 'playbar-achievements';
 		applyNativePlaybarTypography(nativeBlueprint, NATIVE_UI_BLUEPRINT_KEYS.playbarAchievements);
-		statsRow.insertBefore(nativeBlueprint, statRoot.nextSibling);
+		statsRow.insertBefore(nativeBlueprint, insertTarget);
+		if (controller && controller.parentElement === statsRow && (nativeBlueprint.compareDocumentPosition(controller) & Node.DOCUMENT_POSITION_FOLLOWING)) {
+			statsRow.insertBefore(controller, nativeBlueprint);
+		}
 		preserveLinkedPlaybarVisibility(doc);
 		return;
 	}
@@ -124,7 +130,10 @@ async function injectPlayBarAchievements(doc: Document, context: LinkedAchieveme
 	stat.title = gdlText('view_linked_achievements', 'View achievements for this linked game');
 	stat.addEventListener('click', open);
 	applyNativePlaybarTypography(stat, NATIVE_UI_BLUEPRINT_KEYS.playbarAchievements);
-	statsRow.insertBefore(stat, statRoot.nextSibling);
+	statsRow.insertBefore(stat, insertTarget);
+	if (controller && controller.parentElement === statsRow && (stat.compareDocumentPosition(controller) & Node.DOCUMENT_POSITION_FOLLOWING)) {
+		statsRow.insertBefore(controller, stat);
+	}
 	preserveLinkedPlaybarVisibility(doc);
 }
 

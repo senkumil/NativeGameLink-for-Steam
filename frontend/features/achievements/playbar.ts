@@ -114,6 +114,10 @@ export function ensureLocalPlaybarStat(doc: Document, data: LocalAchievementData
 			}
 			updateAchievementMedal(stat, classes, isComplete);
 			applyNativePlaybarTypography(stat, NATIVE_UI_BLUEPRINT_KEYS.playbarAchievements);
+			const controller = stats.querySelector<HTMLElement>('#gdl-bp-playbar-controller, [data-gdl-playbar-controller="1"]');
+			if (controller && controller.parentElement === stats && (stat.compareDocumentPosition(controller) & Node.DOCUMENT_POSITION_FOLLOWING)) {
+				stats.insertBefore(controller, stat);
+			}
 			lastStat = stat;
 			continue;
 		}
@@ -123,6 +127,10 @@ export function ensureLocalPlaybarStat(doc: Document, data: LocalAchievementData
 			updateAchievementMedal(wrapper, classes, isComplete);
 			applyNativePlaybarTypography(wrapper, NATIVE_UI_BLUEPRINT_KEYS.playbarAchievements);
 			stats.appendChild(wrapper);
+			const controller = stats.querySelector<HTMLElement>('#gdl-bp-playbar-controller, [data-gdl-playbar-controller="1"]');
+			if (controller && controller.parentElement === stats && (wrapper.compareDocumentPosition(controller) & Node.DOCUMENT_POSITION_FOLLOWING)) {
+				stats.insertBefore(controller, wrapper);
+			}
 			lastStat = wrapper;
 			continue;
 		}
@@ -136,6 +144,10 @@ export function ensureLocalPlaybarStat(doc: Document, data: LocalAchievementData
 		wrapper.addEventListener('click', open);
 		applyNativePlaybarTypography(wrapper, NATIVE_UI_BLUEPRINT_KEYS.playbarAchievements);
 		stats.appendChild(wrapper);
+		const controller = stats.querySelector<HTMLElement>('#gdl-bp-playbar-controller, [data-gdl-playbar-controller="1"]');
+		if (controller && controller.parentElement === stats && (wrapper.compareDocumentPosition(controller) & Node.DOCUMENT_POSITION_FOLLOWING)) {
+			stats.insertBefore(controller, wrapper);
+		}
 		lastStat = wrapper;
 	}
 	preserveLinkedPlaybarVisibility(doc);

@@ -24,6 +24,8 @@ export const GDL_STEAM_TOKEN_SPECS: Record<string, SteamUiTokenSpec> = {
 	cloud_saves: { tokens: ['AppDetails_Feature_SteamCloud'] },
 	full_controller: { tokens: ['AppDetails_Feature_FullController'] },
 	partial_controller: { tokens: ['AppDetails_Feature_PartialController'] },
+	controller_ps4: { tokens: ['AppDetails_Feature_PS4'] },
+	controller_ps5: { tokens: ['AppDetails_Feature_PS5'] },
 	family_sharing: { tokens: ['AppDetails_Feature_FamilySharing'] },
 	trading_cards: { tokens: ['AppDetails_SectionTitle_TradingCards'] },
 	feed_game_launch: { tokens: ['EventDisplay_EventType_10'] },

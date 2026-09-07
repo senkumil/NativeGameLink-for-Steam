@@ -31,7 +31,7 @@ export interface LocalAchievementRefreshTarget {
 
 const localAchievementDocState = new WeakMap<Document, LocalAchievementDocumentState>();
 const localAchievementDocuments = new Set<Document>();
-const ACHIEVEMENT_REFRESH_STORAGE_KEY = 'gdl_achievement_refresh_v1';
+export const ACHIEVEMENT_REFRESH_STORAGE_KEY = 'gdl_achievement_refresh_v1';
 let achievementRefreshStorageInstalled = false;
 
 interface AchievementRefreshMessage {
@@ -48,6 +48,16 @@ function parseAchievementRefreshMessage(value: string | null): LocalAchievementR
 			? { steamAppId: String(message.steamAppId), stateAppId: String(message.stateAppId || '') }
 			: undefined;
 	} catch { return undefined; }
+}
+
+function currentDocShortcutAppId(doc: Document): string | null {
+	const current = achievementRuntimeHost().getCurrentInjectedShortcutAppId();
+	if (current && /^\d+$/.test(current)) return current;
+	const bpRoot = doc.getElementById('gdl-bp-detail-root') as HTMLElement | null;
+	if (bpRoot?.dataset?.gdlShortcutAppId && /^\d+$/.test(bpRoot.dataset.gdlShortcutAppId)) {
+		return bpRoot.dataset.gdlShortcutAppId;
+	}
+	return null;
 }
 
 function isShortcutRunning(shortcutAppId: string | number | null): boolean {
@@ -102,7 +112,7 @@ export function installLocalAchievementUI(doc: Document): void {
 			}
 			return;
 		}
-		const shortcutAppId = achievementRuntimeHost().getCurrentInjectedShortcutAppId();
+		const shortcutAppId = currentDocShortcutAppId(doc);
 		cacheLocalAchievements(data, appid, shortcutAppId);
 		state.data = data;
 		const signature = localAchievementDataSignature(data);
@@ -130,7 +140,7 @@ export function installLocalAchievementUI(doc: Document): void {
 		state.inFlight = true;
 		try {
 			const data = await fetchLocalAchievementData(appid, {
-				stateAppId: achievementRuntimeHost().getCurrentInjectedShortcutAppId(),
+				stateAppId: currentDocShortcutAppId(doc),
 			});
 			if (disposed || detectLinkedSteamAppId(doc) !== appid) return;
 			applyData(appid, data);
@@ -157,7 +167,7 @@ export function installLocalAchievementUI(doc: Document): void {
 		}
 		// The launch watcher owns the 2 s live-progress read while the shortcut is
 		// running. This document receives the same result through the service bus.
-		if (isShortcutRunning(achievementRuntimeHost().getCurrentInjectedShortcutAppId())) {
+		if (isShortcutRunning(currentDocShortcutAppId(doc))) {
 			stopPolling();
 			return;
 		}
@@ -202,7 +212,7 @@ export function installLocalAchievementUI(doc: Document): void {
 	const unsubscribeData = subscribeLocalAchievementData(update => {
 		const appid = detectLinkedSteamAppId(doc);
 		if (!appid || appid !== update.steamAppId) return;
-		const shortcutAppId = achievementRuntimeHost().getCurrentInjectedShortcutAppId();
+		const shortcutAppId = currentDocShortcutAppId(doc);
 		if (update.stateAppId && shortcutAppId && update.stateAppId !== String(shortcutAppId)) return;
 		applyData(appid, update.data);
 	});

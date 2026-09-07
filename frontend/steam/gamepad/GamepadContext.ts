@@ -1,5 +1,5 @@
 import { normalizeTitle } from '../../core/text';
-import { getMappedShortcuts, getShortcutAppById, toSignedShortcutAppId } from '../shortcuts';
+import { getMappedShortcuts, getShortcutAppById, looseMatchTitle, toSignedShortcutAppId } from '../shortcuts';
 import { findMappingForTitle, mappings, shortcutMappingKey } from '../../core/mappings';
 
 export interface LinkedGameIdentity {
@@ -66,19 +66,21 @@ function collectWindows(doc: Document): any[] {
 		if (value && !result.includes(value)) result.push(value);
 	};
 	add(doc.defaultView);
-	try { add(doc.defaultView?.parent); } catch {}
-	try { add(doc.defaultView?.top); } catch {}
-	try { add(doc.defaultView?.opener); } catch {}
-	if (typeof window !== 'undefined') add(window);
 	try {
-		const manager = (window as any)?.g_PopupManager;
-		for (const name of ['SP BPM_uid0', 'SP BPM']) {
-			const popup = manager?.GetExistingPopup?.(name) || manager?.m_mapPopups?.get?.(name);
-			add(popup?.m_popup?.window || popup?.window || popup?.m_popup);
+		if (doc.defaultView?.parent && doc.defaultView.parent !== doc.defaultView) {
+			add(doc.defaultView.parent);
+		}
+	} catch {}
+	try {
+		if (doc.defaultView?.top && doc.defaultView.top !== doc.defaultView) {
+			add(doc.defaultView.top);
 		}
 	} catch {}
 	for (const frame of Array.from(doc.querySelectorAll<HTMLIFrameElement>('iframe'))) {
 		try { add(frame.contentWindow); } catch {}
+	}
+	if (result.length === 0 && typeof window !== 'undefined') {
+		add(window);
 	}
 	return result;
 }
@@ -92,7 +94,10 @@ function readPath(root: any, path: string): unknown {
 	catch { return undefined; }
 }
 
-function collectActiveRouteValues(doc: Document): string[] {
+export const NON_DETAILS_ROUTE_PATTERN = /(?:\/routes\/library\/(?:all|collections|installed|shortcuts|nonsteam|controller|home|recent|shelves|filter)|\/routes\/(?:store|community|chat|settings|downloads|friends|media))/i;
+export const APP_DETAILS_ROUTE_PATTERN = /(?:\/routes\/library\/app\/|\/library\/app\/|\/appdetails\/|\/details\/|\/game\/|[?&#]appid=)(-?\d+)/i;
+
+export function collectActiveRouteValues(doc: Document): string[] {
 	const values = new Set<string>();
 	addCandidateValue(values, doc.URL);
 	addCandidateValue(values, doc.baseURI);
@@ -149,8 +154,11 @@ function activeAppIdsFromStores(doc: Document): number[] {
 
 function appIdsFromReactOwners(doc: Document): number[] {
 	const ids = new Set<number>();
-	const selector = '[role="tablist"], [class*="AppDetails"], [class*="GameDetails"], [class*="PlayBar"], [class*="Hero"]';
+	const selector = '[class*="AppDetails"], [class*="GameDetails"], [class*="PlayBar"], [class*="Hero"]';
 	for (const element of Array.from(doc.querySelectorAll<HTMLElement>(selector))) {
+		if (element.closest('#gdl-bp-detail-root, #gdl-bp-detail-shell, #gdl-bp-detail-fallback-panel, [id^="gdl-"], [data-gdl-big-picture-details], [class*="AllGames"], [class*="CollectionsHeader"], [class*="LibraryHome"], [class*="Shelf"], [class*="Grid"], [class*="Carousel"], [role="tablist"]')) {
+			continue;
+		}
 		let current: HTMLElement | null = element;
 		for (let domDepth = 0; current && domDepth < 5; domDepth += 1, current = current.parentElement) {
 			const ownerKey = Object.keys(current).find(key => key.startsWith('__reactFiber$') || key.startsWith('__reactInternalInstance$') || key.startsWith('__reactProps$'));
@@ -170,22 +178,27 @@ function appIdsFromReactOwners(doc: Document): number[] {
 
 function activeContextFromIdentity(doc: Document, shortcuts: MappedShortcut[]): ActiveGameContext | null {
 	const routeValues = collectActiveRouteValues(doc);
-	const routePatterns = [
-		/(?:\/routes\/library\/app\/|\/library\/app\/|\/appdetails\/|\/details\/|\/game\/|[?&#]appid=)(-?\d+)/ig,
-		/(?:^|[^0-9])(-?\d{6,10})(?:[^0-9]|$)/g,
-	];
+	const hasLibraryRoute = routeValues.some(v => NON_DETAILS_ROUTE_PATTERN.test(v));
+	const hasAppRoute = routeValues.some(v => APP_DETAILS_ROUTE_PATTERN.test(v));
+	if (hasLibraryRoute && !hasAppRoute) {
+		return { type: 'none' };
+	}
+
+	const routePattern = /(?:\/routes\/library\/app\/|\/library\/app\/|\/appdetails\/|\/details\/|\/game\/|[?&#]appid=)(-?\d+)/ig;
 	for (const value of routeValues) {
-		for (let index = 0; index < routePatterns.length; index += 1) {
-			const pattern = routePatterns[index];
-			pattern.lastIndex = 0;
-			let match: RegExpExecArray | null;
-			while ((match = pattern.exec(value))) {
-				const context = contextForRawAppId(match[1], shortcuts);
-				if (context?.type === 'shortcut-linked') return context;
-				if (context?.type === 'steam' && index === 0) return context;
-			}
+		routePattern.lastIndex = 0;
+		let match: RegExpExecArray | null;
+		while ((match = routePattern.exec(value))) {
+			const context = contextForRawAppId(match[1], shortcuts);
+			if (context?.type === 'shortcut-linked') return context;
+			if (context?.type === 'steam') return context;
 		}
 	}
+
+	if (doc.querySelector('[class*="AllGames"], [class*="CollectionsHeader"], [class*="LibraryHome"]')) {
+		return { type: 'none' };
+	}
+
 	const stateIds = [...activeAppIdsFromStores(doc), ...appIdsFromReactOwners(doc)];
 	for (const id of stateIds) {
 		const context = contextForRawAppId(id, shortcuts);
@@ -196,15 +209,24 @@ function activeContextFromIdentity(doc: Document, shortcuts: MappedShortcut[]): 
 }
 
 function headingContext(doc: Document, shortcuts: MappedShortcut[]): ActiveGameContext | null {
+	if (doc.querySelector('[class*="AllGames"], [class*="CollectionsHeader"], [class*="LibraryHome"], [class*="AllCollections"]')) {
+		return null;
+	}
+	const routeValues = collectActiveRouteValues(doc);
+	if (routeValues.some(v => NON_DETAILS_ROUTE_PATTERN.test(v)) && !routeValues.some(v => APP_DETAILS_ROUTE_PATTERN.test(v))) {
+		return null;
+	}
 	const byLongestTitle = [...shortcuts].sort((a, b) => b.title.length - a.title.length);
-	const headings = Array.from(doc.querySelectorAll<HTMLElement>('h1, h2, h3, img[alt], svg[aria-label], [class*="title" i], [class*="logo" i]'));
+	const headings = Array.from(doc.querySelectorAll<HTMLElement>(
+		'h1, h2, h3, [class*="logo" i] img[alt], [class*="Hero" i] img[alt], svg[aria-label], [class*="title" i], [class*="logo" i]'
+	));
 	for (const heading of headings) {
-		if (heading.closest('#gdl-bp-detail-root, #gdl-bp-detail-fallback-panel, [class*="nav" i], [class*="footer" i], [class*="QuickAccess" i], [class*="MainMenu" i]')) continue;
+		if (heading.closest('#gdl-bp-detail-root, #gdl-bp-detail-fallback-panel, #gdl-bp-detail-shell, [id^="gdl-"], [class*="nav" i], [class*="footer" i], [class*="QuickAccess" i], [class*="MainMenu" i], [class*="Capsule" i], [class*="Grid" i], [class*="Shelf" i], [class*="Collection" i], [class*="AllGames" i], [class*="LibraryHome" i], [class*="RecentGames" i], [class*="Carousel" i], [class*="FriendsContainer" i], [class*="Social" i], [class*="Chat" i]')) continue;
 		const rect = heading.getBoundingClientRect();
 		if (rect.width <= 0 || rect.height <= 0 || rect.top > 500) continue;
 		const text = normalizeTitle(heading.getAttribute('alt') || heading.getAttribute('aria-label') || heading.textContent || '');
 		if (!text) continue;
-		const shortcut = byLongestTitle.find(item => normalizeTitle(item.title) === text);
+		const shortcut = byLongestTitle.find(item => normalizeTitle(item.title) === text || looseMatchTitle(item.title, text));
 		if (shortcut) return linkedContext(shortcut);
 	}
 	return null;
@@ -213,6 +235,9 @@ function headingContext(doc: Document, shortcuts: MappedShortcut[]): ActiveGameC
 export function resolveActiveGameContext(doc?: Document): ActiveGameContext {
 	const targetDoc = doc || (typeof document !== 'undefined' ? document : null);
 	if (!targetDoc) return { type: 'none' };
+	if (targetDoc.querySelector('[class*="AllGames"], [class*="CollectionsHeader"], [class*="LibraryHome"], [class*="AllCollections"]')) {
+		return { type: 'none' };
+	}
 	const shortcuts = getMappedShortcuts();
 	const activeMarker = targetDoc.querySelector<HTMLElement>('[data-gdl-active-shortcut-id]');
 	if (activeMarker) {
@@ -228,9 +253,30 @@ export function resolveActiveGameContext(doc?: Document): ActiveGameContext {
 		}
 		return { type: 'shortcut-unlinked', shortcutAppId: rawAppId >>> 0, title: title || `App ${rawAppId >>> 0}` };
 	}
-	const identity = activeContextFromIdentity(targetDoc, shortcuts);
-	if (identity?.type === 'shortcut-linked') return identity;
+
 	const byHeading = headingContext(targetDoc, shortcuts);
-	if (byHeading) return byHeading;
+	if (byHeading?.type === 'shortcut-linked') return byHeading;
+
+	const identity = activeContextFromIdentity(targetDoc, shortcuts);
+	if (identity?.type === 'shortcut-linked' && identity.identity?.title) {
+		const visibleHeadings = Array.from(targetDoc.querySelectorAll<HTMLElement>(
+			'h1, h2, h3, [class*="logo" i] img[alt], [class*="Hero" i] img[alt]'
+		)).filter(el => {
+			if (el.closest('#gdl-bp-detail-root, #gdl-bp-detail-fallback-panel, #gdl-bp-detail-shell, [id^="gdl-"], [class*="nav" i], [class*="QuickAccess" i], [class*="footer" i]')) return false;
+			const r = el.getBoundingClientRect();
+			return r.width > 0 && r.height > 0 && r.top <= 500;
+		});
+		if (visibleHeadings.length > 0) {
+			const headingTexts = visibleHeadings.map(el => normalizeTitle(el.getAttribute('alt') || el.textContent || '')).filter(Boolean);
+			const expectedTitle = normalizeTitle(identity.identity.title);
+			const matchesAny = headingTexts.some(h => h === expectedTitle || looseMatchTitle(h, expectedTitle));
+			if (!matchesAny) {
+				return { type: 'none' };
+			}
+		}
+		return identity;
+	}
+
+	if (identity?.type === 'steam') return identity;
 	return identity || { type: 'none' };
 }

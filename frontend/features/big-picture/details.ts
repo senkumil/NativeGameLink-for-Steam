@@ -2,23 +2,36 @@ import { backendLog, fetchFriendPersonasBackend } from '../../api/backend';
 import { getCachedGameData, getGameData } from '../../core/game-data';
 import { steamLanguageSync } from '../../steam/localization';
 import { getMappedShortcuts, toSignedShortcutAppId } from '../../steam/shortcuts';
-import { gamepadRuntime, resolveActiveGameContext } from '../../steam/gamepad';
+import {
+	APP_DETAILS_ROUTE_PATTERN,
+	NON_DETAILS_ROUTE_PATTERN,
+	collectActiveRouteValues,
+	gamepadRuntime,
+	resolveActiveGameContext,
+} from '../../steam/gamepad';
 import { steamWebpackRuntime } from '../../steam/modules/SteamWebpackRuntime';
 import { getCachedLocalAchievementsForGame } from '../achievements/cache';
-import { fetchLocalAchievementData } from '../achievements/service';
+import { fetchLocalAchievementData, subscribeLocalAchievementData } from '../achievements/service';
+import { ACHIEVEMENT_REFRESH_STORAGE_KEY } from '../achievements/lifecycle';
 import { getCachedOfficialCommunityItems, getOfficialCommunityItems } from '../library/community-items';
 import { getCachedCommunityContent, getCachedNews, getCommunityContent, getNews } from '../library/news';
 import { getCachedFriendData, getFriendData } from '../library/social/friends';
 import { cachePersona, hasCachedPersona } from '../library/social/personas';
 import { prioritizeShortcutLinkingAndArtwork } from '../library/artwork-sync';
+import { subscribeControllerChanges } from '../library/controller';
+import { defaultBigPictureModeEnabled } from '../../core/preferences';
 import {
 	mountNativeBigPictureDetails,
 	unmountNativeBigPictureDetails,
 } from './NativeBigPictureDetails';
 import {
+	ensureCloudDivider,
 	ensureNativePanelRoot,
+	ensurePlaybarControllerStat,
 	hideBigPictureNonSteamNotices,
 	removeBigPictureFallbackPanel,
+	removeCloudDivider,
+	removePlaybarControllerStat,
 	restoreBigPictureNonSteamNotices,
 } from './panel-mount';
 import { activeTabFromNative, findBigPictureTabStrip } from './tabs';
@@ -41,6 +54,61 @@ const detailTabObservers = new WeakMap<Document, { strip: HTMLElement; observer:
 const detailRetryTimers = new WeakMap<Document, ReturnType<typeof setTimeout>>();
 const detailRetryCounts = new WeakMap<Document, number>();
 const detailTabSyncTimers = new WeakMap<Document, ReturnType<typeof setTimeout>>();
+const activeDetailDocs = new Set<Document>();
+let achievementSyncInstalled = false;
+
+function ensureAchievementSync(): void {
+	if (achievementSyncInstalled) return;
+	achievementSyncInstalled = true;
+
+	subscribeLocalAchievementData(update => {
+		for (const doc of Array.from(activeDetailDocs)) {
+			const state = detailStates.get(doc);
+			if (!state || !isLiveDetailState(doc, state)) continue;
+			if (update.steamAppId !== state.shortcut.steamAppId) continue;
+			const shortcutIdStr = String(state.shortcut.id);
+			if (update.stateAppId && update.stateAppId !== shortcutIdStr) continue;
+			applyDetailPatch(doc, state, 'achievements', update.data);
+		}
+	});
+
+	if (typeof window !== 'undefined') {
+		window.addEventListener('storage', event => {
+			if (event.key !== ACHIEVEMENT_REFRESH_STORAGE_KEY) return;
+			for (const doc of Array.from(activeDetailDocs)) {
+				const state = detailStates.get(doc);
+				if (!state || !isLiveDetailState(doc, state)) continue;
+				void fetchLocalAchievementData(state.shortcut.steamAppId, {
+					stateAppId: String(state.shortcut.id),
+					maxAgeMs: 0,
+				}).then(data => {
+					applyDetailPatch(doc, state, 'achievements', data);
+				});
+			}
+		});
+	}
+}
+
+let controllerSyncInstalled = false;
+const activeControllerDocs = new Set<Document>();
+
+function ensureControllerSync(doc?: Document): void {
+	if (doc) activeControllerDocs.add(doc);
+	if (controllerSyncInstalled) return;
+	controllerSyncInstalled = true;
+	const targetDoc = doc || (typeof window !== 'undefined' ? window.document : null);
+	if (!targetDoc) return;
+	subscribeControllerChanges(targetDoc, () => {
+		const allDocs = new Set([...Array.from(activeDetailDocs), ...Array.from(activeControllerDocs)]);
+		for (const d of Array.from(allDocs)) {
+			if (d.body && d.body.isConnected) {
+				ensurePlaybarControllerStat(d);
+			} else {
+				activeControllerDocs.delete(d);
+			}
+		}
+	});
+}
 
 function detectCurrentMappedShortcut(doc: Document): MappedShortcut | null {
 	if (!doc.body) return null;
@@ -95,6 +163,9 @@ function renderNativeRoot(doc: Document, state: BigPictureDetailState): void {
 		gamepadRuntime.initialize(doc);
 	} catch {}
 	hideBigPictureNonSteamNotices(doc);
+	const tabs = findBigPictureTabStrip(doc);
+	ensureCloudDivider(doc, tabs?.strip || state.panel);
+	ensurePlaybarControllerStat(doc);
 	const mounted = mountNativeBigPictureDetails(state.root, {
 		tab: state.activeTab,
 		shortcut: state.shortcut,
@@ -136,7 +207,7 @@ function startDetailHydration(doc: Document, state: BigPictureDetailState): void
 	}));
 	applyResource('achievements', fetchLocalAchievementData(state.shortcut.steamAppId, {
 		stateAppId: String(state.shortcut.id),
-		maxAgeMs: 5000,
+		maxAgeMs: 1250,
 	}));
 	applyResource('news', getNews(state.shortcut.steamAppId, state.language));
 	applyResource('community', getCommunityContent(state.shortcut.steamAppId, state.language));
@@ -181,7 +252,7 @@ function scheduleTabSync(doc: Document, preferredTab?: BigPictureTab): void {
 	const timer = setTimeout(() => {
 		detailTabSyncTimers.delete(doc);
 		if (doc.body?.isConnected) void refreshBigPictureShortcutDetails(doc);
-	}, 0);
+	}, 40);
 	detailTabSyncTimers.set(doc, timer);
 }
 
@@ -191,7 +262,6 @@ function bindTabs(doc: Document, strip: HTMLElement, controls: Map<BigPictureTab
 		if (control.dataset.gdlBpBound === '1') continue;
 		control.dataset.gdlBpBound = '1';
 		control.addEventListener('click', () => scheduleTabSync(doc, tab));
-		control.addEventListener('focusin', () => scheduleTabSync(doc, tab));
 		control.addEventListener('keydown', event => {
 			if (event.key === 'Enter' || event.key === ' ') scheduleTabSync(doc, tab);
 		});
@@ -199,7 +269,19 @@ function bindTabs(doc: Document, strip: HTMLElement, controls: Map<BigPictureTab
 	const current = detailTabObservers.get(doc);
 	if (current?.strip === strip) return;
 	current?.observer.disconnect();
-	const observer = new MutationObserver(() => scheduleTabSync(doc));
+	const observer = new MutationObserver(mutations => {
+		for (const m of mutations) {
+			if (m.attributeName === 'aria-selected') {
+				const target = m.target as HTMLElement;
+				if (target.getAttribute('aria-selected') === 'true') {
+					const tab = target.dataset.gdlBpTab as BigPictureTab | undefined;
+					scheduleTabSync(doc, tab);
+					return;
+				}
+			}
+		}
+		scheduleTabSync(doc);
+	});
 	observer.observe(strip, {
 		attributes: true,
 		childList: true,
@@ -213,21 +295,45 @@ function retireLegacyDetailShell(doc: Document): void {
 	for (const stale of Array.from(doc.querySelectorAll('#gdl-bp-detail-shell, #gdl-bp-native-strip-placeholder'))) stale.remove();
 }
 
-function removeBigPictureDetailsNodes(doc: Document): void {
+function removeBigPictureDetailsNodes(doc: Document, keepControllerStat = false): void {
+	if (!keepControllerStat) activeDetailDocs.delete(doc);
 	const state = detailStates.get(doc);
 	if (state) {
 		unmountNativeBigPictureDetails(state.root);
 		detailStates.delete(doc);
 	}
 	nextDetailGeneration(doc);
-	for (const element of Array.from(doc.querySelectorAll('#gdl-bp-detail-root, #gdl-bp-detail-shell, #gdl-bp-native-strip-placeholder'))) element.remove();
+	for (const element of Array.from(doc.querySelectorAll('#gdl-bp-detail-root, #gdl-bp-detail-shell, #gdl-bp-native-strip-placeholder, #gdl-bp-focus-ring-root, #gdl-bp-focus-ring'))) element.remove();
 	removeBigPictureFallbackPanel(doc);
+	removeCloudDivider(doc);
+	if (!keepControllerStat) removePlaybarControllerStat(doc);
 	restoreBigPictureNonSteamNotices(doc);
+}
+
+function isLibraryOrNonDetailsView(doc: Document): boolean {
+	if (doc.querySelector('[class*="AllGames"], [class*="CollectionsHeader"], [class*="LibraryHome"], [class*="AllCollections"]')) {
+		return true;
+	}
+	const routeValues = collectActiveRouteValues(doc);
+	const hasLibraryRoute = routeValues.some(v => NON_DETAILS_ROUTE_PATTERN.test(v));
+	const hasAppRoute = routeValues.some(v => APP_DETAILS_ROUTE_PATTERN.test(v));
+	if (hasLibraryRoute && !hasAppRoute) {
+		return true;
+	}
+	const hasPlayBar = Boolean(doc.querySelector('[class*="PlayBar"], [class*="PlayButton"], [class*="playButton"], [class*="AppDetailsHeader"], [class*="appDetailsHeader"]'));
+	if (!hasPlayBar && !hasAppRoute) {
+		return true;
+	}
+	return false;
 }
 
 export async function refreshBigPictureShortcutDetails(doc: Document): Promise<void> {
 	if (!doc.body) return;
 	if (doc.title?.includes('SP Desktop') || doc.body.classList.contains('DesktopUI') || doc.querySelector('.DesktopUI')) {
+		removeBigPictureDetailsNodes(doc);
+		return;
+	}
+	if (isLibraryOrNonDetailsView(doc)) {
 		removeBigPictureDetailsNodes(doc);
 		return;
 	}
@@ -240,6 +346,15 @@ export async function refreshBigPictureShortcutDetails(doc: Document): Promise<v
 	}
 	backendLog(`Big Picture details: mapped shortcut detected "${shortcut.title}" (id=${shortcut.id}, steamAppId=${shortcut.steamAppId})`);
 	prioritizeShortcutLinkingAndArtwork(shortcut.id, shortcut.steamAppId, shortcut.title);
+	if (defaultBigPictureModeEnabled()) {
+		activeDetailDocs.add(doc);
+		detailTabObservers.get(doc)?.observer.disconnect();
+		detailTabObservers.delete(doc);
+		removeBigPictureDetailsNodes(doc, true);
+		ensureControllerSync(doc);
+		ensurePlaybarControllerStat(doc);
+		return;
+	}
 	const language = String(steamLanguageSync() || 'english').toLowerCase();
 	let state = detailStates.get(doc);
 	const changedShortcut = !state
@@ -253,7 +368,10 @@ export async function refreshBigPictureShortcutDetails(doc: Document): Promise<v
 	const tabs = findBigPictureTabStrip(doc);
 	if (!tabs) {
 		backendLog('Big Picture details: native tab strip not ready, scheduling retry');
-		scheduleDetailRetry(doc);
+		removeBigPictureDetailsNodes(doc);
+		if (!isLibraryOrNonDetailsView(doc)) {
+			scheduleDetailRetry(doc);
+		}
 		return;
 	}
 	const nativeTab = activeTabFromNative(doc, tabs.controls) || state?.activeTab || 'activity';
@@ -266,6 +384,9 @@ export async function refreshBigPictureShortcutDetails(doc: Document): Promise<v
 	detailRetryCounts.delete(doc);
 	nodes.root.dataset.gdlSteamAppId = shortcut.steamAppId;
 	nodes.root.dataset.gdlShortcutAppId = String(shortcut.id);
+	activeDetailDocs.add(doc);
+	ensureAchievementSync();
+	ensureControllerSync(doc);
 
 	if (!state || changedShortcut || state.root !== nodes.root || state.panel !== nodes.panel) {
 		state = {
@@ -281,7 +402,7 @@ export async function refreshBigPictureShortcutDetails(doc: Document): Promise<v
 		detailStates.set(doc, state);
 		renderNativeRoot(doc, state);
 		startDetailHydration(doc, state);
-	} else {
+	} else if (state.activeTab !== nativeTab) {
 		state.activeTab = nativeTab;
 		renderNativeRoot(doc, state);
 	}
@@ -290,6 +411,8 @@ export async function refreshBigPictureShortcutDetails(doc: Document): Promise<v
 
 export function disposeBigPictureShortcutDetails(doc: Document | null): void {
 	if (!doc) return;
+	activeDetailDocs.delete(doc);
+	activeControllerDocs.delete(doc);
 	const retryTimer = detailRetryTimers.get(doc);
 	if (retryTimer) clearTimeout(retryTimer);
 	detailRetryTimers.delete(doc);

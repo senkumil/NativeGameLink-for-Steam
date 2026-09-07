@@ -43,6 +43,9 @@ const playbarVisibility = read('frontend/steam/playbar-visibility.ts');
 const bigPictureDetails = read('frontend/features/big-picture/NativeBigPictureDetails.tsx');
 const bigPictureNativeResolver = read('frontend/steam/gamepad/components/AppDetailsNativeClasses.ts');
 const webpackRuntime = read('frontend/steam/modules/SteamWebpackRuntime.ts');
+const bpTabs = read('frontend/features/big-picture/tabs.ts');
+const bpDetails = read('frontend/features/big-picture/details.ts');
+const gamepadContext = read('frontend/steam/gamepad/GamepadContext.ts');
 
 let passed = 0;
 function assert(condition, message) {
@@ -223,5 +226,12 @@ assert(bulkLink.includes("target.title, 'resources'"), 'artwork/icon pass report
 assert(linkManagement.includes("bulk_link_resources_progress") && linkManagement.includes("bulk_link_resources_game"), 'settings labels resource application explicitly');
 assert(linkManagement.includes("shortcutActionBusy !== 'bulk-link'"), 'bulk progress does not duplicate the same live status above the progress bar');
 assert(linkManagement.includes("return 66.666 + phaseProgress * 33.334"), 'overall bulk progress remains monotonic across analyze/link/resources phases');
+
+// Big Picture Library tabs and details surface isolation: Library collection views
+// (Todos los juegos, Instalados, etc.) must NEVER mount Game Details tabs or sections.
+assert(!bpTabs.includes('order[idx]') && bpTabs.includes('LIBRARY_COLLECTION_KEYWORDS'), 'findBigPictureTabStrip has no blind structural fallback and guards against library collection tabs');
+assert(gamepadContext.includes('NON_DETAILS_ROUTE_PATTERN') && gamepadContext.includes('export function collectActiveRouteValues'), 'GamepadContext exports collectActiveRouteValues and guards against non-details library routes');
+assert(gamepadContext.includes('[role="tablist"]'), 'appIdsFromReactOwners strictly excludes role=tablist to prevent library overview fiber leakage');
+assert(bpDetails.includes('isLibraryOrNonDetailsView(doc)') && bpDetails.includes('removeBigPictureDetailsNodes(doc)'), 'refreshBigPictureShortcutDetails immediately tears down detail nodes and exits on library views');
 
 console.log(`All ${passed} user-reported bug regression checks passed.`);

@@ -49,6 +49,10 @@ export function focusAchievementsSection(doc: Document): void {
 export function detectLinkedSteamAppId(doc: Document): string {
 	const current = achievementRuntimeHost().getCurrentInjectedAppId();
 	if (current && /^\d+$/.test(current)) return current;
+	const bpRoot = doc.getElementById('gdl-bp-detail-root') as HTMLElement | null;
+	if (bpRoot?.dataset?.gdlSteamAppId && /^\d+$/.test(bpRoot.dataset.gdlSteamAppId)) {
+		return bpRoot.dataset.gdlSteamAppId;
+	}
 	const links = Array.from(doc.querySelectorAll('#gdl-link-bar a[href]')) as HTMLAnchorElement[];
 	for (const link of links) {
 		const match = String(link.href || link.getAttribute('href') || '').match(/\/app\/(\d+)/);

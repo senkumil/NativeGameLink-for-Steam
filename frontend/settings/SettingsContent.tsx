@@ -318,6 +318,29 @@ export const SettingsContent = ({ clearAchievementCache, showAchievementToast }:
 				</div>
 			</div>
 
+			{/* ── Modo Big Picture ───────────────────────────────────────── */}
+			<div style={{ marginTop: '12px', paddingTop: '10px', borderTop: '1px solid rgba(255,255,255,.08)' }}>
+				<div style={{ marginBottom: '3px', fontWeight: 600, color: '#dcdedf', fontSize: '13px' }}>
+					{gdlText('big_picture_settings_title', 'Big Picture Mode')}
+				</div>
+				<div style={{ marginBottom: '6px', color: '#8f98a0', fontSize: '11.5px' }}>
+					{gdlText('big_picture_settings_description', 'Configure NativeGameLink behavior in Steam Big Picture mode.')}
+				</div>
+				<div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '4px' }}>
+					<SettingsToggle
+						checked={preferences.defaultBigPictureMode}
+						onChange={checked => updatePreferences({ defaultBigPictureMode: checked })}
+						label={gdlText('default_big_picture_toggle', 'Keep Big Picture default (only artworks, playtime, last session, and controller)')}
+					/>
+					<span style={{ fontSize: '12px' }}>
+						{gdlText('default_big_picture_toggle', 'Keep Big Picture default (only artworks, playtime, last session, and controller)')}
+					</span>
+				</div>
+				<div style={{ color: '#8f98a0', fontSize: '11px', marginTop: '2px', marginLeft: '50px' }}>
+					{gdlText('default_big_picture_description', "Maintains Steam's original Big Picture interface for non-Steam games, preserving only artworks, last played session, playtime, and the connected controller indicator in the playbar.")}
+				</div>
+			</div>
+
 			<FactoryResetSection onResetComplete={() => window.dispatchEvent(new Event('gdl:shortcuts-changed'))} />
 		</div>
 	);

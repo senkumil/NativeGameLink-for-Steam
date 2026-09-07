@@ -6,6 +6,7 @@ import { getMappedShortcuts, getShortcutAppById, getShortcutPlaytimeMinutes, toS
 import { fetchPlaytimeStatsBatch } from '../playtime/service';
 import { disposeBigPictureShortcutDetails, refreshBigPictureShortcutDetails } from './details';
 import { syncMissingArtworkForMappedShortcuts } from '../library/artwork-sync';
+import { defaultBigPictureModeEnabled, subscribePreferences } from '../../core/preferences';
 
 function normalizedDomText(value: unknown): string {
 	return String(value ?? '').replace(/\s+/g, ' ').trim().toLocaleLowerCase();
@@ -29,6 +30,14 @@ function isBigPictureGameDetailSurface(doc: Document): boolean {
 let gdlBigPictureActive = false;
 let gdlBigPictureDoc: Document | null = null;
 const gdlBigPictureMappedShortcutIds = new Set<number>();
+type BigPicturePlaytimeKey =
+	| 'minutes_playtime_forever'
+	| 'minutes_playtime_last_two_weeks'
+	| 'rt_last_time_played'
+	| 'm_rtimeLastPlayed'
+	| 'rtime_last_played'
+	| 'rt_recent_activity_time';
+
 const bigPictureShortcutState = new Map<object, {
 	canonicalAppType: unknown;
 	installed: unknown[];
@@ -38,7 +47,8 @@ const bigPictureShortcutState = new Map<object, {
 	compatPacked: unknown;
 	playtimeForever: unknown;
 	playtimeLastTwoWeeks: unknown;
-	playtimeOwnDescriptors?: Partial<Record<'minutes_playtime_forever' | 'minutes_playtime_last_two_weeks', PropertyDescriptor | null>>;
+	lastPlayedAt?: unknown;
+	playtimeOwnDescriptors?: Partial<Record<BigPicturePlaytimeKey, PropertyDescriptor | null>>;
 	shortcutMethod?: Function;
 	deckVerifiedMethod?: Function;
 }>();
@@ -68,16 +78,28 @@ function formatBigPicturePlaytime(minutes: number): string {
 	return `${label}: ${wholeMinutes} ${unit}`;
 }
 
-function applyShortcutPlaytimeToOverview(shortcutAppId: number, minutesForever: number, minutesLastTwoWeeks: number): boolean {
+function applyShortcutPlaytimeToOverview(
+	shortcutAppId: number,
+	minutesForever: number,
+	minutesLastTwoWeeks: number,
+	lastPlayedAt?: number,
+): boolean {
 	const app = getShortcutAppById(shortcutAppId);
 	if (!app) return false;
 	let changed = false;
 	const forever = Math.max(0, Math.floor(minutesForever));
 	const recent = Math.max(0, Math.floor(minutesLastTwoWeeks));
+	const lastPlayed = Math.max(0, Math.floor(lastPlayedAt || 0));
 	const currentForever = Number(app.minutes_playtime_forever || 0);
 	if (forever !== currentForever && setBigPicturePlaytimeField(app, 'minutes_playtime_forever', forever)) changed = true;
 	if (recent !== Number(app.minutes_playtime_last_two_weeks || 0)
 		&& setBigPicturePlaytimeField(app, 'minutes_playtime_last_two_weeks', recent)) changed = true;
+	if (lastPlayed > 0 && lastPlayed !== Number(app.rt_last_time_played || 0)) {
+		const keys: BigPicturePlaytimeKey[] = ['rt_last_time_played', 'm_rtimeLastPlayed', 'rtime_last_played', 'rt_recent_activity_time'];
+		for (const key of keys) {
+			if (setBigPicturePlaytimeField(app, key, lastPlayed)) changed = true;
+		}
+	}
 	return changed;
 }
 
@@ -134,12 +156,18 @@ export async function patchBigPictureHomePlaytime(doc: Document): Promise<void> 
 			Number(fallback?.minutesLastTwoWeeks || 0),
 			Number(app?.minutes_playtime_last_two_weeks || 0),
 		);
+		const lastPlayed = Math.max(
+			0,
+			Number(app?.rt_last_time_played || 0),
+			Number(fallback?.lastPlayedAt || 0),
+		);
 		resolved.set(shortcut.id, { forever, recent });
-		if (applyShortcutPlaytimeToOverview(shortcut.id, forever, recent)) overviewChanged = true;
+		if (applyShortcutPlaytimeToOverview(shortcut.id, forever, recent, lastPlayed)) overviewChanged = true;
 	}));
 	if (overviewChanged && !isBigPictureGameDetailSurface(doc)) {
 		try { (window as any).MILLENNIUM_STEAM_FORCE_RERENDER?.(); } catch {}
 	}
+	if (isBigPictureGameDetailSurface(doc)) return;
 
 	const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT, null);
 	const placeholders: HTMLElement[] = [];
@@ -203,7 +231,7 @@ function installBigPicturePrototypeShim(app: any): void {
 	if (typeof prototype.BIsShortcut === 'function' && !prototype.BIsShortcut.__gdlBigPicturePrototypeWrapped) {
 		const original = prototype.BIsShortcut;
 		const wrapped = function (this: any): boolean {
-			return gdlBigPictureActive && isManagedBigPictureShortcutObject(this) ? false : original.call(this);
+			return gdlBigPictureActive && !defaultBigPictureModeEnabled() && isManagedBigPictureShortcutObject(this) ? false : original.call(this);
 		};
 		(wrapped as any).__gdlBigPicturePrototypeWrapped = true;
 		try { prototype.BIsShortcut = wrapped; } catch {}
@@ -211,7 +239,7 @@ function installBigPicturePrototypeShim(app: any): void {
 	if (typeof prototype.BIsSteamDeckVerified === 'function' && !prototype.BIsSteamDeckVerified.__gdlBigPicturePrototypeWrapped) {
 		const original = prototype.BIsSteamDeckVerified;
 		const wrapped = function (this: any): boolean {
-			return gdlBigPictureActive && isManagedBigPictureShortcutObject(this) ? true : original.call(this);
+			return gdlBigPictureActive && !defaultBigPictureModeEnabled() && isManagedBigPictureShortcutObject(this) ? true : original.call(this);
 		};
 		(wrapped as any).__gdlBigPicturePrototypeWrapped = true;
 		try { prototype.BIsSteamDeckVerified = wrapped; } catch {}
@@ -258,16 +286,26 @@ function setBigPictureField(target: any, key: string, value: unknown): boolean {
 	}
 }
 
-type BigPicturePlaytimeKey = 'minutes_playtime_forever' | 'minutes_playtime_last_two_weeks';
-
 /** Some Steam clients expose playtime through a getter-only prototype field.
  * Prefer ordinary assignment, then install a reversible instance value only
  * for the active Big Picture session. The original descriptor is restored on
  * exit so the desktop library never inherits this presentation shim. */
 function setBigPicturePlaytimeField(target: any, key: BigPicturePlaytimeKey, value: number): boolean {
 	if (setBigPictureField(target, key, value)) return true;
-	const state = bigPictureShortcutState.get(target);
-	if (!state) return false;
+	let state = bigPictureShortcutState.get(target);
+	if (!state) {
+		state = {
+			canonicalAppType: target.canonicalAppType,
+			installed: [],
+			controllerSupport: target.controller_support,
+			xboxControllerSupport: target.xbox_controller_support,
+			gamepadPreferred: target.gamepad_preferred,
+			compatPacked: target.steam_hw_compat_category_packed,
+			playtimeForever: target.minutes_playtime_forever,
+			playtimeLastTwoWeeks: target.minutes_playtime_last_two_weeks,
+		};
+		bigPictureShortcutState.set(target, state);
+	}
 	state.playtimeOwnDescriptors ||= {};
 	if (!Object.prototype.hasOwnProperty.call(state.playtimeOwnDescriptors, key)) {
 		state.playtimeOwnDescriptors[key] = Object.getOwnPropertyDescriptor(target, key) || null;
@@ -340,25 +378,27 @@ export function mergeShortcutsIntoBigPictureLibrary(_doc: Document): void {
 			bigPictureShortcutState.set(app, state);
 		}
 
-		if (app.canonicalAppType !== 1 && setBigPictureField(app, 'canonicalAppType', 1)) changed = true;
+		const isDefaultMode = defaultBigPictureModeEnabled();
+		const targetCanonicalType = isDefaultMode ? state.canonicalAppType : 1;
+		if (app.canonicalAppType !== targetCanonicalType && setBigPictureField(app, 'canonicalAppType', targetCanonicalType)) changed = true;
 		if (Number(app.controller_support || 0) !== 2 && setBigPictureField(app, 'controller_support', 2)) changed = true;
 		// Big Picture's controller tab is backed by the native Xbox collection,
 		// which filters this field (not the generic controller_support value).
 		if (Number(app.xbox_controller_support || 0) !== 2 && setBigPictureField(app, 'xbox_controller_support', 2)) changed = true;
 		if (app.gamepad_preferred !== true && setBigPictureField(app, 'gamepad_preferred', true)) changed = true;
-		const packed = Number(app.steam_hw_compat_category_packed || 0);
-		if ((packed & 3) !== 3 && setBigPictureField(app, 'steam_hw_compat_category_packed', (packed & ~3) | 3)) changed = true;
 
-		for (const clientData of [app.local_per_client_data, app.most_available_per_client_data, app.selected_per_client_data]) {
-			if (clientData && clientData.installed !== true) {
-				if (setBigPictureField(clientData, 'installed', true)) changed = true;
+		if (!isDefaultMode) {
+			const packed = Number(app.steam_hw_compat_category_packed || 0);
+			if ((packed & 3) !== 3 && setBigPictureField(app, 'steam_hw_compat_category_packed', (packed & ~3) | 3)) changed = true;
+			for (const clientData of [app.local_per_client_data, app.most_available_per_client_data, app.selected_per_client_data]) {
+				if (clientData && clientData.installed !== true && setBigPictureField(clientData, 'installed', true)) changed = true;
 			}
 		}
 
 		if (state.shortcutMethod && !(app.BIsShortcut as any).__gdlBigPictureWrapped) {
 			const original = state.shortcutMethod;
 			const wrapped = function (this: any): boolean {
-				return gdlBigPictureActive && isManagedBigPictureShortcutObject(this) ? false : original.call(this);
+				return gdlBigPictureActive && !defaultBigPictureModeEnabled() && isManagedBigPictureShortcutObject(this) ? false : original.call(this);
 			};
 			(wrapped as any).__gdlBigPictureWrapped = true;
 			if (setBigPictureField(app, 'BIsShortcut', wrapped)) changed = true;
@@ -366,7 +406,7 @@ export function mergeShortcutsIntoBigPictureLibrary(_doc: Document): void {
 		if (state.deckVerifiedMethod && !(app.BIsSteamDeckVerified as any).__gdlBigPictureWrapped) {
 			const original = state.deckVerifiedMethod;
 			const wrapped = function (this: any): boolean {
-				return gdlBigPictureActive && isManagedBigPictureShortcutObject(this) ? true : original.call(this);
+				return gdlBigPictureActive && !defaultBigPictureModeEnabled() && isManagedBigPictureShortcutObject(this) ? true : original.call(this);
 			};
 			(wrapped as any).__gdlBigPictureWrapped = true;
 			if (setBigPictureField(app, 'BIsSteamDeckVerified', wrapped)) changed = true;
@@ -386,7 +426,15 @@ export function restoreBigPictureShortcutState(): void {
 		setBigPictureField(app, 'xbox_controller_support', state.xboxControllerSupport);
 		setBigPictureField(app, 'gamepad_preferred', state.gamepadPreferred);
 		setBigPictureField(app, 'steam_hw_compat_category_packed', state.compatPacked);
-		for (const key of ['minutes_playtime_forever', 'minutes_playtime_last_two_weeks'] as BigPicturePlaytimeKey[]) {
+		const playtimeKeys: BigPicturePlaytimeKey[] = [
+			'minutes_playtime_forever',
+			'minutes_playtime_last_two_weeks',
+			'rt_last_time_played',
+			'm_rtimeLastPlayed',
+			'rtime_last_played',
+			'rt_recent_activity_time',
+		];
+		for (const key of playtimeKeys) {
 			const descriptors = state.playtimeOwnDescriptors;
 			if (descriptors && Object.prototype.hasOwnProperty.call(descriptors, key)) {
 				const original = descriptors[key];
@@ -394,9 +442,10 @@ export function restoreBigPictureShortcutState(): void {
 					if (original) Object.defineProperty(app, key, original);
 					else delete (app as any)[key];
 				} catch {}
-			} else {
-				setBigPictureField(app, key, key === 'minutes_playtime_forever'
-					? state.playtimeForever : state.playtimeLastTwoWeeks);
+			} else if (key === 'minutes_playtime_forever') {
+				setBigPictureField(app, key, state.playtimeForever);
+			} else if (key === 'minutes_playtime_last_two_weeks') {
+				setBigPictureField(app, key, state.playtimeLastTwoWeeks);
 			}
 		}
 		const clientData = [(app as any).local_per_client_data, (app as any).most_available_per_client_data, (app as any).selected_per_client_data].filter(Boolean);
@@ -406,6 +455,7 @@ export function restoreBigPictureShortcutState(): void {
 	}
 	bigPictureShortcutState.clear();
 	gdlBigPictureMappedShortcutIds.clear();
+	try { (window as any).MILLENNIUM_STEAM_FORCE_RERENDER?.(); } catch {}
 }
 
 export function activateBigPicture(doc: Document): void {
@@ -443,3 +493,7 @@ export async function refreshBigPicture(doc: Document | null = gdlBigPictureDoc)
 	}
 	await detailRefresh;
 }
+
+subscribePreferences(() => {
+	if (gdlBigPictureActive && gdlBigPictureDoc) void refreshBigPicture(gdlBigPictureDoc);
+});

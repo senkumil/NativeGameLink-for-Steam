@@ -271,7 +271,18 @@ export async function getNews(steamAppId: string, requestedLanguage?: string, me
 		const officialAnnouncements = [
 			...(Array.isArray(announcements.items) ? announcements.items : []),
 			...(Array.isArray(englishAnnouncements.items) ? englishAnnouncements.items : []),
-		];
+		].filter(item => {
+			if (item?.is_external_url === true) return false;
+			const feedname = String(item?.feedname || '').toLowerCase();
+			if (feedname && feedname !== 'steam_community_announcements' && feedname !== 'steam_store_release_metadata') {
+				return false;
+			}
+			const url = String(item?.url || '').toLowerCase();
+			if (url && !url.includes('steampowered.com') && !url.includes('steamcommunity.com')) {
+				return false;
+			}
+			return true;
+		});
 		const partnerEventsUnavailable = preferred?.unavailable === true
 			&& (preferredLanguage === 'english' || english?.unavailable === true);
 		if (partnerItems.length > 0 || officialAnnouncements.length > 0) {

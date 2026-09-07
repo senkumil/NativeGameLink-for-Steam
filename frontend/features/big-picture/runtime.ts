@@ -224,8 +224,6 @@ function installBigPicturePrototypeShim(app: any): void {
 	if (!prototype) return;
 	installBigPictureReadonlyField(app, 'controller_support', 2);
 	installBigPictureReadonlyField(app, 'xbox_controller_support', 2);
-	installBigPictureReadonlyField(app, 'ps4_controller_support', 2);
-	installBigPictureReadonlyField(app, 'ps5_controller_support', 2);
 	installBigPictureReadonlyField(app, 'gamepad_preferred', true);
 	installBigPictureReadonlyField(app, 'steam_deck_compat_category', 3);
 	if (typeof prototype.BIsShortcut === 'function' && !prototype.BIsShortcut.__gdlBigPicturePrototypeWrapped) {

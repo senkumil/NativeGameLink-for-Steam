@@ -4,15 +4,18 @@ import { resolveNativeAppDetailsClasses, FALLBACK_FOCUS_RING_CLASSES } from '../
 export function isNonSteamActive(doc: Document | null): boolean {
 	if (!doc) return false;
 	const root = doc.getElementById('gdl-bp-detail-root');
-	return Boolean(root && root.isConnected && root.dataset.gdlShortcutAppId);
+	return Boolean(root && root.isConnected);
 }
+
+const FOCUSABLE_SELECTOR = '[focusable]:not([focusable="false"]), [data-focusable]:not([data-focusable="false"]), [class*="Focusable"]:not([focusable="false"]), [role="button"], [role="link"], [role="gridcell"], [role="tab"], [role="menuitem"], [role="checkbox"], button, a[href], input:not([type="hidden"]), textarea, select, [tabindex]:not([tabindex="-1"]), [class*="CarouselItem"], [class*="CommunityItem"], [class*="Thumbnail"], [class*="PostTextEntryArea"], [class*="FriendSectionItem"], [class*="Card"][class*="Clickable"], [class*="Anchor"], [class*="PartnerEvent"], .gdl-bp-friend-card, .gdl-bp-post-entry-bar';
 
 export function getFocusableElements(root: HTMLElement): HTMLElement[] {
 	if (!root || !root.isConnected) return [];
-	const selector = '[focusable="true"], [data-focusable="true"], [role="link"], [role="gridcell"], [role="button"], button, a[href], input, [class*="CarouselItem"], [class*="CommunityItem"], [class*="Anchor"]';
-	const raw = Array.from(root.querySelectorAll<HTMLElement>(selector)).filter(el => {
-		if (el.hidden || el.getAttribute('aria-hidden') === 'true' || el.getAttribute('focusable') === 'false') return false;
-		if (el.id === 'gdl-bp-detail-root' || el.id === 'gdl-bp-detail-shell') return false;
+	const raw = Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(el => {
+		if (el.hidden || el.getAttribute('aria-hidden') === 'true') return false;
+		if (el.getAttribute('focusable') === 'false' || el.getAttribute('data-focusable') === 'false') return false;
+		if (el.id === 'gdl-bp-detail-root' || el.id === 'gdl-bp-detail-shell' || el.id === 'gdl-bp-focus-ring-root' || el.id === 'gdl-bp-focus-ring') return false;
+		if (el.hasAttribute('flow-children') && el.querySelector(FOCUSABLE_SELECTOR)) return false;
 		const style = el.ownerDocument.defaultView?.getComputedStyle(el);
 		const rect = el.getBoundingClientRect();
 		return style?.display !== 'none' && style?.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
@@ -265,7 +268,8 @@ export function installBigPictureGamepadNavigation(
 			if (root && (root === active || root.contains(active))) return false;
 			return true;
 		}
-		return false;
+		const playBtn = doc.querySelector<HTMLElement>('[class*="PlayButton"], button[class*="Play"], .PlayButton');
+		return Boolean(playBtn && (playBtn === active || playBtn.contains(active) || playBtn.matches(':focus, :focus-visible, .gpfocus, [data-focus="true"]')));
 	};
 
 	const isInsidePanel = (): boolean => {
@@ -274,10 +278,7 @@ export function installBigPictureGamepadNavigation(
 		const marked = root.querySelector<HTMLElement>('.gpfocus, [data-focus="true"]');
 		if (marked && marked.isConnected && (!active || (!strip.contains(active) && !isInsidePlaybar()))) return true;
 		const lastFocused = getDocNavState(doc).lastFocusedElement;
-		if (lastFocused && lastFocused.isConnected && root.contains(lastFocused)) {
-			if (!active || (!strip.contains(active) && !isInsidePlaybar())) return true;
-		}
-		return false;
+		return Boolean(lastFocused && lastFocused.isConnected && root.contains(lastFocused) && (!active || (!strip.contains(active) && !isInsidePlaybar())));
 	};
 
 	const isTabStripFocused = (): boolean => {
@@ -287,13 +288,19 @@ export function installBigPictureGamepadNavigation(
 			if (el === active || el.contains(active)) return true;
 		}
 		if (strip.matches(':focus-within')) return true;
+		if (strip.querySelector(':focus, :focus-visible, .gpfocus, [data-focus="true"]')) return true;
+		for (const el of controls.values()) {
+			if (el.matches(':focus, :focus-visible, .gpfocus, [data-focus="true"]')) return true;
+		}
 		if (active && (root === active || root.contains(active))) return false;
 		const marked = root.querySelector<HTMLElement>('.gpfocus, [data-focus="true"]');
 		if (marked && marked.isConnected) return false;
-		for (const el of controls.values()) {
-			if (el.classList.contains('gpfocus')) return true;
-		}
-		return Boolean(strip.querySelector('.gpfocus'));
+		return false;
+	};
+
+	const clearStripFocus = (): void => {
+		strip.querySelectorAll<HTMLElement>('.gpfocus').forEach(el => { el.classList.remove('gpfocus'); delete el.dataset.focus; });
+		for (const c of controls.values()) { c.classList.remove('gpfocus'); delete c.dataset.focus; }
 	};
 
 	const setFocusedElement = (target: HTMLElement | null, scope: HTMLElement = root): void => {
@@ -375,6 +382,9 @@ export function installBigPictureGamepadNavigation(
 				}
 				playSteamNavSound(3);
 				current.click();
+				try {
+					current.dispatchEvent(new CustomEvent('activate', { bubbles: true, cancelable: true }));
+				} catch {}
 				return true;
 			}
 			return false;
@@ -423,14 +433,7 @@ export function installBigPictureGamepadNavigation(
 
 			// If focus is currently on the tab strip, enter the panel at the first element
 			if (!modal && isTabStripFocused()) {
-				strip.querySelectorAll<HTMLElement>('.gpfocus').forEach(el => {
-					el.classList.remove('gpfocus');
-					delete el.dataset.focus;
-				});
-				for (const c of controls.values()) {
-					c.classList.remove('gpfocus');
-					delete c.dataset.focus;
-				}
+				clearStripFocus();
 				const target = focusables[0];
 				if (target) {
 					setFocusedElement(target, currentScope);
@@ -496,10 +499,7 @@ export function installBigPictureGamepadNavigation(
 				// Move focus from tab strip back to play button
 				const playBtn = doc.querySelector<HTMLElement>('[class*="PlayButton"], button[class*="Play"], .PlayButton');
 				if (playBtn) {
-					strip.querySelectorAll<HTMLElement>('.gpfocus').forEach(el => {
-						el.classList.remove('gpfocus');
-						delete el.dataset.focus;
-					});
+					clearStripFocus();
 					playBtn.focus();
 					playBtn.classList.add('gpfocus');
 					playBtn.dataset.focus = 'true';
@@ -564,10 +564,7 @@ export function installBigPictureGamepadNavigation(
 				const tab = getActiveTab();
 				if (tab) {
 					playSteamNavSound(1);
-					strip.querySelectorAll<HTMLElement>('.gpfocus').forEach(el => {
-						el.classList.remove('gpfocus');
-						delete el.dataset.focus;
-					});
+					clearStripFocus();
 					tab.classList.add('gpfocus');
 					tab.dataset.focus = 'true';
 					tab.focus();
@@ -579,83 +576,28 @@ export function installBigPictureGamepadNavigation(
 			return false;
 		}
 
-		if (direction === 'right') {
+		if (direction === 'right' || direction === 'left') {
 			if (!current) return false;
-			const currentRect = current.getBoundingClientRect();
-			const currentCenterY = currentRect.top + currentRect.height / 2;
-
+			const cR = current.getBoundingClientRect();
+			const cY = cR.top + cR.height / 2;
+			const isRight = direction === 'right';
 			const candidates = focusables.filter(el => {
 				if (el === current) return false;
 				const r = el.getBoundingClientRect();
-				return r.left >= currentRect.left + 8 || r.left >= currentRect.right - 8;
+				return isRight ? (r.left >= cR.left + 8 || r.left >= cR.right - 8) : (r.right <= cR.right - 8 || r.right <= cR.left + 8);
 			});
-
-			if (candidates.length > 0) {
-				const sameRow = candidates.filter(el => {
-					const r = el.getBoundingClientRect();
-					const overlapY = Math.max(0, Math.min(currentRect.bottom, r.bottom) - Math.max(currentRect.top, r.top));
-					const vertDiff = Math.abs((r.top + r.height / 2) - currentCenterY);
-					return overlapY > 0 || vertDiff < 45;
-				});
-
-				if (sameRow.length > 0) {
-					let minHoriz = Infinity;
-					let target: HTMLElement | null = null;
-					for (const el of sameRow) {
-						const r = el.getBoundingClientRect();
-						const h = r.left - currentRect.left;
-						if (h > 0 && h < minHoriz) {
-							minHoriz = h;
-							target = el;
-						}
-					}
-
-					if (target) {
-						setFocusedElement(target, currentScope);
-						return true;
-					}
-				}
-			}
-			return false;
-		}
-
-		if (direction === 'left') {
-			if (!current) return false;
-			const currentRect = current.getBoundingClientRect();
-			const currentCenterY = currentRect.top + currentRect.height / 2;
-
-			const candidates = focusables.filter(el => {
-				if (el === current) return false;
+			const sameRow = candidates.filter(el => {
 				const r = el.getBoundingClientRect();
-				return r.right <= currentRect.right - 8 || r.right <= currentRect.left + 8;
+				const overlapY = Math.max(0, Math.min(cR.bottom, r.bottom) - Math.max(cR.top, r.top));
+				return overlapY > 0 || Math.abs((r.top + r.height / 2) - cY) < 45;
 			});
-
-			if (candidates.length > 0) {
-				const sameRow = candidates.filter(el => {
-					const r = el.getBoundingClientRect();
-					const overlapY = Math.max(0, Math.min(currentRect.bottom, r.bottom) - Math.max(currentRect.top, r.top));
-					const vertDiff = Math.abs((r.top + r.height / 2) - currentCenterY);
-					return overlapY > 0 || vertDiff < 45;
-				});
-
-				if (sameRow.length > 0) {
-					let minHoriz = Infinity;
-					let target: HTMLElement | null = null;
-					for (const el of sameRow) {
-						const r = el.getBoundingClientRect();
-						const h = currentRect.right - r.right;
-						if (h > 0 && h < minHoriz) {
-							minHoriz = h;
-							target = el;
-						}
-					}
-
-					if (target) {
-						setFocusedElement(target, currentScope);
-						return true;
-					}
-				}
+			let minH = Infinity, target: HTMLElement | null = null;
+			for (const el of sameRow) {
+				const r = el.getBoundingClientRect();
+				const h = isRight ? (r.left - cR.left) : (cR.right - r.right);
+				if (h > 0 && h < minH) { minH = h; target = el; }
 			}
+			if (target) { setFocusedElement(target, currentScope); return true; }
 			return false;
 		}
 
@@ -674,21 +616,17 @@ export function installBigPictureGamepadNavigation(
 				return;
 			}
 		} else if (!(doc.activeElement instanceof HTMLInputElement)) {
-			if (key === 'q' || key === 'Q') {
+			if (key === 'q' || key === 'Q' || key === 'PageUp') {
 				event.preventDefault();
 				event.stopPropagation();
 				switchTabByOffset(-1);
 				return;
-			} else if (key === 'e' || key === 'E') {
+			} else if (key === 'e' || key === 'E' || key === 'PageDown') {
 				event.preventDefault();
 				event.stopPropagation();
 				switchTabByOffset(1);
 				return;
 			}
-			// NOTE: PageUp and PageDown are emitted by Steam Input for gamepad LB and RB bumpers.
-			// Steam's native tabstrip (fe.xC in module 12307) handles BUMPER_LEFT and BUMPER_RIGHT
-			// on TabContents and GamepadTabbedPage, switching exactly one tab at a time.
-			// Delegating PageUp / PageDown directly to Steam prevents duplicate tab hops.
 		}
 
 		let dir: 'down' | 'up' | 'left' | 'right' | 'select' | 'back' | null = null;
@@ -714,14 +652,7 @@ export function installBigPictureGamepadNavigation(
 		if (!getActiveModal() && isTabStripFocused()) {
 			if (dir === 'down') {
 				// Leave tab strip, enter the content panel at the first element
-				strip.querySelectorAll<HTMLElement>('.gpfocus').forEach(el => {
-					el.classList.remove('gpfocus');
-					delete el.dataset.focus;
-				});
-				for (const c of controls.values()) {
-					c.classList.remove('gpfocus');
-					delete c.dataset.focus;
-				}
+				clearStripFocus();
 				const focusables = getFocusableElements(root);
 				if (focusables.length > 0) {
 					event.preventDefault();
@@ -733,10 +664,7 @@ export function installBigPictureGamepadNavigation(
 				// Move from tab strip back to play button
 				const playBtn = doc.querySelector<HTMLElement>('[class*="PlayButton"], button[class*="Play"], .PlayButton');
 				if (playBtn) {
-					strip.querySelectorAll<HTMLElement>('.gpfocus').forEach(el => {
-						el.classList.remove('gpfocus');
-						delete el.dataset.focus;
-					});
+					clearStripFocus();
 					event.preventDefault();
 					event.stopPropagation();
 					playBtn.focus();
@@ -808,38 +736,87 @@ export function installBigPictureGamepadNavigation(
 
 	// -------------------------------------------------------------
 	// GAMEPAD POLLING (HTML5 Gamepad API)
-	// Dedicated exclusively to analog Right Stick smooth scrolling.
-	// Directional and action buttons are dispatched as keyboard events
-	// by Steam Input to prevent double-stepping and jumping.
+	// Supports Xbox, PlayStation, Steam Deck & generic controllers
 	// -------------------------------------------------------------
 	let gamepadPollTimer: ReturnType<typeof setTimeout> | null = null;
+	const prevBtn = new Map<number, boolean>();
+	const lastDirTime = new Map<string, number>();
+	const dirHoldTime = new Map<string, number>();
 
 	const pollGamepads = () => {
 		if (!root.isConnected || !doc.body?.isConnected || !isNonSteamActive(doc)) {
-			if (gamepadPollTimer != null) {
-				clearTimeout(gamepadPollTimer);
-				gamepadPollTimer = null;
-			}
+			if (gamepadPollTimer != null) { clearTimeout(gamepadPollTimer); gamepadPollTimer = null; }
 			return;
 		}
-
 		const nav = win.navigator || window.navigator;
 		const gamepads = typeof nav?.getGamepads === 'function' ? nav.getGamepads() : (typeof window.navigator?.getGamepads === 'function' ? window.navigator.getGamepads() : []);
 		const gp = Array.from(gamepads).find(g => g && g.connected);
 
 		if (gp) {
-			// Right Stick Vertical: Smoothly scroll active modal or page
-			const rightStickY = gp.axes[3];
-			if (rightStickY != null && Math.abs(rightStickY) > 0.25) {
-				const modal = getActiveModal();
-				const scrollTarget = modal ? (modal.querySelector('.gdl-bp-news-modal-window, .gdl-bp-ach-screen-list') || modal) : (doc.scrollingElement || doc.documentElement);
-				if (scrollTarget) {
-					scrollTarget.scrollBy({ top: rightStickY * 16, behavior: 'auto' });
+			const now = Date.now();
+			const navState = getDocNavState(doc);
+
+			const isUp = Boolean(gp.buttons[12]?.pressed || (gp.axes[1] != null && gp.axes[1] < -0.55));
+			const isDown = Boolean(gp.buttons[13]?.pressed || (gp.axes[1] != null && gp.axes[1] > 0.55));
+			const isLeft = Boolean(gp.buttons[14]?.pressed || (gp.axes[0] != null && gp.axes[0] < -0.55));
+			const isRight = Boolean(gp.buttons[15]?.pressed || (gp.axes[0] != null && gp.axes[0] > 0.55));
+			const dirs: Array<[string, boolean, 'up' | 'down' | 'left' | 'right']> = [
+				['up', isUp, 'up'], ['down', isDown, 'down'], ['left', isLeft, 'left'], ['right', isRight, 'right'],
+			];
+
+			for (const [name, active, dir] of dirs) {
+				if (active) {
+					const hold = dirHoldTime.get(name) || 0;
+					const last = lastDirTime.get(name) || 0;
+					if (!hold) {
+						dirHoldTime.set(name, now);
+						if (now - navState.lastNavTime >= NAV_COOLDOWN_MS) {
+							lastDirTime.set(name, now);
+							navState.lastNavTime = now;
+							handleNavDirection(dir);
+						}
+					} else if (now - hold > 320 && now - last > 140) {
+						lastDirTime.set(name, now);
+						navState.lastNavTime = now;
+						handleNavDirection(dir);
+					}
+				} else {
+					dirHoldTime.delete(name);
+					lastDirTime.delete(name);
 				}
+			}
+
+			const btnA = Boolean(gp.buttons[0]?.pressed);
+			if (btnA && !prevBtn.get(0) && now - navState.lastNavTime >= NAV_COOLDOWN_MS) {
+				navState.lastNavTime = now;
+				handleNavDirection('select');
+			}
+			prevBtn.set(0, btnA);
+
+			const btnB = Boolean(gp.buttons[1]?.pressed);
+			if (btnB && !prevBtn.get(1) && now - navState.lastNavTime >= NAV_COOLDOWN_MS) {
+				navState.lastNavTime = now;
+				handleNavDirection('back');
+			}
+			prevBtn.set(1, btnB);
+
+			const btnLB = Boolean(gp.buttons[4]?.pressed);
+			if (btnLB && !prevBtn.get(4) && !getActiveModal()) switchTabByOffset(-1);
+			prevBtn.set(4, btnLB);
+
+			const btnRB = Boolean(gp.buttons[5]?.pressed);
+			if (btnRB && !prevBtn.get(5) && !getActiveModal()) switchTabByOffset(1);
+			prevBtn.set(5, btnRB);
+
+			const rY = gp.axes[3];
+			if (rY != null && Math.abs(rY) > 0.25) {
+				const modal = getActiveModal();
+				const target = modal ? (modal.querySelector('.gdl-bp-news-modal-window, .gdl-bp-ach-screen-list') || modal) : (doc.scrollingElement || doc.documentElement);
+				target?.scrollBy({ top: rY * 16, behavior: 'auto' });
 			}
 		}
 
-		gamepadPollTimer = setTimeout(pollGamepads, 50);
+		gamepadPollTimer = setTimeout(pollGamepads, 20);
 	};
 
 	const onScrollOrResize = () => {

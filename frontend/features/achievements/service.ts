@@ -2,6 +2,7 @@ import { fetchLocalAchievementsBackend } from '../../api/backend';
 import { getPreferences, simulatedAchievementsEnabled } from '../../core/preferences';
 import type { LocalAchievementData } from '../../domain/types';
 import { steamLanguageSync } from '../../steam/localization';
+import { syncNativeAchievementProgressCache } from './progress';
 
 export interface LocalAchievementRequestOptions {
 	stateAppId?: string | number | null;
@@ -43,6 +44,12 @@ function trimRequestCache(): void {
 }
 
 function publishAchievementUpdate(update: LocalAchievementUpdate): void {
+	if (update.data && typeof update.data.total === 'number') {
+		syncNativeAchievementProgressCache(update.steamAppId, update.data.unlocked, update.data.total);
+		if (update.stateAppId) {
+			syncNativeAchievementProgressCache(update.stateAppId, update.data.unlocked, update.data.total);
+		}
+	}
 	for (const listener of Array.from(updateListeners)) {
 		try { listener(update); } catch {}
 	}

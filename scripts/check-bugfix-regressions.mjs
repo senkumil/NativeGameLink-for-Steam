@@ -46,6 +46,8 @@ const webpackRuntime = read('frontend/steam/modules/SteamWebpackRuntime.ts');
 const bpTabs = read('frontend/features/big-picture/tabs.ts');
 const bpDetails = read('frontend/features/big-picture/details.ts');
 const gamepadContext = read('frontend/steam/gamepad/GamepadContext.ts');
+const achievementsPlaybar = read('frontend/features/achievements/playbar.ts');
+const bpPanelMount = read('frontend/features/big-picture/panel-mount.ts');
 
 let passed = 0;
 function assert(condition, message) {
@@ -234,4 +236,27 @@ assert(gamepadContext.includes('NON_DETAILS_ROUTE_PATTERN') && gamepadContext.in
 assert(gamepadContext.includes('[role="tablist"]'), 'appIdsFromReactOwners strictly excludes role=tablist to prevent library overview fiber leakage');
 assert(bpDetails.includes('isLibraryOrNonDetailsView(doc)') && bpDetails.includes('removeBigPictureDetailsNodes(doc)'), 'refreshBigPictureShortcutDetails immediately tears down detail nodes and exits on library views');
 
+// Browser shortcut protection & Restart Deadlock Prevention:
+// Prevent Chromium native accelerators (Ctrl+S, Ctrl+P, Ctrl+O) from opening Win32 modal
+// file dialogs ("Guardar como") with route names like "home" or app IDs, which freeze
+// CEF's message pump and deadlock Steam restart.
+const browserProtection = read('frontend/steam/browser-protection.ts');
+const navTs = read('frontend/steam/navigation.ts');
+assert(browserProtection.includes("code === 83") && browserProtection.includes("key === 's'"), 'browser protection intercepts Ctrl+S / Cmd+S save page shortcut');
+assert(browserProtection.includes("code === 80") && browserProtection.includes("key === 'p'"), 'browser protection intercepts Ctrl+P print shortcut');
+assert(browserProtection.includes("code === 79") && browserProtection.includes("key === 'o'"), 'browser protection intercepts Ctrl+O open file shortcut');
+assert(browserProtection.includes("event.stopImmediatePropagation()"), 'browser protection cancels event propagation immediately');
+assert(browserProtection.includes("a[download]"), 'browser protection neutralizes unexpected download triggers on loopback routes');
+assert(runtimeApp.includes("installBrowserProtection(window, window.document)") && runtimeApp.includes("disposeAllBrowserProtection()"), 'app runtime initializes browser protection on startup and dismounts cleanly');
+assert(runtimeApp.includes("lifecycle.add(installBrowserProtection(popupWin, popupDoc))"), 'app runtime protects all adopted Steam popup windows');
+assert(navTs.includes("installBrowserProtection(doc.defaultView, doc)"), 'navigation layer attaches browser protection to document lifecycle');
+assert(libraryRuntime.includes("disposeSteamNavigation(doc)"), 'library runtime cleans up navigation and browser protection on dismount');
+ 
+// Big Picture playbar: native Steam Big Picture NEVER shows achievement count/progress
+// in the top playbar (only Desktop mode does). Big Picture places achievements in the
+// section/carousel below the playbar.
+assert(achievementsPlaybar.includes('steamUIModeService.isGamepadUI(doc)') && achievementsPlaybar.includes("doc.querySelectorAll<HTMLElement>('[data-gdl-playbar-achievements=\"1\"], #gdl-playbar-achievements').forEach(el => el.remove());"), 'ensureLocalPlaybarStat rejects GamepadUI/Big Picture and purges playbar achievements');
+assert(bpPanelMount.includes("statsSection.querySelectorAll<HTMLElement>('[data-gdl-playbar-achievements=\"1\"], #gdl-playbar-achievements').forEach(el => el.remove());"), 'ensurePlaybarControllerStat purges residual playbar achievement elements in Big Picture mode');
+assert(bpDetails.includes('#gdl-playbar-achievements, [data-gdl-playbar-achievements="1"]'), 'removeBigPictureDetailsNodes purges residual playbar achievement elements');
+ 
 console.log(`All ${passed} user-reported bug regression checks passed.`);

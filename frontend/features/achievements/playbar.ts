@@ -2,6 +2,7 @@ import type { LocalAchievementData } from '../../domain/types';
 import { backendLog } from '../../api/backend';
 import { escapeHtml } from '../../core/text';
 import { PLAYBAR_CLASSES } from '../../steam/css';
+import { steamUIModeService } from '../../steam/ui/SteamUIModeService';
 import { gdlText, loc } from '../../steam/localization';
 import {
 	applyNativePlaybarTypography,
@@ -61,6 +62,10 @@ function updateAchievementMedal(
 }
 
 export function ensureLocalPlaybarStat(doc: Document, data: LocalAchievementData): HTMLElement | null {
+	if (steamUIModeService.isGamepadUI(doc)) {
+		doc.querySelectorAll<HTMLElement>('[data-gdl-playbar-achievements="1"], #gdl-playbar-achievements').forEach(el => el.remove());
+		return null;
+	}
 	if (!data || data.total <= 0) return null;
 	const classes = PLAYBAR_CLASSES();
 	const pct = localAchievementPercent(data);

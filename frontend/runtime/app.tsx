@@ -40,6 +40,7 @@ import { adoptExistingSteamWindows, resolveSteamWindowContext } from './existing
 import { installMappingRefresh } from './mapping-refresh';
 import { installArtworkBatchRefresh } from './artwork-batch-refresh';
 import { syncMissingArtworkForMappedShortcuts } from '../features/library/artwork-sync';
+import { installBrowserProtection, disposeAllBrowserProtection } from '../steam/browser-protection';
 let mainWindowDoc: Document | null = null;
 setLocalizationDocumentProvider(() => mainWindowDoc);
 function normalizedDomText(value: unknown): string { return String(value || '').replace(/\s+/g, ' ').trim().toLocaleLowerCase(); }
@@ -47,7 +48,7 @@ function currentCopiedFeedbackLabels(): Set<string> {
 	return new Set(['copied!', 'copied', '¡copiado!', 'copiado!', 'copiado', normalizedDomText(officialSteamText('Copied!')), normalizedDomText(officialSteamText('Copied'))].filter(Boolean));
 }
 function sweepCopiedFeedbackTooltips(doc: Document): void {
-	if (!doc || !doc.body) return;
+	if (!doc?.body) return;
 	const labels = currentCopiedFeedbackLabels();
 	if (labels.size === 0) return;
 	try {
@@ -55,16 +56,13 @@ function sweepCopiedFeedbackTooltips(doc: Document): void {
 		for (const el of Array.from(candidates)) {
 			const text = normalizedDomText(el.textContent);
 			if (!labels.has(text) || el.closest('button, a, input, textarea, [role="button"]')) continue;
-			let target: HTMLElement = el;
-			let parent = el.parentElement;
+			let target: HTMLElement = el, parent = el.parentElement;
 			while (parent && parent !== doc.body && normalizedDomText(parent.textContent) === text) { target = parent; parent = parent.parentElement; }
 			for (const p of ['display', 'visibility', 'opacity', 'pointer-events']) target.style.setProperty(p, p === 'display' ? 'none' : p === 'visibility' ? 'hidden' : '0', 'important');
 		}
 	} catch {}
 }
-function scheduleCopiedFeedbackCleanup(doc: Document, _roots?: Iterable<Node>): void {
-	sweepCopiedFeedbackTooltips(doc);
-}
+const scheduleCopiedFeedbackCleanup = (doc: Document, _roots?: Iterable<Node>): void => sweepCopiedFeedbackTooltips(doc);
 const observedDocs = new WeakSet<Document>();
 const activeSteamDocuments = new Set<Document>();
 const documentLifecycles = new Set<DisposableRegistry>();
@@ -149,6 +147,7 @@ function windowCreated(context: any): void {
 		lifecycle.listen(popupWin, 'unload', disposeWindow, { once: true });
 	}
 	lifecycle.add(() => { disposeLocalAchievementUI(popupDoc); disposeCustomizationArtwork(popupDoc); disposeNativeInfoPreference(popupDoc); });
+	lifecycle.add(installBrowserProtection(popupWin, popupDoc));
 	const winTitle = `${popupName} ${popupTitle}`.trim();
 	if (isOverlayWindow) {
 		registerNativeAchievementToastWindow(popupWin, 'overlay', winTitle);
@@ -380,6 +379,7 @@ export default definePlugin(() => {
 	const deferredStartupTimers: ReturnType<typeof setTimeout>[] = [];
 	const deferStartup = (label: string, action: () => void, delay = 0): void => { deferredStartupTimers.push(setTimeout(() => safeStartup(label, action), delay)); };
 	console.log('[GDL] definePlugin callback executing - returning plugin UI before background hydration');
+	installBrowserProtection(window, window.document);
 	safeStartup('cache protection', () => setProtectedCacheAppIds(Object.values(mappings)));
 	setTimeout(() => safeStartup('cache pruning', () => pruneCacheStorage()), 750);
 	safeStartup('library runtime host', () => configureLibraryRuntimeHost({ getMainWindowDoc: () => resolveMainWindowDocument() }));
@@ -487,7 +487,7 @@ export default definePlugin(() => {
 			stopSteamLanguageWatcher(); stopNativeAddAutoDetector(); stopPlaytimeTracker();
 			stopFirstLaunchAchievementWatcher(); deactivateBigPicture(); disposeLibraryRuntime();
 			disposeAchievementRuntime(); clearNativeUiBlueprints(); resetResolvedCssClassModules();
-			steamComponents.clearCache();
+			steamComponents.clearCache(); disposeAllBrowserProtection();
 		},
 	};
 });

@@ -4,7 +4,7 @@ import { getCachedGameData, getGameData, gameDataCache, gameDataLanguageKey } fr
 import { mappings, loadMappings, saveMappingChecked, shortcutMappingKey } from '../../core/mappings';
 import { perfMark, perfMeasure } from '../../core/perf';
 import { steamLanguageSync } from '../../steam/localization';
-import { installSteamNavigation } from '../../steam/navigation';
+import { installSteamNavigation, disposeSteamNavigation } from '../../steam/navigation';
 import { findActiveShortcutAppId, findShortcutAppIdByName, findShortcutAppIdsByName, getShortcutAppById, getSteamAppStore, looseMatchTitle } from '../../steam/shortcuts';
 import { normalizeTitle } from '../../core/text';
 import { GDL_INJECTED } from './constants';
@@ -487,11 +487,9 @@ export function disposeLibraryRuntime(): void {
 	const doc = currentInjectedDocument || configuredLibraryRuntimeHost?.getMainWindowDoc() || null;
 	if (doc) {
 		if (isPublicSteamLibraryRoute(doc)) {
-			if (hasOwnedLibraryChrome(doc) || isLibraryRouteExitPending(doc)) {
-				restoreNativeLibraryStyles(doc);
-				cleanupOwnedLibraryChromeAfterRouteExit(doc);
-			}
+			if (hasOwnedLibraryChrome(doc) || isLibraryRouteExitPending(doc)) { restoreNativeLibraryStyles(doc); cleanupOwnedLibraryChromeAfterRouteExit(doc); }
 		} else cleanupInjection(doc);
+		disposeSteamNavigation(doc);
 	}
 	navigationController.dispose();
 	clearCurrentInjection();

@@ -18,7 +18,7 @@ import { getCachedCommunityContent, getCachedNews, getCommunityContent, getNews 
 import { getCachedFriendData, getFriendData } from '../library/social/friends';
 import { cachePersona, hasCachedPersona } from '../library/social/personas';
 import { prioritizeShortcutLinkingAndArtwork } from '../library/artwork-sync';
-import { subscribeControllerChanges } from '../library/controller';
+import { detectGameControllerSupport, subscribeControllerChanges } from '../library/controller';
 import { defaultBigPictureModeEnabled } from '../../core/preferences';
 import {
 	mountNativeBigPictureDetails,
@@ -34,6 +34,7 @@ import {
 	removePlaybarControllerStat,
 	restoreBigPictureNonSteamNotices,
 } from './panel-mount';
+import { syncNativeAchievementProgressCache } from '../achievements/progress';
 import { activeTabFromNative, findBigPictureTabStrip } from './tabs';
 import type { BigPictureDetailData, BigPictureTab, MappedShortcut } from './types';
 
@@ -93,7 +94,12 @@ let controllerSyncInstalled = false;
 const activeControllerDocs = new Set<Document>();
 
 function ensureControllerSync(doc?: Document): void {
-	if (doc) activeControllerDocs.add(doc);
+	if (doc) {
+		activeControllerDocs.add(doc);
+		const shortcut = detectCurrentMappedShortcut(doc);
+		const support = shortcut ? detectGameControllerSupport(shortcut.steamAppId, doc) : undefined;
+		ensurePlaybarControllerStat(doc, support);
+	}
 	if (controllerSyncInstalled) return;
 	controllerSyncInstalled = true;
 	const targetDoc = doc || (typeof window !== 'undefined' ? window.document : null);
@@ -102,7 +108,9 @@ function ensureControllerSync(doc?: Document): void {
 		const allDocs = new Set([...Array.from(activeDetailDocs), ...Array.from(activeControllerDocs)]);
 		for (const d of Array.from(allDocs)) {
 			if (d.body && d.body.isConnected) {
-				ensurePlaybarControllerStat(d);
+				const sc = detectCurrentMappedShortcut(d);
+				const sp = sc ? detectGameControllerSupport(sc.steamAppId, d) : undefined;
+				ensurePlaybarControllerStat(d, sp);
 			} else {
 				activeControllerDocs.delete(d);
 			}
@@ -165,7 +173,7 @@ function renderNativeRoot(doc: Document, state: BigPictureDetailState): void {
 	hideBigPictureNonSteamNotices(doc);
 	const tabs = findBigPictureTabStrip(doc);
 	ensureCloudDivider(doc, tabs?.strip || state.panel);
-	ensurePlaybarControllerStat(doc);
+	ensurePlaybarControllerStat(doc, detectGameControllerSupport(state.shortcut.steamAppId, doc));
 	const mounted = mountNativeBigPictureDetails(state.root, {
 		tab: state.activeTab,
 		shortcut: state.shortcut,
@@ -208,6 +216,12 @@ function startDetailHydration(doc: Document, state: BigPictureDetailState): void
 	applyResource('achievements', fetchLocalAchievementData(state.shortcut.steamAppId, {
 		stateAppId: String(state.shortcut.id),
 		maxAgeMs: 1250,
+	}).then(achievements => {
+		if (achievements && typeof achievements.total === 'number') {
+			syncNativeAchievementProgressCache(state.shortcut.id, achievements.unlocked, achievements.total, doc);
+			syncNativeAchievementProgressCache(state.shortcut.steamAppId, achievements.unlocked, achievements.total, doc);
+		}
+		return achievements;
 	}));
 	applyResource('news', getNews(state.shortcut.steamAppId, state.language));
 	applyResource('community', getCommunityContent(state.shortcut.steamAppId, state.language));
@@ -233,6 +247,7 @@ function startDetailHydration(doc: Document, state: BigPictureDetailState): void
 }
 
 function scheduleDetailRetry(doc: Document): void {
+	ensurePlaybarControllerStat(doc);
 	if (detailRetryTimers.has(doc)) return;
 	const attempt = (detailRetryCounts.get(doc) || 0) + 1;
 	if (attempt > 40) return;
@@ -303,7 +318,7 @@ function removeBigPictureDetailsNodes(doc: Document, keepControllerStat = false)
 		detailStates.delete(doc);
 	}
 	nextDetailGeneration(doc);
-	for (const element of Array.from(doc.querySelectorAll('#gdl-bp-detail-root, #gdl-bp-detail-shell, #gdl-bp-native-strip-placeholder, #gdl-bp-focus-ring-root, #gdl-bp-focus-ring'))) element.remove();
+	for (const element of Array.from(doc.querySelectorAll('#gdl-bp-detail-root, #gdl-bp-detail-shell, #gdl-bp-native-strip-placeholder, #gdl-bp-focus-ring-root, #gdl-bp-focus-ring, #gdl-playbar-achievements, [data-gdl-playbar-achievements="1"]'))) element.remove();
 	removeBigPictureFallbackPanel(doc);
 	removeCloudDivider(doc);
 	if (!keepControllerStat) removePlaybarControllerStat(doc);
@@ -311,6 +326,12 @@ function removeBigPictureDetailsNodes(doc: Document, keepControllerStat = false)
 }
 
 function isLibraryOrNonDetailsView(doc: Document): boolean {
+	if (doc.title?.includes('SP Desktop') || doc.body.classList.contains('DesktopUI') || doc.querySelector('.DesktopUI')) {
+		return true;
+	}
+	if (findBigPictureTabStrip(doc)) {
+		return false;
+	}
 	if (doc.querySelector('[class*="AllGames"], [class*="CollectionsHeader"], [class*="LibraryHome"], [class*="AllCollections"]')) {
 		return true;
 	}
@@ -329,11 +350,12 @@ function isLibraryOrNonDetailsView(doc: Document): boolean {
 
 export async function refreshBigPictureShortcutDetails(doc: Document): Promise<void> {
 	if (!doc.body) return;
-	if (doc.title?.includes('SP Desktop') || doc.body.classList.contains('DesktopUI') || doc.querySelector('.DesktopUI')) {
+	if (isLibraryOrNonDetailsView(doc)) {
 		removeBigPictureDetailsNodes(doc);
 		return;
 	}
-	if (isLibraryOrNonDetailsView(doc)) {
+	const context = resolveActiveGameContext(doc);
+	if (context.type !== 'shortcut-linked') {
 		removeBigPictureDetailsNodes(doc);
 		return;
 	}
@@ -352,7 +374,7 @@ export async function refreshBigPictureShortcutDetails(doc: Document): Promise<v
 		detailTabObservers.delete(doc);
 		removeBigPictureDetailsNodes(doc, true);
 		ensureControllerSync(doc);
-		ensurePlaybarControllerStat(doc);
+		ensurePlaybarControllerStat(doc, detectGameControllerSupport(shortcut.steamAppId, doc));
 		return;
 	}
 	const language = String(steamLanguageSync() || 'english').toLowerCase();

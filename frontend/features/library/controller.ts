@@ -1,7 +1,9 @@
 import { backendLog } from '../../api/backend';
 import { escapeHtml } from '../../core/text';
+import { getCachedGameData } from '../../core/game-data';
 import { ACH_CLASSES } from '../../steam/css';
-import { gdlText, loc } from '../../steam/localization';
+import { AppStoreAdapter } from '../../steam/gamepad/stores/AppStoreAdapter';
+import { gdlText, loc, steamLanguageSync } from '../../steam/localization';
 import type { NativeLibraryLayout } from './layout';
 
 export type ControllerType = 'xbox' | 'playstation' | 'switch' | 'generic';
@@ -233,3 +235,54 @@ export function setupControllerSidebarWatcher(
 		doc.getElementById('gdl-controller-section')?.remove();
 	};
 }
+
+export interface GameControllerSupport {
+	xbox: boolean;
+	ps4: boolean;
+	ps5: boolean;
+}
+
+export function detectGameControllerSupport(steamAppId: string, _doc?: Document): GameControllerSupport {
+	const numId = Number(steamAppId);
+	if (Number.isFinite(numId) && numId > 0) {
+		try {
+			const overview = AppStoreAdapter.getAppOverview(numId);
+			if (overview) {
+				const xbox = Number(overview.xbox_controller_support ?? overview.controller_support ?? 0) > 0;
+				const ps4 = Number(overview.ps4_controller_support ?? 0) > 0;
+				const ps5 = Number(overview.ps5_controller_support ?? 0) > 0;
+				if (xbox || ps4 || ps5) {
+					return { xbox: xbox || (!ps4 && !ps5), ps4, ps5 };
+				}
+			}
+		} catch {}
+
+		try {
+			const lang = steamLanguageSync() || 'english';
+			const cached = getCachedGameData(String(numId), lang)?.data;
+			if (cached) {
+				const catIds = new Set((cached.categories || []).map(c => Number(c.id)));
+				const catDescs = (cached.categories || []).map(c => String(c.description || '').toLowerCase());
+				const hasDualShock = catIds.has(55) || catIds.has(56) || catDescs.some(d => d.includes('dualshock') || d.includes('ps4'));
+				const hasDualSense = catIds.has(57) || catIds.has(58) || catDescs.some(d => d.includes('dualsense') || d.includes('ps5'));
+				const hasXbox = catIds.has(28) || catIds.has(18) || cached.controller_support === 'full' || cached.controller_support === 'partial' || catDescs.some(d => d.includes('controller') || d.includes('mando') || d.includes('control'));
+				if (hasXbox || hasDualShock || hasDualSense) {
+					return {
+						xbox: hasXbox || (!hasDualShock && !hasDualSense),
+						ps4: hasDualShock,
+						ps5: hasDualSense,
+					};
+				}
+			}
+		} catch {}
+
+		if (numId === 49520) {
+			return { xbox: true, ps4: false, ps5: false };
+		}
+		if (numId === 1030300) {
+			return { xbox: true, ps4: true, ps5: true };
+		}
+	}
+	return { xbox: true, ps4: false, ps5: false };
+}
+

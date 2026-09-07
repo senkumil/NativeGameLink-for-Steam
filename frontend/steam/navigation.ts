@@ -1,4 +1,5 @@
 import { backendLog } from '../api/backend';
+import { installBrowserProtection } from './browser-protection';
 
 const installedDocuments = new WeakMap<Document, () => void>();
 
@@ -143,11 +144,13 @@ export function installSteamNavigation(doc: Document): () => void {
 	if (existing) return existing;
 	const click = (event: Event) => handleDelegatedClick(doc, event as MouseEvent);
 	const error = (event: Event) => handleDelegatedImageError(event);
+	const cleanupProtection = installBrowserProtection(doc.defaultView, doc);
 	doc.addEventListener('click', click, true);
 	doc.addEventListener('error', error, true);
 	const cleanup = (): void => {
 		doc.removeEventListener('click', click, true);
 		doc.removeEventListener('error', error, true);
+		cleanupProtection();
 		installedDocuments.delete(doc);
 	};
 	installedDocuments.set(doc, cleanup);

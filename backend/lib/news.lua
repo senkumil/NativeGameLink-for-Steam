@@ -14,7 +14,7 @@ local PARTNER_UNAVAILABLE_CACHE_LIMIT = 64
 
 local function fetch_news_json(appid, lang)
     local url = "https://api.steampowered.com/ISteamNews/GetNewsForApp/v2/?appid="
-        .. appid .. "&count=50&maxlength=900&format=json"
+        .. appid .. "&count=50&maxlength=900&format=json&feeds=steam_community_announcements"
     if lang ~= "" then url = url .. "&l=" .. lang end
     local ok_http, res = pcall(http.get, url, {
         headers = { ["Accept"] = "application/json", ["User-Agent"] = USER_AGENT },
@@ -27,7 +27,18 @@ local function fetch_news_json(appid, lang)
     local ok, body = pcall(cjson.decode, res.body)
     local items = ok and body and body.appnews and body.appnews.newsitems or nil
     if type(items) ~= "table" then return {}, false end
-    return items, false
+    local filtered = {}
+    for _, it in ipairs(items) do
+        local is_ext = it.is_external_url == true or it.is_external_url == 1
+        local feedname = tostring(it.feedname or "")
+        local is_steam = feedname == "steam_community_announcements"
+            or feedname == "steam_store_release_metadata"
+            or feedname == ""
+        if not is_ext and is_steam then
+            table.insert(filtered, it)
+        end
+    end
+    return filtered, false
 end
 
 local function event_to_news_item(ev)

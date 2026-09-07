@@ -7,7 +7,7 @@
 export type { AchievementRuntimeHost } from './context';
 export { configureAchievementRuntimeHost } from './context';
 export type { AchievementProgress } from './progress';
-export { achievementPercentText, getAchievementProgress, renderAchievementsPanel } from './progress';
+export { achievementPercentText, getAchievementProgress, renderAchievementsPanel, syncNativeAchievementProgressCache } from './progress';
 export { deterministicTestUnlockCount, formatLocalUnlockDate, localAchievementPercent } from './format';
 export { makeLinkedAchievementsClickable, focusAchievementsSection, detectLinkedSteamAppId } from './navigation';
 export {

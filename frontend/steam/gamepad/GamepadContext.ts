@@ -156,6 +156,9 @@ function appIdsFromReactOwners(doc: Document): number[] {
 	const ids = new Set<number>();
 	const selector = '[class*="AppDetails"], [class*="GameDetails"], [class*="PlayBar"], [class*="Hero"]';
 	for (const element of Array.from(doc.querySelectorAll<HTMLElement>(selector))) {
+		if (!element.isConnected || (element.offsetParent === null && element.offsetWidth === 0 && element.offsetHeight === 0)) {
+			continue;
+		}
 		if (element.closest('#gdl-bp-detail-root, #gdl-bp-detail-shell, #gdl-bp-detail-fallback-panel, [id^="gdl-"], [data-gdl-big-picture-details], [class*="AllGames"], [class*="CollectionsHeader"], [class*="LibraryHome"], [class*="Shelf"], [class*="Grid"], [class*="Carousel"], [role="tablist"]')) {
 			continue;
 		}
@@ -258,25 +261,7 @@ export function resolveActiveGameContext(doc?: Document): ActiveGameContext {
 	if (byHeading?.type === 'shortcut-linked') return byHeading;
 
 	const identity = activeContextFromIdentity(targetDoc, shortcuts);
-	if (identity?.type === 'shortcut-linked' && identity.identity?.title) {
-		const visibleHeadings = Array.from(targetDoc.querySelectorAll<HTMLElement>(
-			'h1, h2, h3, [class*="logo" i] img[alt], [class*="Hero" i] img[alt]'
-		)).filter(el => {
-			if (el.closest('#gdl-bp-detail-root, #gdl-bp-detail-fallback-panel, #gdl-bp-detail-shell, [id^="gdl-"], [class*="nav" i], [class*="QuickAccess" i], [class*="footer" i]')) return false;
-			const r = el.getBoundingClientRect();
-			return r.width > 0 && r.height > 0 && r.top <= 500;
-		});
-		if (visibleHeadings.length > 0) {
-			const headingTexts = visibleHeadings.map(el => normalizeTitle(el.getAttribute('alt') || el.textContent || '')).filter(Boolean);
-			const expectedTitle = normalizeTitle(identity.identity.title);
-			const matchesAny = headingTexts.some(h => h === expectedTitle || looseMatchTitle(h, expectedTitle));
-			if (!matchesAny) {
-				return { type: 'none' };
-			}
-		}
-		return identity;
-	}
-
+	if (identity?.type === 'shortcut-linked') return identity;
 	if (identity?.type === 'steam') return identity;
 	return identity || { type: 'none' };
 }

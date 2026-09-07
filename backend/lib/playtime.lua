@@ -242,7 +242,7 @@ local function load_sessions()
                 LAST_FILE_MTIME = tonumber(fs.last_write_time(SESSIONS_FILE) or 0) or 0
                 local removed_foreign = prune_foreign_sessions()
                 if removed_foreign > 0 then
-                    logger:warn("Discarded " .. tostring(removed_foreign) .. " playtime history record(s) that do not belong to the active Steam shortcut registry")
+                    logger:info("Discarded " .. tostring(removed_foreign) .. " playtime history record(s) that do not belong to the active Steam shortcut registry")
                 end
                 if candidate.path ~= SESSIONS_FILE then STORE_DIRTY = true end
                 if STORE_DIRTY and save_sessions() and candidate.path ~= SESSIONS_FILE then

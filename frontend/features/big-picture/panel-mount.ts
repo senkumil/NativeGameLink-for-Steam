@@ -1,11 +1,6 @@
-import React from 'react';
-import { IconsModule } from '@steambrew/client';
-import { backendLog } from '../../api/backend';
 import { loc } from '../../steam/localization';
 import { PLAYBAR_CLASSES } from '../../steam/css';
-import { detectConnectedController } from '../library/controller';
-import { findReactDom, type ReactRootHandle } from './NativeBigPictureDetails';
-import { steamWebpackRuntime } from '../../steam/modules/SteamWebpackRuntime';
+import { detectGameControllerSupport, type GameControllerSupport } from '../library/controller';
 
 export type BigPicturePanelTab = 'activity' | 'stuff' | 'community' | 'info';
 
@@ -174,31 +169,9 @@ export function ensureNativePanelRoot(
 	if (panel.firstChild !== root) panel.insertBefore(root, panel.firstChild);
 	Array.from(panel.children).forEach(child => {
 		if (child !== root && child.id !== 'gdl-bp-detail-root') {
-			const text = (child.textContent || '').toLowerCase();
-			const noticeAnchors = [
-				'no-steam', 'non-steam', 'no es un juego de steam', 'no es un juego o mod',
-				'no está disponible porque no es un juego', 'nicht von steam', "n'est pas un jeu steam",
-				'não é um juego steam', 'não é um jogo steam', 'не из steam',
-				'steam controls the start', 'steam controla el inicio',
-			];
-			const isNotice = child.matches('[class*="EmptyDetails"], [class*="NonSteamNotice"], [class*="NonSteamExplanation"]')
-				|| noticeAnchors.some(anchor => text.includes(anchor));
-			const isUnlinkedActivity = tab === 'activity' && (child.matches('[class*="ActivityFeedContainer"], [class*="FriendsContainer"]') || text.includes('diles algo') || text.includes('say something'));
-			const isUnlinkedCommunity = tab === 'community' && child.matches('[class*="CommunityContentContainer"]');
-			const isUnlinkedStuff = tab === 'stuff' && (
-				child.matches('[class*="Section"], [class*="Container"], [class*="EmptyDetails"], [class*="Notes"], [class*="Screenshots"], [class*="Review"]')
-				|| text.includes('archivos multimedia') || text.includes('mi reseña') || text.includes('notas')
-				|| text.includes('my review') || text.includes('notes') || text.includes('screenshots')
-				|| text.includes('captura') || text.includes('biblioteca multimedia')
-			);
-			const isUnlinkedInfo = tab === 'info' && (
-				child.matches('[class*="Section"], [class*="EmptyDetails"]')
-				|| noticeAnchors.some(anchor => text.includes(anchor))
-			);
-			if (isNotice || isUnlinkedActivity || isUnlinkedCommunity || isUnlinkedStuff || isUnlinkedInfo) {
-				(child as HTMLElement).hidden = true;
-				(child as HTMLElement).dataset.gdlBpHiddenNotice = '1';
-			}
+			(child as HTMLElement).hidden = true;
+			(child as HTMLElement).style.setProperty('display', 'none', 'important');
+			(child as HTMLElement).dataset.gdlBpHiddenNotice = '1';
 		}
 	});
 	const fallback = doc.getElementById('gdl-bp-detail-fallback-panel');
@@ -322,9 +295,13 @@ const PS5_PATH_4 =
 
 function createOfficialXboxSvg(doc: Document): SVGSVGElement {
 	const svg = doc.createElementNS('http://www.w3.org/2000/svg', 'svg');
-	svg.setAttribute('viewBox', '-3 0 42 36');
-	svg.setAttribute('width', '24');
-	svg.setAttribute('height', '20');
+	svg.setAttribute('viewBox', '0 0 36 36');
+	svg.setAttribute('width', '22');
+	svg.setAttribute('height', '16');
+	svg.style.width = '22px';
+	svg.style.height = '16px';
+	svg.style.flexShrink = '0';
+	svg.style.display = 'block';
 	svg.setAttribute('fill', 'none');
 	svg.setAttribute('aria-hidden', 'true');
 	const path = doc.createElementNS('http://www.w3.org/2000/svg', 'path');
@@ -338,9 +315,13 @@ function createOfficialXboxSvg(doc: Document): SVGSVGElement {
 
 function createOfficialPsSvg(doc: Document): SVGSVGElement {
 	const svg = doc.createElementNS('http://www.w3.org/2000/svg', 'svg');
-	svg.setAttribute('viewBox', '-3 0 42 36');
-	svg.setAttribute('width', '24');
-	svg.setAttribute('height', '20');
+	svg.setAttribute('viewBox', '0 0 36 36');
+	svg.setAttribute('width', '22');
+	svg.setAttribute('height', '16');
+	svg.style.width = '22px';
+	svg.style.height = '16px';
+	svg.style.flexShrink = '0';
+	svg.style.display = 'block';
 	svg.setAttribute('fill', 'none');
 	svg.setAttribute('aria-hidden', 'true');
 	const path = doc.createElementNS('http://www.w3.org/2000/svg', 'path');
@@ -354,9 +335,13 @@ function createOfficialPsSvg(doc: Document): SVGSVGElement {
 
 function createOfficialPs5Svg(doc: Document): SVGSVGElement {
 	const svg = doc.createElementNS('http://www.w3.org/2000/svg', 'svg');
-	svg.setAttribute('viewBox', '-3 0 42 36');
-	svg.setAttribute('width', '24');
-	svg.setAttribute('height', '20');
+	svg.setAttribute('viewBox', '0 0 36 36');
+	svg.setAttribute('width', '22');
+	svg.setAttribute('height', '16');
+	svg.style.width = '22px';
+	svg.style.height = '16px';
+	svg.style.flexShrink = '0';
+	svg.style.display = 'block';
 	svg.setAttribute('fill', 'none');
 	svg.setAttribute('aria-hidden', 'true');
 	const paths = [
@@ -378,94 +363,18 @@ function createOfficialPs5Svg(doc: Document): SVGSVGElement {
 	return svg;
 }
 
-function resolvePlaybarControllerTarget(doc: Document): { type: string; label: string; svgKey: 'xbox' | 'ps4' | 'ps5' } {
-	const info = detectConnectedController(doc);
-	if (info.type === 'playstation') {
-		const lower = (info.name || '').toLowerCase();
-		if (lower.includes('dualsense') || lower.includes('ps5')) {
-			return { type: 'ps5', label: 'PlayStation 5', svgKey: 'ps5' };
-		}
-		return { type: 'ps4', label: 'PlayStation 4', svgKey: 'ps4' };
-	}
-	if (info.type === 'switch') {
-		return { type: 'switchpro', label: 'Nintendo Switch', svgKey: 'xbox' };
-	}
-	return { type: 'xbox', label: 'Xbox', svgKey: 'xbox' };
-}
-
-function renderOfficialControllerSvgs(row: HTMLElement, doc: Document, svgKey: 'xbox' | 'ps4' | 'ps5' = 'xbox'): void {
+function renderOfficialControllerSvgs(row: HTMLElement, doc: Document, support?: GameControllerSupport): void {
 	while (row.firstChild) row.removeChild(row.firstChild);
-	if (svgKey === 'ps5') {
-		row.appendChild(createOfficialPs5Svg(doc));
-	} else if (svgKey === 'ps4') {
-		row.appendChild(createOfficialPsSvg(doc));
-	} else {
+	const s = support || { xbox: true, ps4: false, ps5: false };
+	if (s.xbox) row.appendChild(createOfficialXboxSvg(doc));
+	if (s.ps4) row.appendChild(createOfficialPsSvg(doc));
+	if (s.ps5) row.appendChild(createOfficialPs5Svg(doc));
+	if (!row.firstChild) {
 		row.appendChild(createOfficialXboxSvg(doc));
 	}
 }
 
-const playbarControllerRoots = new WeakMap<HTMLElement, ReactRootHandle>();
-
-function getNativeIconsModule(doc: Document): any {
-	if (IconsModule && typeof (IconsModule as any).Controller === 'function') {
-		return IconsModule;
-	}
-	steamWebpackRuntime.captureRuntime(doc);
-	for (const entry of steamWebpackRuntime.getAllModules()) {
-		const exp = entry.exports;
-		if (exp && typeof exp.Controller === 'function' && typeof exp.ControllerType === 'function') {
-			return exp;
-		}
-	}
-	return null;
-}
-
-function renderPlaybarControllers(row: HTMLElement, doc: Document): void {
-	const target = resolvePlaybarControllerTarget(doc);
-	try {
-		const reactDom = findReactDom(doc);
-		const nativeIcons = getNativeIconsModule(doc);
-		const Controller = nativeIcons?.Controller;
-
-		if (reactDom && typeof Controller === 'function') {
-			let root = playbarControllerRoots.get(row);
-			if (!root) {
-				while (row.firstChild) row.removeChild(row.firstChild);
-				if (typeof reactDom.createRoot === 'function') {
-					root = reactDom.createRoot(row);
-				} else {
-					root = {
-						render: (node: any) => reactDom.render(node, row),
-						unmount: () => reactDom.unmountComponentAtNode?.(row),
-					};
-				}
-				playbarControllerRoots.set(row, root);
-			}
-
-			root.render(
-				React.createElement(Controller, {
-					type: target.type,
-					width: '24',
-					height: '20',
-					viewBox: '-3 0 42 36',
-					'aria-label': target.label,
-				})
-			);
-			return;
-		}
-	} catch (e) {
-		backendLog(`[NGL][Gamepad] Controller React render fallback: ${e}`);
-	}
-
-	renderOfficialControllerSvgs(row, doc, target.svgKey);
-}
-
-export function ensurePlaybarControllerStat(doc: Document): HTMLElement | null {
-	const controllerInfo = detectConnectedController(doc);
-	if (!controllerInfo.connected) {
-		removePlaybarControllerStat(doc);
-		return null;
-	}
+export function ensurePlaybarControllerStat(doc: Document, supportOverride?: GameControllerSupport): HTMLElement | null {
 	doc.getElementById('gdl-bp-playbar-controller-styles')?.remove();
 
 	const playbar = PLAYBAR_CLASSES();
@@ -481,14 +390,8 @@ export function ensurePlaybarControllerStat(doc: Document): HTMLElement | null {
 		stat.dataset.gdlPlaybarController = '1';
 	}
 
-	const achievementsStat = statsSection.querySelector<HTMLElement>(
-		'[data-gdl-playbar-achievements="1"], #gdl-playbar-achievements, [class*="MiniAchievements"], [class*="miniAchievements"]'
-	);
-	if (achievementsStat && achievementsStat.parentElement === statsSection) {
-		if (stat.nextElementSibling !== achievementsStat) {
-			statsSection.insertBefore(stat, achievementsStat);
-		}
-	} else if (stat.parentElement !== statsSection) {
+	statsSection.querySelectorAll<HTMLElement>('[data-gdl-playbar-achievements="1"], #gdl-playbar-achievements').forEach(el => el.remove());
+	if (stat.parentElement !== statsSection) {
 		statsSection.appendChild(stat);
 	}
 
@@ -516,22 +419,28 @@ export function ensurePlaybarControllerStat(doc: Document): HTMLElement | null {
 		content.appendChild(row);
 	}
 	row.className = [playbar.ControllerSupportRow, 'gdl-controller-support-row'].filter(Boolean).join(' ');
+	row.style.display = 'flex';
+	row.style.flexDirection = 'row';
+	row.style.alignItems = 'center';
+	row.style.gap = '6px';
+	row.style.marginTop = '2px';
+	row.style.color = '#ffffff';
 
-	renderPlaybarControllers(row, doc);
+	let support = supportOverride;
+	if (!support) {
+		const root = doc.getElementById('gdl-bp-detail-root');
+		const steamAppId = root?.dataset.gdlSteamAppId || doc.querySelector<HTMLElement>('[data-gdl-steam-app-id]')?.dataset.gdlSteamAppId;
+		if (steamAppId) {
+			support = detectGameControllerSupport(steamAppId, doc);
+		}
+	}
+
+	renderOfficialControllerSvgs(row, doc, support);
 	return stat;
 }
 
 export function removePlaybarControllerStat(doc: Document): void {
 	doc.getElementById('gdl-bp-playbar-controller-styles')?.remove();
 	const stat = doc.getElementById('gdl-bp-playbar-controller');
-	if (!stat) return;
-	const row = stat.querySelector<HTMLElement>('[class*="ControllerSupportRow"], .gdl-controller-support-row') || stat.querySelector<HTMLElement>('div:last-child');
-	if (row) {
-		const root = playbarControllerRoots.get(row);
-		if (root) {
-			try { root.unmount(); } catch {}
-			playbarControllerRoots.delete(row);
-		}
-	}
-	stat.remove();
+	stat?.remove();
 }

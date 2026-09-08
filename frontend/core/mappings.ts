@@ -6,6 +6,7 @@ import { nglEvents } from './events';
 export const MAPPINGS_CACHE_STORAGE_KEY = 'gdl_mappings_snapshot_v1';
 const MAPPINGS_CHANGED_EVENT = 'gdl:mappings-changed';
 let mappingsRevision = 0;
+let mappingSnapshotVerified = false;
 
 const shortcutToSteamMap = new Map<number, string>();
 const reverseSteamToShortcutMap = new Map<string, Set<number>>();
@@ -74,6 +75,10 @@ export function getMappingsRevision(): number {
 	return mappingsRevision;
 }
 
+export function isMappingSnapshotVerified(): boolean {
+	return mappingSnapshotVerified;
+}
+
 export function subscribeMappings(listener: (value: Mappings) => void): () => void {
 	const handler = (event: Event): void => {
 		const detail = (event as CustomEvent<Mappings>).detail;
@@ -134,6 +139,16 @@ function mappingsEqual(left: Mappings, right: Mappings): boolean {
 	return true;
 }
 
+function applyMappingsSnapshot(next: Mappings, verified: boolean): void {
+	const clean = cleanMappings(next);
+	const changed = !mappingsEqual(mappings, clean);
+	const verificationChanged = mappingSnapshotVerified !== verified;
+	mappings = clean;
+	mappingSnapshotVerified = verified;
+	persistMappingsSnapshot(mappings);
+	if (changed || verificationChanged) notifyMappingsChanged();
+}
+
 interface LocalShortcutSnapshot {
 	ids: Set<number>;
 	accountId: string;
@@ -181,7 +196,6 @@ function filterMappingsForLocalShortcuts(source: Mappings, snapshot: LocalShortc
 }
 
 async function hydrateMappings(): Promise<void> {
-	const previousMappings = cleanMappings({ ...mappings });
 	let lastError: unknown = null;
 	for (let attempt = 0; attempt < 7; attempt += 1) {
 		try {
@@ -192,11 +206,7 @@ async function hydrateMappings(): Promise<void> {
 			const backendFiltered = hasValidShortcutRegistry
 				? filterMappingsForLocalShortcuts(cleanMappings(parsed), localShortcuts)
 				: { mappings: cleanMappings(parsed), removed: [] };
-			const cachedFiltered = hasValidShortcutRegistry
-				? filterMappingsForLocalShortcuts(cleanMappings({ ...mappings }), localShortcuts)
-				: { mappings: cleanMappings({ ...mappings }), removed: [] };
 			let backendMappings = backendFiltered.mappings;
-			const cachedMappings = cachedFiltered.mappings;
 
 			if (hasValidShortcutRegistry && backendFiltered.removed.length > 0) {
 				const purgeRaw = await updateMappingsBackend({ request_json: JSON.stringify({ set: {}, remove: backendFiltered.removed }) });
@@ -204,41 +214,30 @@ async function hydrateMappings(): Promise<void> {
 				if (purge?.ok && purge.data) backendMappings = cleanMappings(purge.data);
 				backendLog(`Discarded ${backendFiltered.removed.length} mapping(s) that do not belong to the active Steam shortcut registry${localShortcuts?.accountId ? ` (account ${localShortcuts.accountId})` : ''}.`);
 			}
-			if (hasValidShortcutRegistry && cachedFiltered.removed.length > 0) {
-				backendLog(`Ignored ${cachedFiltered.removed.length} stale cached mapping(s) from a previous or foreign installation.`);
-			}
 
+			const cachedSnapshot = cleanMappings({ ...mappings });
+			const cachedFiltered = hasValidShortcutRegistry
+				? filterMappingsForLocalShortcuts(cachedSnapshot, localShortcuts)
+				: { mappings: cachedSnapshot, removed: [] };
+			if (cachedFiltered.removed.length > 0) {
+				backendLog(`Ignored ${cachedFiltered.removed.length} stale cached mapping(s) outside the active Steam shortcut registry.`);
+			}
+			const cachedCount = Object.keys(cachedFiltered.mappings).length;
 			const backendCount = Object.keys(backendMappings).length;
-			const cachedCount = Object.keys(cachedMappings).length;
-			if (backendCount === 0 && cachedCount > 0) {
-				// A backend that is still activating (or a missing/corrupt primary
-				// file) must never erase a verified browser snapshot. Repair the
-				// source of truth transactionally from that snapshot.
-				const repairRaw = await updateMappingsBackend({ request_json: JSON.stringify({ set: cachedMappings, remove: [] }) });
-				const repair = parseMappingMutationResponse(repairRaw);
-				if (!repair?.ok) throw new Error(repair?.error || 'empty_mapping_repair_failed');
-				mappings = cleanMappings(repair.data || cachedMappings);
-				backendLog('Recovered ' + Object.keys(mappings).length + ' mapping(s) from the persistent snapshot.');
-			} else {
-				mappings = backendMappings;
+			if (!mappingSnapshotVerified && cachedCount > 0 && backendCount === 0) {
+				backendLog(`Discarded ${cachedCount} browser-cached mapping(s): the backend returned an authoritative empty snapshot.`);
 			}
-			persistMappingsSnapshot(mappings);
-			if (!mappingsEqual(previousMappings, mappings)) {
-				notifyMappingsChanged();
-				backendLog('Loaded changed mapping snapshot (' + Object.keys(mappings).length + ' entries).');
-			} else {
-				backendLog('Verified unchanged mapping snapshot (' + Object.keys(mappings).length + ' entries).');
-			}
-
+			applyMappingsSnapshot(backendMappings, true);
+			backendLog(`Verified backend mapping snapshot (${backendCount} entries).`);
 			return;
 		} catch (error) {
 			lastError = error;
 			if (attempt < 6) await wait(Math.min(250 * (2 ** attempt), 2500));
 		}
 	}
-	backendLog('Failed to load mappings after startup retries: ' + lastError);
-	// Retain the last verified snapshot. Clearing it here makes every linked
-	// page look unlinked whenever the backend takes longer to reactivate.
+	backendLog('Failed to verify mappings after startup retries: ' + lastError);
+	// Browser storage is only a warm cache. Until the backend verifies it,
+	// callers must treat the snapshot as uncommitted and never resurrect it.
 }
 
 export function loadMappings(): Promise<void> {
@@ -280,9 +279,11 @@ async function updateMappingsCheckedUnlocked(mutation: MappingMutation): Promise
 	const remove = Array.from(new Set((mutation.remove || []).filter(Boolean)));
 	if (Object.keys(set).length === 0 && remove.length === 0) return true;
 
-	// Optimistically apply in memory and notify immediately on frame 0
-	for (const [key, value] of Object.entries(set)) mappings[key] = value;
-	for (const key of remove) delete mappings[key];
+	const previous = cleanMappings({ ...mappings });
+	const previousVerified = mappingSnapshotVerified;
+	const optimistic = cleanMappings({ ...previous, ...set });
+	for (const key of remove) delete optimistic[key];
+	mappings = optimistic;
 	persistMappingsSnapshot(mappings);
 	notifyMappingsChanged();
 
@@ -290,27 +291,28 @@ async function updateMappingsCheckedUnlocked(mutation: MappingMutation): Promise
 		const raw = await updateMappingsBackend({ request_json: JSON.stringify({ set, remove }) });
 		const response = parseMappingMutationResponse(raw);
 		if (response?.ok) {
-			if (response.data && typeof response.data === 'object') mappings = response.data;
-			persistMappingsSnapshot(mappings);
-			notifyMappingsChanged();
+			applyMappingsSnapshot(cleanMappings(response.data || optimistic), true);
 			return true;
 		}
 	} catch (error) {
 		backendLog('Batch mapping update failed: ' + error);
 	}
 
-	// Verify source-of-truth state before reporting a failure.
+	// Re-read the source of truth. This both confirms a late successful write and
+	// rolls back an optimistic UI update that never reached disk.
 	try {
 		const current = parseMappingsResponse(await getAllMappings());
-		if (!current) return false;
-		const setMatches = Object.entries(set).every(([key, value]) => current[key] === value);
-		const removalsMatch = remove.every(key => !Object.prototype.hasOwnProperty.call(current, key));
-		if (!setMatches || !removalsMatch) return false;
-		mappings = current;
-		persistMappingsSnapshot(mappings);
-		notifyMappingsChanged();
-		return true;
-	} catch { return false; }
+		if (current) {
+			const cleanCurrent = cleanMappings(current);
+			const setMatches = Object.entries(set).every(([key, value]) => cleanCurrent[key] === value);
+			const removalsMatch = remove.every(key => !Object.prototype.hasOwnProperty.call(cleanCurrent, key));
+			applyMappingsSnapshot(cleanCurrent, true);
+			return setMatches && removalsMatch;
+		}
+	} catch {}
+
+	applyMappingsSnapshot(previous, previousVerified);
+	return false;
 }
 
 export function updateMappingsChecked(mutation: MappingMutation): Promise<boolean> {
@@ -325,9 +327,9 @@ export function saveMappingChecked(key: string, value: string): Promise<boolean>
 	try {
 		const result = await saveMappingBackend({ non_steam_id: key, steam_id: value });
 		if (backendResultStatus(result) !== 'ok') return false;
-		mappings[key] = value;
-		persistMappingsSnapshot(mappings);
-		notifyMappingsChanged();
+		const current = parseMappingsResponse(await getAllMappings());
+		if (!current || String(current[key] || '') !== value) return false;
+		applyMappingsSnapshot(cleanMappings(current), true);
 		return true;
 	} catch { return false; }
 	});
@@ -339,9 +341,9 @@ export function removeMappingChecked(key: string): Promise<boolean> {
 	try {
 		const result = await removeMappingBackend({ non_steam_id: key });
 		if (backendResultStatus(result) !== 'ok') return false;
-		delete mappings[key];
-		persistMappingsSnapshot(mappings);
-		notifyMappingsChanged();
+		const current = parseMappingsResponse(await getAllMappings());
+		if (!current || Object.prototype.hasOwnProperty.call(current, key)) return false;
+		applyMappingsSnapshot(cleanMappings(current), true);
 		return true;
 	} catch { return false; }
 	});
@@ -427,7 +429,7 @@ export async function removeShortcutMappingsChecked(identity: ShortcutMappingIde
  * recovery when Steam regenerates a Shortcut AppID. Executable stems are not
  * identity: unrelated games can legitimately ship the same filename. */
 export function findMappingByExactExe(exePath: string): string | null {
-	if (!exePath) return null;
+	if (!mappingSnapshotVerified || !exePath) return null;
 	const lower = exePath.trim().toLowerCase();
 	const normalizedLower = lower.replace(/\\/g, '/');
 	const indexed = exeToSteamMap.get(normalizedLower) || exeToSteamMap.get(lower);
@@ -457,6 +459,7 @@ export function findMappingByExe(exePath: string): string | null {
 }
 
 export function findMappingForTitle(title: string, shortcutAppId?: string | number | null): string | null {
+	if (!mappingSnapshotVerified) return null;
 	if (shortcutAppId) {
 		const raw = Number(shortcutAppId);
 		const indexed = shortcutToSteamMap.get(raw);
@@ -501,6 +504,7 @@ function isAppKnownInSteam(shortcutAppId: number): boolean {
 }
 
 export function findShortcutIdForMappedSteamAppId(steamAppId: string | number): number | null {
+	if (!mappingSnapshotVerified) return null;
 	const target = String(steamAppId);
 	const set = reverseSteamToShortcutMap.get(target);
 	if (set && set.size > 0) {

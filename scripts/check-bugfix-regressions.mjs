@@ -65,6 +65,7 @@ const communityViewTs = read('frontend/features/library/community-view.ts');
 const bpRuntime = read('frontend/features/big-picture/runtime.ts');
 const mappingsTs = read('frontend/core/mappings.ts');
 const existingWindows = read('frontend/runtime/existing-windows.ts');
+const shortcutRegistry = read('frontend/features/shortcuts/registry.ts');
 const frontendEntry = read('frontend/index.tsx');
 const browserProtectionBootstrap = read('frontend/steam/browser-protection-bootstrap.ts');
 const bpNativeInfoBridge = read('frontend/features/big-picture/native-info-bridge.ts');
@@ -442,13 +443,20 @@ assert(bpDetailsStyles.includes('.gdl-bp-video-play-btn') && bpDetailsStyles.inc
 // 1. filterMappingsForLocalShortcuts must never discard mappings when shortcuts registry has 0 items (e.g. cold start lock)
 assert(mappingsTs.includes('if (!snapshot || !snapshot.ids || snapshot.ids.size === 0) return { mappings: source, removed: [] }'), 'mappings filter guards against wiping mappings when shortcut snapshot is empty on startup');
 assert(mappingsTs.includes('const hasValidShortcutRegistry = Boolean(localShortcuts && localShortcuts.ids && localShortcuts.ids.size > 0)'), 'hydrateMappings checks valid non-empty shortcut registry before purging');
-// 2. existing-windows provides isRealSteamUiWindow and getCanonicalDesktopPopup
-assert(existingWindows.includes('isRealSteamUiWindow') && existingWindows.includes('getCanonicalDesktopPopup'), 'existing windows module exports real Steam UI validator and canonical desktop locator');
-// 3. resolveMainWindowDocument checks getCanonicalDesktopPopup to prioritize real SP Desktop document
-assert(runtimeApp.includes('getCanonicalDesktopPopup()') && runtimeApp.includes('if (!observedDocs.has(doc)) windowCreated(popup)'), 'resolveMainWindowDocument prioritizes canonical desktop popup and adopts it if unobserved');
-// 4. windowCreated includes retry timers for CEF about:blank cross-document navigation
+// 2. Browser localStorage is a warm cache only; backend verification is authoritative.
+assert(mappingsTs.includes('mappingSnapshotVerified') && mappingsTs.includes('authoritative empty snapshot') && !mappingsTs.includes('Recovered '), 'clean install cannot resurrect stale mappings from browser localStorage');
+assert(mappingsTs.includes('applyMappingsSnapshot(previous, previousVerified)') && mappingsTs.includes('rolls back an optimistic UI update'), 'failed mapping mutations roll back optimistic in-memory state to the backend/source snapshot');
+assert(shortcutRegistry.includes('isMappingSnapshotVerified()') && shortcutRegistry.includes('getCommittedShortcutSteamAppId'), 'settings and shortcut registry expose only backend-verified mappings as committed links');
+assert(libraryRuntime.includes('if (!isMappingSnapshotVerified())') && libraryRuntime.includes('await loadMappings().catch'), 'Library verifies mappings before deciding between linked rendering and the Vincular button');
+// 3. existing-windows provides strict Steam UI validation and a canonical SP Desktop locator.
+assert(existingWindows.includes("import { findSP } from '@steambrew/client'") && existingWindows.includes('getCanonicalDesktopPopup') && existingWindows.includes('findSP()'), 'existing windows prioritize g_PopupManager and can recover the actual SP render target when popup publication is late');
+assert(!existingWindows.includes(', #root') && !existingWindows.includes('onWindowCreated(window)'), 'clean-start adoption never mistakes Millennium background #root for SP Desktop');
+// 4. resolveMainWindowDocument must resolve wrapper shapes canonically and never fall back to arbitrary observed popup documents.
+assert(runtimeApp.includes('const { popupDoc: doc } = resolveSteamWindowContext(popup)') && runtimeApp.includes('isRealSteamUiWindow(mainWindowDoc.defaultView)'), 'main-window resolution supports BrowserWindow wrappers and validates cached desktop documents');
+assert(runtimeApp.includes('!popupName && isRealSteamUiWindow(popupWin)') && runtimeApp.includes('!isMainWindow && !isBigPictureWindow && !isOverlayWindow && !popupName'), 'windowCreated recognizes strictly validated unnamed SP Desktop while rejecting the Millennium background realm before observation');
+// 5. windowCreated includes retry timers for CEF about:blank cross-document navigation
 assert(runtimeApp.includes('setTimeout(() => { try { if (!popupWin.closed && popupWin.document?.body) windowCreated(context);') && runtimeApp.includes('isRealSteamUiWindow(popupWin)'), 'windowCreated uses timeout retries and validates real Steam UI window');
-// 5. app.tsx maintains a recurring adoption interval to guarantee late-mounting Steam popups are adopted
+// 6. app.tsx maintains a recurring adoption interval to guarantee late-mounting Steam popups are adopted
 assert(runtimeApp.includes('const adoptionInterval = setInterval(() => { try { adoptExistingSteamWindows(windowCreated); } catch {} }, 3000)') && runtimeApp.includes('clearInterval(adoptionInterval)'), 'app.tsx maintains recurring adoption interval and cleans up on dismount');
 
 console.log(`All ${passed} user-reported bug regression checks passed.`);

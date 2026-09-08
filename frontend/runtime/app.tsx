@@ -73,15 +73,15 @@ function disposeDocumentLifecycles(): void {
 function resolveMainWindowDocument(): Document | null {
 	try {
 		const popup = getCanonicalDesktopPopup();
-		const doc = popup?.m_popup?.window?.document || popup?.window?.document;
-		if (doc?.body && doc.defaultView && !doc.defaultView.closed && !steamUIModeService.isGamepadUI(doc)) {
+		const { popupDoc: doc } = resolveSteamWindowContext(popup);
+		if (doc?.body && doc.defaultView && !doc.defaultView.closed && isRealSteamUiWindow(doc.defaultView) && !steamUIModeService.isGamepadUI(doc)) {
 			if (!observedDocs.has(doc)) windowCreated(popup);
 			mainWindowDoc = doc; activeSteamDocuments.add(doc); return doc;
 		}
 	} catch {}
-	if (mainWindowDoc && !mainWindowDoc.defaultView?.closed && mainWindowDoc.body && !steamUIModeService.isGamepadUI(mainWindowDoc)) return mainWindowDoc;
+	if (mainWindowDoc && !mainWindowDoc.defaultView?.closed && mainWindowDoc.body && isRealSteamUiWindow(mainWindowDoc.defaultView) && !steamUIModeService.isGamepadUI(mainWindowDoc)) return mainWindowDoc;
 	for (const doc of activeSteamDocuments) {
-		if (doc?.body && doc.defaultView && !doc.defaultView.closed && !steamUIModeService.isGamepadUI(doc)) {
+		if (doc?.body && doc.defaultView && !doc.defaultView.closed && isRealSteamUiWindow(doc.defaultView) && !steamUIModeService.isGamepadUI(doc)) {
 			mainWindowDoc = doc; return doc;
 		}
 	}
@@ -118,16 +118,15 @@ function windowCreated(context: any): void {
 		setTimeout(() => { try { if (!popupWin.closed && popupWin.document?.body) windowCreated(context); } catch {} }, 400);
 		return;
 	}
-	if (observedDocs.has(popupDoc)) return;
-	observedDocs.add(popupDoc);
-	activeSteamDocuments.add(popupDoc);
 	const isBigPictureWindow = /SP BPM|SP Big Picture|Big Picture|Gamepad/i.test(`${popupName} ${popupTitle}`);
 	const isOverlayWindow = /desktopoverlay|SP Overlay|Game Overlay/i.test(`${popupName} ${popupTitle}`);
 	const isMainWindow = popupName === 'SP Desktop'
 		|| (popupName.includes('SP Desktop') && !popupName.includes('Popup') && !popupName.includes('Login'))
 		|| (!popupName && isRealSteamUiWindow(popupWin) && !isBigPictureWindow && !isOverlayWindow);
-	// Steam can turn SP Desktop into Big Picture in place; its captured window
-	// name stays unchanged, so classify the live document instead of the hook name.
+	const isPropertiesCandidate = /properties|propiedades|propriedades|propriétés|eigenschaften|proprietà|shortcut/i.test(popupTitle || popupDoc.title || '');
+	if (!isMainWindow && !isBigPictureWindow && !isOverlayWindow && !popupName && !isPropertiesCandidate) return;
+	if (observedDocs.has(popupDoc)) return;
+	observedDocs.add(popupDoc); activeSteamDocuments.add(popupDoc);
 	const isBigPictureSurface = (): boolean => {
 		if (isBigPictureWindow) return true;
 		if (steamUIModeService.isGamepadUI(popupDoc)) return true;

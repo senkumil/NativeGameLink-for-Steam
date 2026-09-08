@@ -1,7 +1,7 @@
 import type { CommunityContentItem, FriendCategories, NewsItem, SteamGameData } from '../../domain/types';
 import { backendLog, neutralizeSteamAppIdFileBackend } from '../../api/backend';
 import { getCachedGameData, getGameData, gameDataCache, gameDataLanguageKey } from '../../core/game-data';
-import { mappings, loadMappings, saveMappingChecked, shortcutMappingKey } from '../../core/mappings';
+import { isMappingSnapshotVerified, mappings, loadMappings, saveMappingChecked, shortcutMappingKey } from '../../core/mappings';
 import { perfMark, perfMeasure } from '../../core/perf';
 import { steamLanguageSync } from '../../steam/localization';
 import { installSteamNavigation, disposeSteamNavigation } from '../../steam/navigation';
@@ -242,7 +242,7 @@ export async function tryInjectLibraryData(doc: Document): Promise<void> {
 	navigationController.cancelCleanup(doc);
 	const notice = noticeInfo.element;
 	const gameTitle = noticeInfo.title;
-	if (Object.keys(mappings).length === 0) {
+	if (!isMappingSnapshotVerified()) {
 		await loadMappings().catch(() => {});
 	}
 	if (!isCurrentNavigation(doc, navigationGeneration)) {

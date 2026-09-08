@@ -12,18 +12,15 @@ Una vez vinculado, el juego deja de sentirse como un acceso directo vacío: reci
 
 ---
 
-## ✨ Novedades de la v4.0.0 y Funciones principales
+## ✨ Novedades de la v3.0.0 y Funciones principales
 
-- **Renovación Completa del Modo Big Picture y Arquitectura React TSX:** Migración integral de la vista de detalles, logros y barra de juego a React TSX con navegación espacial estricta para mando (BP-0 a BP-9), continuidad de columnas 2D y eliminación de saltos de elementos.
-- **Paridad 100% Nativa en Big Picture:** Navegación oficial entre pestañas con LB/RB, eliminación de pies artificiales en las carátulas y reproducción directa de vídeos comunitarios.
-- **Vinculación Masiva Ultra Rápida (Bulk Link):** Detección optimizada con alias rápidos (ej. `re4`) y descarga prioritaria de arte para juegos seleccionados.
-- **Sincronización Automática de Ilustraciones y Política Hero 2X:** Descarga y reparación automática de carátulas e iconos en el inicio, priorizando el fondo Base oficial con respaldo a 2X y SteamGridDB.
-- **Mayor Robustez y Protección Multiventana:** Adopción de ventanas emergentes de escritorio, protección contra bloqueos de foco, soporte para teclado virtual y 249 pruebas automáticas de regresión.
-- **Compatibilidad con Juegos Eliminados y Deslistados de Steam:** Soporte completo para títulos descatalogados o sin página de tienda activa en Steam.
-- **Gestión de Artworks desde Propiedades:** Selector visual dentro de la pestaña *Personalización* en Propiedades para previsualizar y aplicar fondos hero, logos, cápsulas e iconos en tiempo real.
+- **Compatibilidad con Juegos Eliminados y Deslistados de Steam:** Soporte completo para títulos descatalogados o sin página de tienda activa en Steam (como *Mortal Kombat Komplete Edition*, *Pro Evolution Soccer 2013*, etc.), resolviendo metadatos e ilustraciones oficiales sin bloqueos.
+- **Gestión y Cambio de Artworks Directamente desde Propiedades:** Selector visual dentro de la pestaña *Personalización* en Propiedades para previsualizar, cambiar y aplicar fondos hero, logos, cápsulas e iconos en tiempo real.
 - **Gestión de Logros en Juegos Oficiales de Steam:** Consulta, desbloquea, bloquea o edita el progreso de logros de tus juegos oficiales de Steam directamente desde la biblioteca.
-- **Simulación y Farmeo de Cromos de Steam (Trading Cards):** Colección interactiva de tarjetas en 3D con efecto holográfico, seguimiento de cromos restantes y progreso de insignias.
+- **Simulación y Farmeo de Cromos de Steam (Trading Cards):** Colección interactiva de tarjetas en 3D, seguimiento de cromos restantes, progreso de insignia y acceso directo a la comunidad.
 - **Simulador de Logros Simplificado para Juegos No-Steam:** Configuración ultra accesible por juego (100% completado, progreso simulado o manual) con compatibilidad de archivos locales.
+- **Detección Automática Inteligente:** Evalúa evidencias reales de ejecutables, rutas de instalación y niveles de confianza con previsualización de carátulas.
+- **Integración con el Modo Big Picture:** Renderizado oficial de fondos hero, logos, navegación con mando y tiempo de juego sincronizado de forma nativa.
 
 ---
 

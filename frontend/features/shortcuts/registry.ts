@@ -1,5 +1,5 @@
 import { listShortcutsBackend, backendLog } from '../../api/backend';
-import { findMappingByExe, findMappingForTitle, mappings, shortcutMappingKey } from '../../core/mappings';
+import { findMappingByExe, findMappingForTitle, isMappingSnapshotVerified, mappings, shortcutMappingKey } from '../../core/mappings';
 import { getSteamAppStore, readShortcutOverviewField, replaceFallbackShortcutApps, shortcutExecutableIdentity, shortcutPathBasename, toSignedShortcutAppId } from '../../steam/shortcuts';
 
 export interface ShortcutRecord {
@@ -120,6 +120,7 @@ function shortcutLaunchFingerprint(app: any): string {
 
 /** Reuse a mapping only for an exact duplicate launch definition. */
 export function findMappingForDuplicateShortcut(shortcutAppId: number): string | null {
+	if (!isMappingSnapshotVerified()) return null;
 	const records = getAllShortcutRecords();
 	const target = records.find(record => record.id === shortcutAppId);
 	const fingerprint = shortcutLaunchFingerprint(target?.app);
@@ -133,10 +134,11 @@ export function findMappingForDuplicateShortcut(shortcutAppId: number): string |
 }
 
 export function shortcutAlreadyLinked(id: number): boolean {
-	return /^\d+$/.test(String(mappings[shortcutMappingKey(id)] || ''));
+	return isMappingSnapshotVerified() && /^\d+$/.test(String(mappings[shortcutMappingKey(id)] || ''));
 }
 
 export function getCommittedShortcutSteamAppId(id: number): string | null {
+	if (!isMappingSnapshotVerified()) return null;
 	const value = String(mappings[shortcutMappingKey(id)] || '').trim();
 	return /^\d+$/.test(value) ? value : null;
 }
@@ -148,6 +150,7 @@ export function findMappingForShortcut(
 	title?: string | null,
 	exePath?: string | null,
 ): string | null {
+	if (!isMappingSnapshotVerified()) return null;
 	const numId = normalizedShortcutAppId(shortcutAppId);
 	if (numId) {
 		const signedId = toSignedShortcutAppId(numId);

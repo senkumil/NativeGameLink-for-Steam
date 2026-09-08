@@ -25,13 +25,14 @@ export async function imageUrlToBase64(url: string): Promise<string | null> {
 		reader.onerror = () => resolve(null);
 		reader.readAsDataURL(blob);
 	});
-	const direct = await fetchWithTimeout(url);
-	if (direct.ok && direct.blob) {
-		const dataUrl = await blobToDataUrl(direct.blob);
-		if (dataUrl) return dataUrl;
-	}
-	if (direct.status >= 400 && direct.status < 500) return null;
-	if (!url.includes('steamstatic.com') && !url.includes('steampowered.com')) {
+	const isSteamCdn = url.includes('steamstatic.com') || url.includes('steampowered.com');
+	if (!isSteamCdn) {
+		const direct = await fetchWithTimeout(url);
+		if (direct.ok && direct.blob) {
+			const dataUrl = await blobToDataUrl(direct.blob);
+			if (dataUrl) return dataUrl;
+		}
+		if (direct.status >= 400 && direct.status < 500) return null;
 		try {
 			const proxied = 'https://wsrv.nl/?url=' + encodeURIComponent(url.replace(/^https?:\/\//, '')) + '&output=png';
 			const fallback = await fetchWithTimeout(proxied, 8000);
@@ -41,7 +42,7 @@ export async function imageUrlToBase64(url: string): Promise<string | null> {
 			}
 		} catch {}
 	}
-	// Steam CEF may reject external hosts due to CORS. Use backend as secondary fallback.
+	// Steam CEF may reject external hosts due to CORS. Use backend as authoritative loader.
 	try {
 		const raw = await fetchArtworkImageBackend({ request_json: JSON.stringify({ url }) });
 		let value: any = raw;

@@ -1,3 +1,31 @@
+## v4.0.0 - Big Picture Overhaul, Gamepad Navigation Bridge, Instant Bulk Linking & Native Parity (2026-09-08)
+
+- **Complete Big Picture Mode Overhaul & React TSX Architecture**:
+  - Migrates Big Picture details, achievements, and playbar controls to a modern React TSX architecture (`NativeBigPictureDetails`, `NativeBigPictureAchievements`, `PlaybarControllerIcons`).
+  - Implements the Steam Gamepad Bridge architecture (BP-0 to BP-9) with strict spatial navigation, flawless 2D grid column continuity, and zero element skipping.
+  - Eliminates duplicate navigation sound effects on tab wrapping and element focus.
+  - Restores 100% native Steam tab bar navigation without artificial loops or tab hiding; loops library tabs on LB/RB and auto-redirects from hidden non-Steam tabs to prevent black screens.
+  - Purges over 500 lines of dead CSS and intrusive element hiding to preserve the clean, native Steam Big Picture interface.
+  - Restores clean native Steam artwork on library capsules by removing artificial achievement footers.
+  - Connects community videos and guides to the Big Picture React modal viewer with embedded YouTube playback and controller navigation.
+
+- **High-Performance Bulk Linking & Enhanced Shortcut Detection**:
+  - Dramatically speeds up bulk linking with responsive background polling and fast alias matching (e.g., `re4` for Resident Evil 4).
+  - Prioritizes artwork downloads during linking and fast-tracks selected games for immediate visual feedback.
+  - Introduces top-candidate score policy runtime validation (minimum 58% confidence floor, highest percentage resolution).
+
+- **Unified Artwork Management & Asset Synchronization**:
+  - Automatically downloads and synchronizes missing capsules, logos, heroes, and icons on startup, in Big Picture, and after bulk linking.
+  - Implements the Hero Base First + 2X Fallback policy (canonical Base Hero prioritized over 2X, official Steam assets prioritized over SteamGridDB).
+  - Upgrades wide library capsules from low-resolution store headers (460x215) to crisp 920x430 assets.
+  - Properly unlinks shortcuts by clearing and removing residual custom icons upon both bulk and single unlinking.
+
+- **Desktop Library & Steam UI Hardening**:
+  - Fixes squished toggle buttons in Settings by enforcing `flex-shrink: 0` and minimum width constraints.
+  - Hardens multi-window detection with canonical desktop window locator, background adoption intervals, and browser protection against webview focus traps.
+  - Adds virtual keyboard integration for Big Picture text input fields.
+  - Expands test coverage to 249 automated regression checks, verifying clean-install portability, factory reset invariants, and community artwork parity.
+
 ## v3.0.1 - Clean-install portability and recovery hardening (2026-09-02)
 
 - Moves mutable mappings, achievement settings and playtime history to a per-user data directory instead of the plugin installation folder.

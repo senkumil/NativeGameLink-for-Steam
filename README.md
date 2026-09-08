@@ -12,14 +12,18 @@ Once linked, an external game no longer feels like an empty shortcut: it receive
 
 ---
 
-## ✨ Highlights & What's New in v3.0.0
+## ✨ Highlights & What's New in v4.0.0
 
-- **Delisted & Removed Steam Games Support:** Full support for delisted, retired, or unlisted Steam games (e.g. *Mortal Kombat Komplete Edition*, *Pro Evolution Soccer 2013*) with resilient metadata and official artwork resolution.
+- **Big Picture Mode Overhaul & React TSX Architecture:** Complete migration of Big Picture game details, achievements, and playbars to React TSX with strict gamepad spatial navigation (BP-0 to BP-9), column continuity, and zero element skipping.
+- **Native Steam Parity in Big Picture:** 100% native Steam tab bar navigation, LB/RB looping, native capsule artwork without artificial footers, and direct community video playback.
+- **Ultra-Fast Bulk Linking:** High-performance detection with alias fast-paths (e.g. `re4`) and prioritized artwork downloads.
+- **Artwork Synchronization & Hero 2X Policy:** Automatic cover and icon recovery on startup and linking, with canonical Hero Base first and 2X fallback.
+- **Hardened Desktop & Multi-Window Handling:** Desktop popup adoption, focus trap protection, virtual keyboard support, and 249 automated regression tests.
+- **Delisted & Removed Steam Games Support:** Resilient metadata and official asset linking for retired or unlisted titles without an active Steam store page.
 - **Direct Artwork Management in Game Properties:** Choose, preview, and apply custom hero backgrounds, logos, capsules, and icons directly from the *Customization* tab in Properties.
-- **Steam Achievement Management Tools:** Inspect, unlock, lock, or modify achievement progress for your official Steam games directly from your library interface.
-- **Steam Trading Card Farming & Simulation:** Interactive trading card showcase with 3D animated cards, foil holographic reflection, badge level progression, and remaining card tracking.
+- **Steam Achievement Management Tools:** Inspect, unlock, lock, or modify achievement progress for official Steam games directly from your library interface.
+- **Steam Trading Card Farming & Simulation:** Interactive trading card showcase with 3D animated cards, foil holographic reflection, and badge progression tracking.
 - **Simplified Non-Steam Achievement Simulation:** Easily configure achievement simulation per-game (100% instant completion, progressive simulation, or manual tracking) with local file compatibility.
-- **Big Picture Mode Integration:** Renders official hero backgrounds, logos, gamepad navigation, and synced playtime natively in Big Picture mode.
 
 ---
 

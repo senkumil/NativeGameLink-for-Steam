@@ -116,7 +116,9 @@ class SteamUIModeService {
 			if (doc.body.classList.contains('GamepadUI') || doc.body.classList.contains('gamepadui')) return true;
 		}
 		if (typeof doc.querySelector === 'function') {
-			if (doc.querySelector('.GamepadUI, .gamepadui, [class*="GamepadUI"], [class*="gamepadui"]')) return true;
+			// Desktop's Big Picture entry button is named GamepadUIToggle. Only
+			// complete surface class tokens establish that gamepad UI is active.
+			if (doc.querySelector('.GamepadUI, .gamepadui')) return true;
 		}
 		return false;
 	}

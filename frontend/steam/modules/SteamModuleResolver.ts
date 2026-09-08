@@ -13,14 +13,14 @@ const cache: SteamModuleResolverCache = {
 
 /** Find a Steam Store from the global window or PopupManager */
 export function getSteamStore<T = any>(storeName: string): T | null {
-	if (cache.stores.has(storeName)) return cache.stores.get(storeName);
+	// Steam can replace stores when rebuilding a CEF surface. Re-resolve the
+	// live owner instead of keeping a detached store across mode transitions.
 
 	const win = typeof window !== 'undefined' ? (window as any) : null;
 	if (!win) return null;
 
 	// 1. Direct window stores
 	if (win[storeName]) {
-		cache.stores.set(storeName, win[storeName]);
 		return win[storeName];
 	}
 
@@ -28,7 +28,6 @@ export function getSteamStore<T = any>(storeName: string): T | null {
 	const lower = storeName.toLowerCase();
 	for (const key of Object.keys(win)) {
 		if (key.toLowerCase() === lower && typeof win[key] === 'object' && win[key] !== null) {
-			cache.stores.set(storeName, win[key]);
 			return win[key];
 		}
 	}
@@ -40,8 +39,7 @@ export function getSteamStore<T = any>(storeName: string): T | null {
 			for (const popupName of ['SP Desktop_uid0', 'SP Desktop', 'SP BPM_uid0', 'SP BPM']) {
 				const p = pm.GetExistingPopup?.(popupName) || pm.m_mapPopups?.get?.(popupName);
 				const pWin = p?.m_popup?.window || p?.window || p?.m_popup || p;
-				if (pWin && pWin[storeName]) {
-					cache.stores.set(storeName, pWin[storeName]);
+				if (pWin && !pWin.closed && pWin[storeName]) {
 					return pWin[storeName];
 				}
 			}

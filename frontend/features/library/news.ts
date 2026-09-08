@@ -39,7 +39,7 @@ async function historicalNewsMode(steamAppId: string, language: string, metadata
 }
 
 function newsCacheKey(steamAppId: string, language: string, historical: boolean): string {
-	return `${historical ? 'events18_removed' : 'events18_standard'}_${language}-en_${steamAppId}`;
+	return `${historical ? 'events19_removed' : 'events19_standard'}_${language}-en_${steamAppId}`;
 }
 
 function steamReleaseTimestamp(value: unknown): number | null {
@@ -231,16 +231,17 @@ export async function getNews(steamAppId: string, requestedLanguage?: string, me
 	// feed. Partner events provide native event types/images; announcements
 	// fill older pages so the Load More control has a real chronology.
 	const loaded = await newsRequests.get(cacheKey, async () => { try {
-		const settled = async (request: Promise<string>, timeoutMs = 4_500): Promise<{ raw: string; ok: boolean }> => {
+		const settled = async (request: Promise<string>, timeoutMs = 30_000): Promise<{ raw: string; ok: boolean }> => {
 			const safeRequest = request
 				.then(raw => ({ raw, ok: true }))
 				.catch(() => ({ raw: '{"items":[]}', ok: false }));
-			return await Promise.race([
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			try { return await Promise.race([
 				safeRequest,
-				new Promise<{ raw: string; ok: boolean }>(resolve => setTimeout(
+				new Promise<{ raw: string; ok: boolean }>(resolve => { timer = setTimeout(
 					() => resolve({ raw: '{"items":[]}', ok: false }), timeoutMs,
-				)),
-			]);
+				); }),
+			]); } finally { clearTimeout(timer); }
 		};
 		const emptyResult = Promise.resolve({ raw: '{"items":[]}', ok: true });
 		// Removed games commonly have no News Hub/Partner Events payload. Their
@@ -263,6 +264,7 @@ export async function getNews(steamAppId: string, requestedLanguage?: string, me
 		const hadTransportFailure = !preferredResult.ok || !englishResult.ok
 			|| !announcementsResult.ok || !englishAnnouncementsResult.ok
 			|| preferred?.transient_error === true || english?.transient_error === true
+			|| announcements?.transient_error === true || englishAnnouncements?.transient_error === true
 			|| Boolean(announcements?.error) || Boolean(englishAnnouncements?.error);
 		const partnerItems = [
 			...(Array.isArray(preferred.items) ? preferred.items : []),
@@ -272,16 +274,15 @@ export async function getNews(steamAppId: string, requestedLanguage?: string, me
 			...(Array.isArray(announcements.items) ? announcements.items : []),
 			...(Array.isArray(englishAnnouncements.items) ? englishAnnouncements.items : []),
 		].filter(item => {
-			if (item?.is_external_url === true) return false;
 			const feedname = String(item?.feedname || '').toLowerCase();
 			if (feedname && feedname !== 'steam_community_announcements' && feedname !== 'steam_store_release_metadata') {
 				return false;
 			}
-			const url = String(item?.url || '').toLowerCase();
-			if (url && !url.includes('steampowered.com') && !url.includes('steamcommunity.com')) {
-				return false;
-			}
-			return true;
+			try {
+				const url = new URL(String(item?.url || ''));
+				return /^https?:$/.test(url.protocol) && ['steampowered.com', 'steamcommunity.com']
+					.some(host => url.hostname === host || url.hostname.endsWith('.' + host));
+			} catch { return false; }
 		});
 		const partnerEventsUnavailable = preferred?.unavailable === true
 			&& (preferredLanguage === 'english' || english?.unavailable === true);
@@ -337,7 +338,7 @@ export async function getNews(steamAppId: string, requestedLanguage?: string, me
 		}
 		// A retired AppID may no longer have a Store News Hub. Cache that expected
 		// empty state so returning to the game does not call the dead endpoint again.
-		if (partnerEventsUnavailable) {
+		if (partnerEventsUnavailable && !hadTransportFailure) {
 			const merged = ensureNewsFeed(steamAppId, preferredLanguage, compactNewsItems(mergeSupplementalPatchNotes(steamAppId, [])), metadata);
 			cacheSet(cacheKey, merged);
 			return merged;

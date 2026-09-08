@@ -1,3 +1,4 @@
+import { applyLogoPosition } from './artwork-logo-position';
 import { backendLog, saveShortcutArtworkBackend, saveShortcutIconBackend } from '../../api/backend';
 import {
 	imageUrlToBase64,
@@ -133,6 +134,7 @@ export async function applyCommunityArtworkSelection(
 	if (complete) {
 		saveCommunityArtworkSelection(targetAppId, steamAppId, selection);
 		recordUserArtworkApplication(targetAppId, steamAppId, successfulSlots, selection);
+		if (targetAppId >= 2147483648 && (selection.logo || selection.hero)) await applyLogoPosition(targetAppId, steamAppId, null, false, 'BottomLeft', 'community', () => true);
 		try { window.dispatchEvent(new CustomEvent('gdl:artwork-changed', { detail: { shortcutAppId: targetAppId, steamAppId, user_action: true } })); } catch {}
 	}
 	return { complete, slots: successfulSlots, missing: missingSlots, communitySlots: complete ? [...chosenSlots] : [] };

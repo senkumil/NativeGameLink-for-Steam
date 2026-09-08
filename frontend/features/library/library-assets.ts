@@ -36,7 +36,7 @@ function requestKey(appId: string, language = steamLanguageSync() || 'english'):
 	return `${appId}|${String(language || 'english').toLowerCase()}`;
 }
 function storageKey(appId: string, language: string): string {
-	return `library_assets_v4_${language}_${appId}`;
+	return `library_assets_v5_${language}_${appId}`;
 }
 
 function usableLibraryAssetSnapshot(data: SteamLibraryAssets | null | undefined): data is SteamLibraryAssets {

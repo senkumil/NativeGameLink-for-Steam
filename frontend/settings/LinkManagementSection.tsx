@@ -34,6 +34,9 @@ export interface LinkManagementSectionProps {
 function bulkLinkReasonLabel(reason: string | undefined): string {
 	switch (String(reason || '')) {
 		case 'ambiguous_or_low_confidence':
+		case 'identity_needs_review':
+		case 'close_candidates_need_review':
+		case 'shortcut_identity_ambiguous':
 		case 'ambiguous_close_runner_up':
 		case 'unresolved_identity_collision':
 		case 'unverified_alias':
@@ -41,6 +44,8 @@ function bulkLinkReasonLabel(reason: string | undefined): string {
 		case 'no_candidates':
 			return gdlText('bulk_link_reason_no_candidates', 'No Steam candidates were found.');
 		case 'insufficient_confidence':
+		case 'below_bulk_score_threshold':
+		case 'insufficient_identity_evidence':
 		case 'unverified_steam_appid_file':
 		case 'folder_only_insufficient':
 		case 'generic_executable_insufficient':

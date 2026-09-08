@@ -26,15 +26,23 @@ local function fetch_news_json(appid, lang)
     end
     local ok, body = pcall(cjson.decode, res.body)
     local items = ok and body and body.appnews and body.appnews.newsitems or nil
-    if type(items) ~= "table" then return {}, false end
+    if type(items) ~= "table" then return {}, true end
     local filtered = {}
     for _, it in ipairs(items) do
-        local is_ext = it.is_external_url == true or it.is_external_url == 1
+        -- Steam's own announcements are also flagged is_external_url=true.
+        -- Identify the publisher by feed and destination instead.
+        local host = tostring(it.url or ""):lower():match("^https?://([^/%?#]+)") or ""
+        if host == "steamstore-a.akamaihd.net" and tostring(it.url):match("/news/externalpost/steam_community_announcements/%d+") then
+            it.url = tostring(it.url):gsub("^https?://[^/]+", "https://store.steampowered.com")
+            host = "store.steampowered.com"
+        end
+        local official_url = host == "steampowered.com" or host:match("^[a-z0-9.-]+%.steampowered%.com$")
+            or host == "steamcommunity.com" or host:match("^[a-z0-9.-]+%.steamcommunity%.com$")
         local feedname = tostring(it.feedname or "")
         local is_steam = feedname == "steam_community_announcements"
             or feedname == "steam_store_release_metadata"
             or feedname == ""
-        if not is_ext and is_steam then
+        if official_url and is_steam then
             table.insert(filtered, it)
         end
     end

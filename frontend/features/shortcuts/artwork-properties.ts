@@ -1,3 +1,4 @@
+import { openLogoEditor } from './logo-editor';
 import { backendLog, fetchCommunityArtworkCandidatesBackend } from '../../api/backend';
 import { getPreferences, steamGridDbApiKeyCandidates } from '../../core/preferences';
 import { escapeHtml } from '../../core/text';
@@ -293,6 +294,12 @@ export function bindShortcutArtworkSettings(context: ShortcutArtworkSettingsCont
 	const openBtn = context.section.querySelector<HTMLButtonElement>('.gdl-game-artwork-open');
 	const resetBtn = context.section.querySelector<HTMLButtonElement>('.gdl-game-artwork-reset');
 	const statusEl = context.section.querySelector<HTMLElement>('.gdl-game-artwork-status');
+	const logoButton = context.doc.createElement('button');
+	logoButton.textContent = gdlText('logo_editor', 'Adjust logo');
+	logoButton.type = 'button';
+	logoButton.style.cssText = 'padding:8px 14px;background:#3d4450;border:0;color:#eee;cursor:pointer;';
+	logoButton.onclick = () => { const id = context.shortcutAppId(); if (id) void openLogoEditor(context.doc, id, context.steamAppId()); };
+	if ((context.shortcutAppId() || 0) >= 2147483648) openBtn?.parentElement?.append(logoButton);
 	let eligibilityAppId = '';
 	if (!container || !openBtn || !resetBtn || !statusEl) return { refresh: async () => {} };
 	// This section can be mounted inside Steam's native clickable artwork rows.

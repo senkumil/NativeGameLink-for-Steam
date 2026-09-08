@@ -1,6 +1,6 @@
 import { backendLog } from '../../api/backend';
 import { getMappedShortcuts } from '../../steam/shortcuts';
-import { applyOfficialShortcutIcon, artworkAlreadySaved, spoofArtwork } from './artwork';
+import { applyOfficialShortcutIcon, artworkAlreadySaved, isLogoPositionVerified, spoofArtwork } from './artwork';
 import { prioritizePendingLinkJob } from '../shortcuts/link-job-queue';
 import { setPriorityShortcut } from '../shortcuts/link-job-priority';
 
@@ -12,10 +12,10 @@ export function prioritizeShortcutArtwork(shortcutId: number, steamAppId: string
 	if (!shortcutId || !steamAppId || !/^\d+$/.test(steamAppId)) return;
 	priorityShortcutId = shortcutId;
 	const key = `${shortcutId}:${steamAppId}`;
-	if (artworkAlreadySaved(shortcutId, steamAppId) || priorityArtworkInFlight.has(key)) return;
+	if (priorityArtworkInFlight.has(key)) return;
 	priorityArtworkInFlight.add(key);
 	void Promise.allSettled([
-		spoofArtwork(shortcutId, steamAppId, title || '', false),
+		artworkAlreadySaved(shortcutId, steamAppId) && isLogoPositionVerified(shortcutId, steamAppId) ? Promise.resolve() : spoofArtwork(shortcutId, steamAppId, title || '', false),
 		applyOfficialShortcutIcon(shortcutId, steamAppId, false),
 	]).then(results => {
 		for (const [index, result] of results.entries()) {
@@ -53,15 +53,16 @@ export async function syncMissingArtworkForMappedShortcuts(): Promise<void> {
 		for (const shortcut of shortcuts) {
 			const steamAppId = String(shortcut.steamAppId || '').trim();
 			if (!steamAppId || !/^\d+$/.test(steamAppId)) continue;
-			if (!artworkAlreadySaved(shortcut.id, steamAppId)) {
+			if (!artworkAlreadySaved(shortcut.id, steamAppId) || !isLogoPositionVerified(shortcut.id, steamAppId)) {
 				const title = shortcut.title || '';
 				try {
 					await spoofArtwork(shortcut.id, steamAppId, title, false);
-					await applyOfficialShortcutIcon(shortcut.id, steamAppId, false);
 				} catch (error) {
 					backendLog(`Sync missing artwork failed for ${shortcut.id} (${title}): ${error}`);
 				}
 			}
+			try { await applyOfficialShortcutIcon(shortcut.id, steamAppId, false); }
+			catch (error) { backendLog(`Sync missing icon failed for ${shortcut.id}: ${error}`); }
 		}
 	} finally {
 		syncArtworkInProgress = false;

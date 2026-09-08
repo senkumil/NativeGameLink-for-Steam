@@ -3,7 +3,7 @@ import { backendLog, neutralizeSteamAppIdFileBackend } from '../../api/backend';
 import { getCanonicalGameData, getGameData } from '../../core/game-data';
 import { shortcutMappingKey, updateMappingsChecked } from '../../core/mappings';
 import { gdlText } from '../../steam/localization';
-import { findActiveShortcutAppId, findShortcutAppIdByName, getShortcutAppById, readShortcutOverviewField, shortcutExecutableIdentity } from '../../steam/shortcuts';
+import { getShortcutAppById, readShortcutOverviewField, shortcutExecutableIdentity } from '../../steam/shortcuts';
 import {
 	applyOfficialShortcutIcon, getModernLibraryAssets, invalidateLibraryAssetCaches,
 	refreshModernLibraryAssets, reserveShortcutArtworkTarget, resolveShortcutIdAfterRename, spoofArtwork, type ArtworkApplyResult,
@@ -67,9 +67,8 @@ export class LinkOrchestrator {
 		canonicalName: string,
 	): Promise<number> {
 		tx.phase = 'resolving_identity';
-		const doc = options.doc;
 		const title = options.title;
-		const initialId = options.shortcutAppId || tx.initialShortcutAppId;
+		const initialId = options.shortcutAppId || 0;
 		const executableHint = options.shortcutExecutable || options.trackingExecutable || '';
 
 		const waits = [0, 100, 250, 500, 900, 1500, 2500];
@@ -87,53 +86,25 @@ export class LinkOrchestrator {
 					return exact;
 				}
 			}
-			const routed = doc ? Number(findActiveShortcutAppId(doc, title) || 0) : 0;
-			if (routed >= 2147483648 && getShortcutAppById(routed)) {
-				tx.resolvedShortcutAppId = routed;
-				return routed;
-			}
+			const records = getAllShortcutRecords().filter(record => record.id >= 2147483648);
 			if (expectedExecutable) {
-				const executableMatches = getAllShortcutRecords().filter(record => shortcutExecutableIdentity(readShortcutOverviewField(
+				const matches = records.filter(record => shortcutExecutableIdentity(readShortcutOverviewField(
 					record.app, 'strShortcutExe', 'm_strShortcutExe', 'shortcut_exe', 'strExePath',
 				)) === expectedExecutable);
-				if (executableMatches.length === 1) {
-					tx.resolvedShortcutAppId = executableMatches[0].id;
-					return executableMatches[0].id;
+				if (matches.length > 1) throw new Error('shortcut_identity_ambiguous');
+				if (matches.length === 1) {
+					tx.resolvedShortcutAppId = matches[0].id;
+					return matches[0].id;
 				}
-				const regenerated = executableMatches.find(record => record.id !== Number(initialId || 0)
-					&& String(record.title || '').trim() === canonicalName);
-				if (regenerated) {
-					tx.resolvedShortcutAppId = regenerated.id;
-					return regenerated.id;
-				}
-				if (executableMatches.length > 0) {
-					tx.resolvedShortcutAppId = executableMatches[0].id;
-					return executableMatches[0].id;
-				}
+				continue; // Never substitute a different executable just because the title matches.
 			}
-			const byName = findShortcutAppIdByName(title);
-			if (byName && getShortcutAppById(byName)) {
-				tx.resolvedShortcutAppId = byName;
-				return byName;
+			const names = new Set([title, canonicalName].map(value => String(value || '').trim().toLowerCase()).filter(Boolean));
+			const matches = records.filter(record => names.has(String(record.title || '').trim().toLowerCase()));
+			if (matches.length > 1) throw new Error('shortcut_identity_ambiguous');
+			if (matches.length === 1) {
+				tx.resolvedShortcutAppId = matches[0].id;
+				return matches[0].id;
 			}
-		}
-
-		if (initialId) {
-			const exact = Number(initialId);
-			if (Number.isFinite(exact) && exact >= 2147483648) {
-				tx.resolvedShortcutAppId = exact;
-				return exact;
-			}
-		}
-		const routedFallback = doc ? Number(findActiveShortcutAppId(doc, title) || 0) : 0;
-		if (routedFallback >= 2147483648) {
-			tx.resolvedShortcutAppId = routedFallback;
-			return routedFallback;
-		}
-		const byNameFallback = findShortcutAppIdByName(title);
-		if (byNameFallback && byNameFallback >= 2147483648) {
-			tx.resolvedShortcutAppId = byNameFallback;
-			return byNameFallback;
 		}
 
 		throw new Error('shortcut_not_ready');
@@ -402,7 +373,8 @@ export class LinkOrchestrator {
 	): Promise<ShortcutLinkResult> {
 		const steamAppId = String(options.steamAppId || '').trim();
 		const title = String(options.title || '').trim();
-		if (!/^\d+$/.test(steamAppId)) return { ok: false, error: 'invalid_appid' };
+		if (!/^\d+$/.test(steamAppId) || Number(steamAppId) <= 0 || Number(steamAppId) >= 2147483648) return { ok: false, error: 'invalid_appid' };
+		if (options.shortcutAppId != null && Number(options.shortcutAppId) > 0 && Number(options.shortcutAppId) < 2147483648) return { ok: false, error: 'refusing_to_modify_native_steam_app' };
 
 		const initialId = Number(options.shortcutAppId || 0);
 		const tx = createLinkTransaction(initialId >= 2147483648 ? initialId : 2147483648, steamAppId);
@@ -504,7 +476,9 @@ export class LinkOrchestrator {
 			void clearLinkedGameNote(identityResult.officialName || title).catch((): void => {});
 
 			// Step 7: Publish state
-			let finalMessage = gdlText('linked_official', '✓ Linked to "{name}". Official name, icon and artwork updated.', { name: identityResult.officialName });
+			let finalMessage = !assetResult.artwork.complete || !assetResult.iconApplied
+				? gdlText('linked_resources_pending', 'Linked to “{name}”. Some images or the icon are still pending.', { name: identityResult.officialName })
+				: gdlText('linked_official', '✓ Linked to "{name}". Official name, icon and artwork updated.', { name: identityResult.officialName });
 			if (identityResult.trackingApplied) finalMessage += gdlText('tracking_executable_updated', ' Steam will now launch the long-running game executable so playtime can be tracked.');
 			if (shouldAutoApplyNoLauncher(steamAppId) && identityResult.noLauncherConfigured) finalMessage += ' -nolauncher.';
 			onStatus(finalMessage, '#5ba32b');
@@ -534,7 +508,7 @@ export class LinkOrchestrator {
 			tx.phase = 'failed';
 			tx.error = String(e);
 			backendLog('LinkOrchestrator error: ' + e);
-			const error = String(e).includes('shortcut_rename_pending') ? 'shortcut_rename_pending' : String(e);
+			const error = e instanceof Error ? e.message : String(e).replace(/^Error:\s*/, '');
 			onStatus(error === 'shortcut_rename_pending'
 				? gdlText('shortcut_rename_pending', 'Steam is updating the shortcut identity. NativeGameLink will finish the link in the background without using the previous entry.')
 				: gdlText('save_failed', 'Could not complete the link. It remains unlinked and can be retried.'),

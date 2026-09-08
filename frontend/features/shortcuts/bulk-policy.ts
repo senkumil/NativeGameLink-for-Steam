@@ -6,18 +6,9 @@ export interface BulkEvaluationResult {
 	reason: string;
 }
 
-/**
- * Bulk-link policy requested by the user: maximize recall and always choose the
- * highest-scoring game candidate once it reaches the minimum percentage.
- *
- * Important semantics:
- * - The detector/ranker is responsible for ordering candidates.
- * - Bulk does NOT require extra corroboration, confidence tier, validation_state,
- *   runner-up margin, alias confirmation, year/remake proof, or remembered AppID.
- * - Non-game results and malformed AppIDs are ignored before ranking.
- * - Ties are stable: the first candidate returned by the detector wins.
- */
-export const BULK_TOP_SCORE_THRESHOLD = 58;
+/** Automatic bulk linking requires a strong, distinct identity. Uncertain
+ * candidates remain available for the user's manual confirmation. */
+export const BULK_TOP_SCORE_THRESHOLD = 90;
 
 export function evaluateBulkCandidate(
 	_context: ShortcutDetectionContext,
@@ -32,6 +23,7 @@ export function evaluateBulkCandidate(
 		.map((candidate, index) => ({ candidate, index, score: Number(candidate?.score) }))
 		.filter(({ candidate, score }) => {
 			if (!candidate || !/^\d+$/.test(String(candidate.appid || ''))) return false;
+			if (Number(candidate.appid) <= 0 || Number(candidate.appid) >= 2147483648) return false;
 			if (!Number.isFinite(score)) return false;
 			const reasons = candidate.reasons || [];
 			const negativeReasons = candidate.negative_reasons || [];
@@ -48,5 +40,22 @@ export function evaluateBulkCandidate(
 		return { candidate: null, safe: false, reason: 'below_bulk_score_threshold' };
 	}
 
-	return { candidate: top.candidate, safe: true, reason: 'top_score_threshold' };
+	const candidate = top.candidate;
+	const signals = [...(candidate.reasons || []), ...(candidate.negative_reasons || []), ...(candidate.warnings || [])];
+	if (candidate.ambiguous || signals.some(signal => /mismatch|requires_confirmation|identity_conflict/.test(signal))) {
+		return { candidate: null, safe: false, reason: 'identity_needs_review' };
+	}
+	const proof = candidate.evidence_tier === 'proof';
+	if (candidate.identity_collision && !(proof && signals.includes('year_match'))) {
+		return { candidate: null, safe: false, reason: 'identity_needs_review' };
+	}
+	const runnerUp = eligible.find(item => item.candidate.appid !== candidate.appid);
+	if (runnerUp && top.score - runnerUp.score < 15) {
+		return { candidate: null, safe: false, reason: 'close_candidates_need_review' };
+	}
+	if (!['high', 'exact'].includes(candidate.confidence)
+		|| (!proof && (candidate.evidence_tier !== 'strong' || candidate.validation_state !== 'confirmed'))) {
+		return { candidate: null, safe: false, reason: 'insufficient_identity_evidence' };
+	}
+	return { candidate, safe: true, reason: 'verified_identity' };
 }

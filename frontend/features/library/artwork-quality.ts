@@ -19,14 +19,21 @@ export async function automaticArtworkMeetsSlotQuality(dataUrl: string, imageTyp
 	if (!spec || !dataUrl) return false;
 	return await new Promise(resolve => {
 		const image = new Image();
+		const finish = (accepted: boolean): void => {
+			clearTimeout(timer);
+			image.onload = null;
+			image.onerror = null;
+			resolve(accepted);
+		};
+		const timer = setTimeout(() => finish(false), 10_000);
 		image.onload = () => {
 			const width = Number(image.naturalWidth || image.width || 0);
 			const height = Number(image.naturalHeight || image.height || 0);
 			const ratio = height > 0 ? width / height : 0;
-			resolve(width >= spec.minWidth && height >= spec.minHeight
+			finish(width >= spec.minWidth && height >= spec.minHeight
 				&& ratio >= spec.minRatio && ratio <= spec.maxRatio);
 		};
-		image.onerror = () => resolve(false);
+		image.onerror = () => finish(false);
 		image.src = dataUrl;
 	});
 }

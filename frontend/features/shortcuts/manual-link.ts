@@ -2,6 +2,7 @@ import type { ShortcutDetectionCandidate, ShortcutDetectionContext, ShortcutDete
 import { backendLog } from '../../api/backend';
 import { getGameData } from '../../core/game-data';
 import { escapeHtml, normalizeTitle } from '../../core/text';
+import { mountModalDialog, wirePasteButton } from '../../core/modal';
 import { gdlText } from '../../steam/localization';
 import { findActiveShortcutAppId, SHORTCUT_THRESHOLD, shortcutPathBasename } from '../../steam/shortcuts';
 import { shortcutRuntimeHost } from './host';
@@ -85,12 +86,12 @@ export function showShortcutManualLinkModal(
 	const executableSummary = hasTrackingRecommendation
 		? gdlText('selected_executable', 'Selected executable: {exe}', { exe: exeName })
 		: gdlText('executable_preserved', 'Steam will keep launching the executable you selected: {exe}', { exe: exeName });
-	const overlay = targetDoc.createElement('div');
+	const overlay = targetDoc.createElement('dialog');
 	overlay.id = 'gdl-manual-link-modal';
 	(overlay as any)._shortcutAppId = activeContext.shortcutAppId;
-	overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;width:100vw;height:100vh;z-index:2147483647;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.72);font-family:Arial,Helvetica,sans-serif;color:#dcdedf;pointer-events:auto;';
+	overlay.style.cssText = 'position:fixed;inset:0;margin:0;padding:20px;box-sizing:border-box;border:0;max-width:none;max-height:none;width:100%;height:100%;z-index:2147483647;display:flex;align-items:center;justify-content:center;overflow:auto;background:rgba(0,0,0,.72);font-family:Arial,Helvetica,sans-serif;color:#dcdedf;pointer-events:auto;';
 	overlay.innerHTML = `
-		<div role="dialog" aria-modal="true" style="width:min(620px,calc(100vw - 40px));overflow:hidden;border-radius:6px;background:linear-gradient(145deg,#1b2531,#121922);border:1px solid rgba(102,192,244,.30);box-shadow:0 24px 80px rgba(0,0,0,.78);">
+		<div role="dialog" aria-modal="true" style="box-sizing:border-box;width:620px;max-width:100%;max-height:100%;flex-shrink:0;overflow:auto;border-radius:6px;background:linear-gradient(145deg,#1b2531,#121922);border:1px solid rgba(102,192,244,.30);box-shadow:0 24px 80px rgba(0,0,0,.78);">
 			<div style="display:flex;align-items:center;justify-content:space-between;padding:18px 22px;background:linear-gradient(90deg,rgba(39,65,84,.95),rgba(24,31,41,.96));border-bottom:1px solid rgba(255,255,255,.09);">
 				<div><div style="font-size:20px;font-weight:600;color:#fff;">${escapeHtml(dialogTitle)}</div><div class="gdl-manual-link-dialog-subtitle" style="margin-top:4px;font-size:11px;letter-spacing:.8px;color:#66c0f4;text-transform:uppercase;">${escapeHtml(loading ? gdlText('link_searching', 'Searching for Steam matches…') : hasCandidates ? gdlText('auto_link_ready_to_review', 'Match ready for review') : gdlText('no_suggestions_found', 'No automatic suggestions (enter the AppID below)'))}</div></div>
 				<button class="gdl-manual-link-close" aria-label="${escapeHtml(gdlText('close', 'Close'))}" style="border:0;background:transparent;color:#8f98a0;font-size:24px;line-height:1;cursor:pointer;padding:0 3px;">×</button>
@@ -98,7 +99,7 @@ export function showShortcutManualLinkModal(
 			<div style="padding:20px 22px 22px;">
 				<div class="gdl-manual-link-dialog-message" style="font-size:13px;line-height:1.5;color:#acb2b8;margin-bottom:17px;">${escapeHtml(dialogMessage)}</div>
 				<div style="display:flex;gap:16px;align-items:stretch;margin-bottom:16px;padding:12px;background:rgba(0,0,0,.16);border:1px solid rgba(255,255,255,.06);border-radius:4px;">
-					<img class="gdl-manual-link-image" alt="" style="width:194px;height:91px;object-fit:cover;border:1px solid rgba(255,255,255,.10);border-radius:2px;" />
+					<img class="gdl-manual-link-image" alt="" style="width:40%;max-width:194px;min-width:0;height:91px;object-fit:cover;border:1px solid rgba(255,255,255,.10);border-radius:2px;" />
 					<div style="display:flex;flex:1;min-width:0;flex-direction:column;justify-content:center;gap:7px;">
 						<div class="gdl-manual-link-name" style="font-size:17px;font-weight:500;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"></div>
 						<div class="gdl-manual-link-id" style="font-size:12px;color:#66c0f4;"></div>
@@ -107,7 +108,7 @@ export function showShortcutManualLinkModal(
 				</div>
 				<label style="display:block;margin:0 0 14px;font-size:11px;color:#8f98a0;">
 					<span style="display:block;margin-bottom:6px;text-transform:uppercase;letter-spacing:.45px;">${escapeHtml(gdlText('manual_appid_label', 'Or enter a Steam AppID manually'))}</span>
-					<input class="gdl-manual-link-manual-appid" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="${escapeHtml(gdlText('manual_appid_placeholder', 'Steam AppID'))}" style="box-sizing:border-box;width:100%;padding:8px 9px;background:#101820;border:1px solid #3d4450;border-radius:2px;color:#dcdedf;font-size:12px;" />
+					<span style="display:flex;gap:8px;align-items:stretch;"><input class="gdl-manual-link-manual-appid" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="${escapeHtml(gdlText('manual_appid_placeholder', 'Steam AppID'))}" style="box-sizing:border-box;width:100%;min-width:0;flex:1;padding:8px 9px;background:#101820;border:1px solid #3d4450;border-radius:2px;color:#dcdedf;font-size:12px;" /><button type="button" class="gdl-manual-link-paste" style="flex-shrink:0;padding:8px 14px;border:1px solid #3d4450;border-radius:2px;background:#3d4450;color:#dcdedf;cursor:pointer;">${escapeHtml(gdlText('paste', 'Paste'))}</button></span>
 				</label>
 				<div class="gdl-manual-link-exe-summary" style="padding:9px 11px;background:rgba(0,0,0,.18);color:#8f98a0;font-size:11px;line-height:1.35;overflow-wrap:anywhere;">${escapeHtml(executableSummary)}</div>
 				<label class="gdl-manual-link-tracking" style="display:none;align-items:flex-start;gap:8px;margin-top:12px;padding:10px 11px;background:rgba(91,163,43,.10);border:1px solid rgba(91,163,43,.28);color:#acb2b8;font-size:12px;line-height:1.35;cursor:pointer;">
@@ -128,6 +129,7 @@ export function showShortcutManualLinkModal(
 		</div>`;
 	const select = overlay.querySelector('.gdl-manual-link-select') as HTMLSelectElement;
 	const manualAppIdInput = overlay.querySelector('.gdl-manual-link-manual-appid') as HTMLInputElement;
+	wirePasteButton(manualAppIdInput, overlay.querySelector('.gdl-manual-link-paste') as HTMLButtonElement);
 	const image = overlay.querySelector('.gdl-manual-link-image') as HTMLImageElement;
 	const name = overlay.querySelector('.gdl-manual-link-name') as HTMLElement;
 	const appId = overlay.querySelector('.gdl-manual-link-id') as HTMLElement;
@@ -651,7 +653,7 @@ export function showShortcutManualLinkModal(
 			}
 		}
 	});
-	targetDoc.body.appendChild(overlay);
+	mountModalDialog(overlay);
 }
 let globalDetectionGeneration = 0;
 async function inspectShortcutReview(
@@ -880,7 +882,6 @@ function resolveOrSynthesizeShortcutRecord(shortcutAppId: number, gameTitle = ''
 	}
 	return { id: fallbackId, title: cleanTitle || 'Non-Steam Game', app: null };
 }
-/** User-initiated linking. No background path calls this workflow. */
 export function requestManualShortcutLink(shortcutAppId: number, gameTitle = '', targetDoc?: Document | null): boolean {
 	const record = resolveOrSynthesizeShortcutRecord(shortcutAppId, gameTitle, targetDoc);
 	if (!record) return false;
@@ -888,7 +889,6 @@ export function requestManualShortcutLink(shortcutAppId: number, gameTitle = '',
 	scheduleShortcutReview(record, 0, 'manual', targetDoc);
 	return true;
 }
-/** Native-add-only automatic review. */
 export function requestNativeAddShortcutReview(shortcutAppId: number, gameTitle = '', targetDoc?: Document | null): boolean {
 	const record = resolveOrSynthesizeShortcutRecord(shortcutAppId, gameTitle, targetDoc);
 	if (!record || shortcutAlreadyLinked(record.id)) return false;

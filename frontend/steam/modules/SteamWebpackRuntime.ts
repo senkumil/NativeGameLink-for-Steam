@@ -74,6 +74,8 @@ class SteamWebpackRuntime {
 	public getAllModules(doc?: Document): WebpackModuleEntry[] {
 		const state = this.resolveState(doc);
 		if (!state) return [];
+		if (state.requireFn) this.syncRequireCache(state);
+		else this.captureMillenniumFallback(state);
 		const result: WebpackModuleEntry[] = [];
 		for (const [id, exports] of state.moduleCache) result.push({ id, exports });
 		return result;
@@ -85,6 +87,7 @@ class SteamWebpackRuntime {
 
 	/** Unique token for the currently selected realm/runtime generation. */
 	public getRuntimeIdentity(doc?: Document): object | null {
+		this.getAllModules(doc);
 		return this.resolveState(doc)?.identity ?? null;
 	}
 
@@ -192,28 +195,36 @@ class SteamWebpackRuntime {
 	private syncRequireCache(state: SteamWebpackRuntimeState): void {
 		const cache = state.requireFn?.c;
 		if (!cache || typeof cache !== 'object') return;
-		for (const key of Object.keys(cache)) {
-			const mod = cache[key]?.exports;
-			if (mod) state.moduleCache.set(key, mod);
+		let changed = false;
+		const liveIds = new Set(Object.keys(cache));
+		for (const key of state.moduleCache.keys()) {
+			if (!liveIds.has(String(key))) { state.moduleCache.delete(key); changed = true; }
 		}
+		for (const key of liveIds) {
+			const mod = cache[key]?.exports;
+			if (mod === undefined) {
+				if (state.moduleCache.delete(key)) changed = true;
+			} else if (state.moduleCache.get(key) !== mod) {
+				state.moduleCache.set(key, mod); changed = true;
+			}
+		}
+		if (changed) state.identity = {};
 	}
 
 	private captureMillenniumFallback(state: SteamWebpackRuntimeState): boolean {
-		if (state.source === 'millennium' && state.moduleCache.size > 0) {
-			state.inspected = true;
-			return true;
-		}
 		try {
-			state.moduleCache.clear();
+			const next = new Map<string | number, any>();
 			for (const [id, exports] of millenniumWebpackModules) {
-				if (exports) state.moduleCache.set(id, exports);
+				if (exports) next.set(id, exports);
 			}
+			const changed = next.size !== state.moduleCache.size || Array.from(next).some(([id, value]) => state.moduleCache.get(id) !== value);
+			state.moduleCache = next;
+			if (changed) state.identity = {};
 			if (state.moduleCache.size > 0) {
 				state.requireFn = null;
 				state.inspected = true;
+				if (state.source !== 'millennium') backendLog(`[NGL][Webpack] Reused Millennium module registry with ${state.moduleCache.size} native modules`);
 				state.source = 'millennium';
-				state.identity = {};
-				backendLog(`[NGL][Webpack] Reused Millennium module registry with ${state.moduleCache.size} native modules`);
 				return true;
 			}
 		} catch (error) {

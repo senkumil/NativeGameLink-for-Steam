@@ -117,11 +117,11 @@ assert(unlinking.includes('queuesAlreadyPaused = false'), 'bulk unlink can reuse
 assert(factoryUi.includes("error: 'reset_timeout'") && factoryUi.includes('22_000'), 'Factory Reset UI has a final watchdog');
 
 // Artwork: official Steam metadata must not be replaced by SteamGridDB merely
-// because CEF could not read the official URL; backend grid download gets first chance.
+// because CEF could not read the official URL; the image loader uses the backend first.
 assert(artwork.includes("const ART_STORAGE_PREFIX = 'gdl_artwork18_';") && artwork.includes("'gdl_artwork17_'"), 'artwork policy marker bumped and prior marker retained for invalidation');
 assert(artwork.includes('isAuthoritativeSteamMetadataUrl'), 'automatic artwork distinguishes authoritative Steam metadata from synthesized probes');
-assert(artwork.includes('if (!item.dataUrl && isAuthoritativeSteamMetadataUrl(item.url, item.imageType)) return false;'), 'CEF failure alone cannot replace official Steam metadata artwork with community art');
-assert(artwork.includes('const backendCandidates = Array.from(new Set([url, ...fallbackUrls].filter(Boolean)))'), 'backend grid fallback preserves provider priority and tries subsequent candidates');
+assert(artwork.includes('if (!item.dataUrl && isAuthoritativeSteamMetadataUrl(item.url, item.imageType) && !imageUrlKnownMissing(item.url)) return false;'), 'CEF failure alone cannot replace official Steam metadata artwork with community art');
+assert(!artwork.includes('const backendCandidates ='), 'grid persistence never repeats exhausted downloads or bypasses image quality validation');
 assert(artwork.includes('heroPolicyVersion: 2'), 'new Hero provenance policy invalidates stale fallback decisions');
 
 
@@ -129,8 +129,8 @@ assert(artwork.includes('heroPolicyVersion: 2'), 'new Hero provenance policy inv
 // centered first position, while later Steam-native manual adjustments persist.
 assert(logoPosition.includes("const STORAGE_PREFIX = 'gdl_logo_position4_';"), 'logo position marker bumped to v4');
 assert(logoPosition.includes("MKK_POSITION: SteamLogoPosition = { pinnedPosition: 'CenterCenter', nWidthPct: 58, nHeightPct: 58 }"), 'Mortal Kombat Komplete Edition starts centered with the larger clean-install logo profile');
-assert(logoPosition.includes("if (steamAppId === '237110') return 3;"), 'MKK logo-position profile revision forces the corrected clean-install size to reapply once');
-assert(logoPosition.includes('markSaved(shortcutAppId, steamAppId, position, source);'), 'accepted logo position is settled even when readback is unavailable');
+assert(logoPosition.includes('return 5;'), 'Responsive logo profile revision reapplies automatic sizing once while retaining manual adjustments');
+assert(logoPosition.includes('markSaved(shortcutAppId, steamAppId, position, source, undefined, pairKey);'), 'accepted logo position is settled even when readback is unavailable');
 
 // Linked shortcuts use the visible native Change button, but the actual picker
 // is a synchronous CEF file input because Steam's dialog bridge can just flash.
@@ -208,7 +208,7 @@ assert(heroResolver.includes('preferCommunityBeforeDirectProbes'), 'Hero resolve
 // title uses that one complete request without an announcements-first timeout.
 assert(newsLua.includes('local news, transient_error = fetch_news_json(appid, lang)') && !newsLua.includes('announcements_only'), 'all games use one complete official Steam news request');
 assert(!newsLua.includes('fetch_store_oldnews_archive') && !newsLua.includes('fetch_relevant_community_history'), 'removed-game feeds no longer crawl oldnews, related DLC, guides or discussions');
-assert(newsTs.includes('events18_removed') && newsTs.includes('events18_standard'), 'news cache invalidates stale empty historical snapshots');
+assert(newsTs.includes('events19_removed') && newsTs.includes('events19_standard'), 'news cache invalidates stale empty historical snapshots');
 assert(newsTs.includes('historical ? emptyResult') && newsTs.includes('Removed games commonly have no News Hub'), 'removed games skip slow duplicate Partner Events HTML requests');
 assert(newsTs.includes('officialReleaseFallback') && newsTs.includes('steam_store_release_metadata') && newsTs.includes('feed_metadata_title'), 'a stable Steam metadata card keeps every otherwise empty feed useful');
 assert(newsTs.includes('combined.length > 0') && libraryRuntime.includes('getCachedNews(steamAppId, language, data)'), 'the first linked-page paint gets a guaranteed feed card while real news revalidates');
@@ -236,9 +236,9 @@ assert(bulkLink.includes('const BULK_ANALYSIS_CONCURRENCY = 2') && bulkLink.incl
 assert(bulkLink.includes('Stage 1.5: Fresh low-concurrency review') && bulkLink.includes('detectShortcutCandidatesLocal(item.context)') && bulkLink.includes('enrichShortcutCandidatesRemote(item.context'), 'bulk first-pass skips receive a fresh manual-equivalent validation pass');
 assert(bulkLink.includes('decisionReason = decision.reason') && linkManagement.includes("case 'ambiguous_close_runner_up':") && linkManagement.includes("case 'insufficient_confidence':"), 'bulk report preserves the real skip reason instead of labeling every skip ambiguous');
 assert(remoteDetection.includes('maintained_alias_unique') && localDetection.includes('maintained_alias_unique'), 'single-AppID maintained aliases carry explicit uniqueness evidence');
-assert(bulkPolicy.includes('BULK_TOP_SCORE_THRESHOLD = 58'), 'bulk max-recall threshold is explicitly 58 percent');
-assert(bulkPolicy.includes("reason: 'top_score_threshold'"), 'bulk chooses the highest eligible candidate once it reaches the threshold');
-assert(!bulkPolicy.includes('unresolved_identity_collision') && !bulkPolicy.includes('alias_requires_confirmation'), 'bulk no longer requires extra identity/collision corroboration above the requested score floor');
+assert(bulkPolicy.includes('BULK_TOP_SCORE_THRESHOLD = 90'), 'bulk automatic threshold is 90 percent');
+assert(bulkPolicy.includes("reason: 'verified_identity'"), 'bulk accepts verified identity after evidence checks');
+assert(bulkPolicy.includes('candidate.identity_collision') && bulkPolicy.includes('requires_confirmation'), 'bulk keeps collision and confirmation gates above the score floor');
 assert(remoteDetection.includes('maintained_alias_auto') && localDetection.includes('maintained_alias_auto'), 'curated auto_appid aliases carry explicit bulk recovery provenance');
 assert(bulkLink.includes('Stage 1.75: final SERIAL rescue') && bulkLink.includes('attempt < 3') && detectionTs.includes('recoveryMode = false') && detectionTs.includes('recovery_mode: recoveryMode'), 'bulk unresolved titles receive an isolated aggressive serial recovery pass');
 
@@ -401,10 +401,10 @@ assert(spatialNav.includes('.gdl-bp-trading-card') && spatialNav.includes('.gdl-
 assert(!spatialNav.includes('.gdl-bp-info-feature') && !spatialNav.includes('.gdl-bp-info-description'), 'custom spatial navigation never claims Steam native Game Information controls');
 assert(bigPictureDetails.includes('gdl-bp-trading-card') && bigPictureDetails.includes('gdl-bp-badge-action'), 'NativeBigPictureDetails ensures trading cards and badges are focusable and navigable');
 assert(!bigPictureDetails.includes('gdl-bp-info-description') && !bigPictureDetails.includes('gdl-bp-info-feature'), 'NativeBigPictureDetails does not duplicate Steam Game Information focus targets');
-assert(bpDetails.includes('activateNativeGameInfoBridge(doc, state.shortcut, state.data.game)') && bpDetails.includes('deactivateNativeGameInfoBridge(doc)'), 'native Game Information bridge is scoped strictly to the Steam info tab and restored elsewhere');
-assert(bpNativeInfoBridge.includes('originalGetAppData.call(this, linkedId)') && bpNativeInfoBridge.includes('if (linked?.details) return linked;'), 'native Game Information reuses Steam AppDetailsStore data for the linked AppID when available');
+assert(bpDetails.includes('activateNativeGameInfoBridge(doc, state.shortcut, state.data.game)') && bpDetails.includes('deactivateNativeGameInfoBridge(doc)'), 'native Game Information bridge is scoped to the active linked detail page and restored on exit');
+assert(bpNativeInfoBridge.includes('new Proxy(base,') && !bpNativeInfoBridge.includes('if (linked?.details) return linked;'), 'native Game Information preserves the shortcut data and local artwork identity');
 assert(bpNativeInfoBridge.includes('buildSyntheticDetails') && bpNativeInfoBridge.includes('strDeveloper') && bpNativeInfoBridge.includes('vecStoreCategories'), 'native Game Information can hydrate Steam detail metadata from linked Store data without drawing a custom panel');
-assert(bpNativeInfoBridge.includes("setTemporaryValue(app, 'app_type', 1)") && bpNativeInfoBridge.includes("setTemporaryValue(app, 'BIsShortcut'") && bpNativeInfoBridge.includes('restoreActiveShortcutClassification'), 'native Game Information temporarily classifies only the active shortcut as a Steam app and restores its exact shortcut identity afterward');
+assert(!bpNativeInfoBridge.includes("setTemporaryValue(app, 'app_type', 1)") && bpNativeInfoBridge.includes("setTemporaryValue(app, 'BIsModOrShortcut'") && bpNativeInfoBridge.includes('restoreActiveShortcutClassification'), 'native Game Information changes only its presentation predicate and preserves shortcut routing');
 assert(!bpNativeInfoBridge.includes('steam://run/') && !bpNativeInfoBridge.includes('OpenSteamURL'), 'native Game Information bridge cannot redirect the Play action to the linked Store AppID');
 assert(bigPictureDetails.includes('gdl-bp-community-empty') && bigPictureDetails.includes('AppDetails_Community_Hub'), 'NativeBigPictureDetails provides focusable community hub button when empty');
 assert(bpAchievements.includes('gdl-bp-view-all-achievements') && bpAchievements.includes('AppDetails_Achievements_ViewAll'), 'NativeBigPictureAchievements provides focusable view-all achievements trigger');
@@ -452,10 +452,10 @@ assert(libraryRuntime.includes('if (!isMappingSnapshotVerified())') && libraryRu
 assert(existingWindows.includes("import { findSP } from '@steambrew/client'") && existingWindows.includes('getCanonicalDesktopPopup') && existingWindows.includes('findSP()'), 'existing windows prioritize g_PopupManager and can recover the actual SP render target when popup publication is late');
 assert(!existingWindows.includes(', #root') && !existingWindows.includes('onWindowCreated(window)'), 'clean-start adoption never mistakes Millennium background #root for SP Desktop');
 // 4. resolveMainWindowDocument must resolve wrapper shapes canonically and never fall back to arbitrary observed popup documents.
-assert(runtimeApp.includes('const { popupDoc: doc } = resolveSteamWindowContext(popup)') && runtimeApp.includes('isRealSteamUiWindow(mainWindowDoc.defaultView)'), 'main-window resolution supports BrowserWindow wrappers and validates cached desktop documents');
-assert(runtimeApp.includes('!popupName && isRealSteamUiWindow(popupWin)') && runtimeApp.includes('!isMainWindow && !isBigPictureWindow && !isOverlayWindow && !popupName'), 'windowCreated recognizes strictly validated unnamed SP Desktop while rejecting the Millennium background realm before observation');
+assert(runtimeApp.includes('const { popupDoc: doc, popupName } = resolveSteamWindowContext(popup)') && runtimeApp.includes('isDesktopSteamWindow(mainWindowDoc.defaultView)'), 'main-window resolution supports BrowserWindow wrappers and validates cached desktop documents');
+assert(runtimeApp.includes('isDesktopSteamWindow(popupWin, popupName)') && runtimeApp.includes('!isMainWindow && !isBigPictureWindow && !isOverlayWindow && !popupName'), 'windowCreated recognizes strictly validated unnamed SP Desktop while rejecting the Millennium background realm before observation');
 // 5. windowCreated includes retry timers for CEF about:blank cross-document navigation
-assert(runtimeApp.includes('setTimeout(() => { try { if (!popupWin.closed && popupWin.document?.body) windowCreated(context);') && runtimeApp.includes('isRealSteamUiWindow(popupWin)'), 'windowCreated uses timeout retries and validates real Steam UI window');
+assert(runtimeApp.includes('setTimeout(() => { try { if (!popupWin.closed && popupWin.document?.body) windowCreated(context);') && runtimeApp.includes('isDesktopSteamWindow(popupWin, popupName)'), 'windowCreated uses timeout retries and validates real Steam UI window');
 // 6. app.tsx maintains a recurring adoption interval to guarantee late-mounting Steam popups are adopted
 assert(runtimeApp.includes('const adoptionInterval = setInterval(() => { try { adoptExistingSteamWindows(windowCreated); } catch {} }, 3000)') && runtimeApp.includes('clearInterval(adoptionInterval)'), 'app.tsx maintains recurring adoption interval and cleans up on dismount');
 

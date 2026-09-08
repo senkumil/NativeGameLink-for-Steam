@@ -26,6 +26,8 @@ export function mergeCandidateLists(
 				image: rem.image || loc.image,
 				validation_state: rem.validation_state || 'confirmed',
 				reasons: Array.from(new Set([...(loc.reasons || []), ...(rem.reasons || [])])),
+				warnings: Array.from(new Set([...(loc.warnings || []).filter(warning => warning !== 'remote_validation_unavailable'), ...(rem.warnings || [])])),
+				identity_collision: Boolean(loc.identity_collision || rem.identity_collision),
 			});
 		} else {
 			merged.push({

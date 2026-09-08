@@ -200,8 +200,8 @@ function renderNativeRoot(doc: Document, state: BigPictureDetailState): void {
 	// collections, exact spacing and Steam's own spatial-navigation behavior.
 	// Keep our root connected only as the detail identity anchor, but make it
 	// layout-inert while Steam owns this tab.
+	activateNativeGameInfoBridge(doc, state.shortcut, state.data.game);
 	if (state.activeTab === 'info') {
-		activateNativeGameInfoBridge(doc, state.shortcut, state.data.game);
 		unmountNativeBigPictureDetails(state.root);
 		state.root.hidden = true;
 		state.root.style.setProperty('display', 'none', 'important');
@@ -210,7 +210,6 @@ function renderNativeRoot(doc: Document, state: BigPictureDetailState): void {
 		return;
 	}
 
-	deactivateNativeGameInfoBridge(doc);
 	state.root.hidden = false;
 	state.root.style.removeProperty('display');
 	const mounted = mountNativeBigPictureDetails(state.root, {

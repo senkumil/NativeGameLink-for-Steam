@@ -13,7 +13,9 @@ function M.encode_base64(data)
     if type(data) ~= "string" or data == "" then return "" end
     local output = {}
     local len = #data
-    local chunk_size = 4096
+    -- Each input chunk must contain whole three-byte base64 groups.
+    -- 4096 repeats bytes across chunk boundaries and corrupts larger images.
+    local chunk_size = 4095
     for chunk_start = 1, len, chunk_size do
         local chunk_end = math.min(chunk_start + chunk_size - 1, len)
         local chunk_out = {}

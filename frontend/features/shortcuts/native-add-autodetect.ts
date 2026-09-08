@@ -67,8 +67,8 @@ function clearCloseEvaluationTimers(): void {
 }
 
 function looksLikeNativeAddAction(target: EventTarget | null): boolean {
-	if (!(target instanceof Element)) return false;
-	const clickable = target.closest('button, [role="button"], [role="menuitem"], [class*="MenuItem"], [class*="menuitem"], [class*="Button"]') as Element | null;
+	if (!target || (target as Node).nodeType !== 1) return false;
+	const clickable = (target as Element).closest('button, [role="button"], [role="menuitem"], [class*="MenuItem"], [class*="menuitem"], [class*="Button"]') as Element | null;
 	if (!clickable || clickable.closest('[id^="gdl-"]')) return false;
 	if (clickable.getAttribute('role') === 'switch') return false;
 	const text = `${clickable.textContent || ''} ${clickable.getAttribute('aria-label') || ''} ${clickable.getAttribute('title') || ''}`
@@ -78,8 +78,8 @@ function looksLikeNativeAddAction(target: EventTarget | null): boolean {
 }
 
 function looksLikeAddSelectedAction(target: EventTarget | null): boolean {
-	if (!(target instanceof Element)) return false;
-	const clickable = target.closest('button, [role="button"], [class*="Button"]') as Element | null;
+	if (!target || (target as Node).nodeType !== 1) return false;
+	const clickable = (target as Element).closest('button, [role="button"], [class*="Button"]') as Element | null;
 	if (!clickable || clickable.closest('[id^="gdl-"]')) return false;
 	const text = `${clickable.textContent || ''} ${clickable.getAttribute('aria-label') || ''} ${clickable.getAttribute('title') || ''}`
 		.toLocaleLowerCase().replace(/[\u2018\u2019]/g, "'").trim();

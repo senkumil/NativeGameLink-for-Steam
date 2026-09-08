@@ -1,5 +1,5 @@
 return function(deps)
-local http = deps.http
+local http = deps.binary_http
 local cjson = deps.cjson
 local icon_files = deps.artwork_icon
 local USER_AGENT = deps.user_agent or "NativeGameLink-for-Steam/2.0.0"
@@ -66,6 +66,7 @@ function M.fetch_remote(request_json)
         local ok_http, res = pcall(http.get, current_url, {
             headers = { ["Accept"] = "image/webp,image/png,image/jpeg,*/*", ["User-Agent"] = USER_AGENT },
             timeout = 15,
+            follow_redirects = false,
         })
         if not ok_http or not res then return cjson.encode({ ok = false, error = "network_error" }) end
         local status = tonumber(res.status) or 0

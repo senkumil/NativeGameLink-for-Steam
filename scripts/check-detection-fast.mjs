@@ -209,7 +209,7 @@ function readProjectFile(relPath) {
 }
 
 // --------------------------------------------------------------------------
-// DFAST16: Bulk policy max-recall: accepts top candidates at or above 58%
+// DFAST16: Weak partial detection requires manual review
 // --------------------------------------------------------------------------
 {
 	const dummyContext = {
@@ -229,10 +229,10 @@ function readProjectFile(relPath) {
 		reasons: ['folder_hint'],
 	};
 	const result = evaluateBulkCandidate(dummyContext, [partialCandidate]);
-	if (!result.safe || result.candidate?.appid !== '12345') {
-		throw new Error(`DFAST16 Failed: Bulk policy rejected a 60% top candidate. Result: ${JSON.stringify(result)}`);
+	if (result.safe) {
+		throw new Error(`DFAST16 Failed: Bulk policy accepted an uncertain 60% candidate. Result: ${JSON.stringify(result)}`);
 	}
-	console.log('✓ DFAST16 Passed: Bulk linking accepts a 60% top candidate without extra corroboration.');
+	console.log('✓ DFAST16 Passed: Bulk linking leaves a 60% partial candidate for manual review.');
 }
 
 // --------------------------------------------------------------------------

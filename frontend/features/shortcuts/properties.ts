@@ -220,18 +220,6 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 		<div class="gdl-native-section gdl-link-section">
 			<div class="gdl-native-section-heading">${escapeHtml(gdlText('linked_title', 'Linked game'))}</div>
 			<div class="gdl-native-section-description">${escapeHtml(gdlText('linked_description', 'Paste a Steam AppID or Steam store link to show game information on this library page.'))}</div>
-			<div class="gdl-native-setting-row">
-				<div class="gdl-native-setting-copy">
-					<div class="gdl-native-setting-title">Steam AppID</div>
-					<div class="gdl-native-setting-description">${escapeHtml(gdlText('appid_placeholder', 'Steam AppID or Steam store link'))}</div>
-				</div>
-				<div class="gdl-native-controls">
-					<input class="gdl-appid-input gdl-native-input" type="text" placeholder="${escapeHtml(gdlText('appid_placeholder', 'Steam AppID or Steam store link'))}" value="${escapeHtml(initialAppId)}" />
-					<button class="gdl-save-btn gdl-native-button gdl-native-button-primary" type="button">${escapeHtml(gdlText('link_button', 'Link'))}</button>
-					<button class="gdl-unlink-btn gdl-native-button" type="button" ${currentLinked ? '' : 'disabled'} style="color:${currentLinked ? '#dcdedf' : '#68737f'};cursor:${currentLinked ? 'pointer' : 'default'};opacity:${currentLinked ? '1' : '.65'};">${escapeHtml(currentLinked ? gdlText('unlink', 'Unlink') : gdlText('game_unlinked_status', 'Unlinked'))}</button>
-				</div>
-			</div>
-			<div class="gdl-status gdl-native-status" aria-live="polite"></div>
 			<div class="gdl-auto-detect gdl-native-disclosure">
 				<div class="gdl-auto-detect-header">
 					<span>${escapeHtml(gdlText('shortcut_suggestions_title', 'Steam AppID suggestions:'))}</span>
@@ -244,6 +232,18 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 					<div class="gdl-auto-candidate-preview" style="display:none;"></div>
 				</div>
 			</div>
+			<div class="gdl-native-setting-row gdl-link-actions">
+				<div class="gdl-native-setting-copy">
+					<div class="gdl-native-setting-title">Steam AppID</div>
+					<div class="gdl-native-setting-description">${escapeHtml(gdlText('appid_placeholder', 'Steam AppID or Steam store link'))}</div>
+				</div>
+				<div class="gdl-native-controls">
+					<input class="gdl-appid-input gdl-native-input" type="text" placeholder="${escapeHtml(gdlText('appid_placeholder', 'Steam AppID or Steam store link'))}" value="${escapeHtml(initialAppId)}" />
+					<button class="gdl-save-btn gdl-native-button gdl-native-button-primary" type="button">${escapeHtml(gdlText('link_button', 'Link'))}</button>
+					<button class="gdl-unlink-btn gdl-native-button" type="button" ${currentLinked ? '' : 'disabled'} style="color:${currentLinked ? '#dcdedf' : '#68737f'};cursor:${currentLinked ? 'pointer' : 'default'};opacity:${currentLinked ? '1' : '.65'};">${escapeHtml(currentLinked ? gdlText('unlink', 'Unlink') : gdlText('game_unlinked_status', 'Unlinked'))}</button>
+				</div>
+			</div>
+			<div class="gdl-status gdl-native-status" aria-live="polite"></div>
 			<label class="gdl-skip-launcher gdl-native-option">
 				<input class="gdl-skip-launcher-input" type="checkbox" />
 				<span><strong>${escapeHtml(gdlText('skip_launcher', 'Try to skip the launcher'))}</strong><br />${escapeHtml(gdlText('skip_launcher_help', 'Adds -nolauncher while preserving your current launch options. Enable it only if this game supports that argument.'))}</span>

@@ -36,7 +36,7 @@ import { disposeNativeInfoPreference, reconcileNativeInfoPreference } from '../f
 import { finishLibraryRouteExit, hasOwnedLibraryChrome } from '../features/library/route-exit';
 import { disposeLinkedGamePrefetch, restartLinkedGamePrefetch, startLinkedGamePrefetch } from '../features/library/prefetch';
 import { installGhostSidebarCleanup } from '../features/library/sidebar-cleanup';
-import { adoptExistingSteamWindows, getCanonicalDesktopPopup, isRealSteamUiWindow, resolveSteamWindowContext } from './existing-windows';
+import { adoptExistingSteamWindows, getCanonicalDesktopPopup, isDesktopSteamWindow, resolveSteamWindowContext } from './existing-windows';
 import { installMappingRefresh } from './mapping-refresh';
 import { installArtworkBatchRefresh } from './artwork-batch-refresh';
 import { syncMissingArtworkForMappedShortcuts } from '../features/library/artwork-sync';
@@ -73,15 +73,15 @@ function disposeDocumentLifecycles(): void {
 function resolveMainWindowDocument(): Document | null {
 	try {
 		const popup = getCanonicalDesktopPopup();
-		const { popupDoc: doc } = resolveSteamWindowContext(popup);
-		if (doc?.body && doc.defaultView && !doc.defaultView.closed && isRealSteamUiWindow(doc.defaultView) && !steamUIModeService.isGamepadUI(doc)) {
+		const { popupDoc: doc, popupName } = resolveSteamWindowContext(popup);
+		if (doc?.body && doc.defaultView && !doc.defaultView.closed && isDesktopSteamWindow(doc.defaultView, popupName) && !steamUIModeService.isGamepadUI(doc)) {
 			if (!observedDocs.has(doc)) windowCreated(popup);
 			mainWindowDoc = doc; activeSteamDocuments.add(doc); return doc;
 		}
 	} catch {}
-	if (mainWindowDoc && !mainWindowDoc.defaultView?.closed && mainWindowDoc.body && isRealSteamUiWindow(mainWindowDoc.defaultView) && !steamUIModeService.isGamepadUI(mainWindowDoc)) return mainWindowDoc;
+	if (mainWindowDoc && !mainWindowDoc.defaultView?.closed && mainWindowDoc.body && isDesktopSteamWindow(mainWindowDoc.defaultView) && !steamUIModeService.isGamepadUI(mainWindowDoc)) return mainWindowDoc;
 	for (const doc of activeSteamDocuments) {
-		if (doc?.body && doc.defaultView && !doc.defaultView.closed && isRealSteamUiWindow(doc.defaultView) && !steamUIModeService.isGamepadUI(doc)) {
+		if (doc?.body && doc.defaultView && !doc.defaultView.closed && isDesktopSteamWindow(doc.defaultView) && !steamUIModeService.isGamepadUI(doc)) {
 			mainWindowDoc = doc; return doc;
 		}
 	}
@@ -120,9 +120,7 @@ function windowCreated(context: any): void {
 	}
 	const isBigPictureWindow = /SP BPM|SP Big Picture|Big Picture|Gamepad/i.test(`${popupName} ${popupTitle}`);
 	const isOverlayWindow = /desktopoverlay|SP Overlay|Game Overlay/i.test(`${popupName} ${popupTitle}`);
-	const isMainWindow = popupName === 'SP Desktop'
-		|| (popupName.includes('SP Desktop') && !popupName.includes('Popup') && !popupName.includes('Login'))
-		|| (!popupName && isRealSteamUiWindow(popupWin) && !isBigPictureWindow && !isOverlayWindow);
+	const isMainWindow = isDesktopSteamWindow(popupWin, popupName) && !isBigPictureWindow && !isOverlayWindow;
 	const isPropertiesCandidate = /properties|propiedades|propriedades|propriétés|eigenschaften|proprietà|shortcut/i.test(popupTitle || popupDoc.title || '');
 	if (!isMainWindow && !isBigPictureWindow && !isOverlayWindow && !popupName && !isPropertiesCandidate) return;
 	if (observedDocs.has(popupDoc)) return;

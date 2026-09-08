@@ -21,6 +21,7 @@ function createCandidate(overrides = {}) {
 		reasons: ['title_exact'],
 		source: 'search',
 		evidence_tier: 'strong',
+		validation_state: 'confirmed',
 		...overrides,
 	};
 }
@@ -39,7 +40,7 @@ function createCandidate(overrides = {}) {
 		evidence_tier: 'proof',
 	});
 	const result = evaluateBulkCandidate(dummyContext, [cpCandidate]);
-	if (!result.safe || result.candidate?.appid !== '1091500' || result.reason !== 'top_score_threshold') {
+	if (!result.safe || result.candidate?.appid !== '1091500' || result.reason !== 'verified_identity') {
 		throw new Error(`D01 Failed: Cyberpunk 2077 proof match was not accepted safely. Result: ${JSON.stringify(result)}`);
 	}
 	console.log('✓ D01 Passed: Cyberpunk 2077 official executable proof accepted safely by Bulk.');
@@ -65,7 +66,7 @@ function createCandidate(overrides = {}) {
 }
 
 // --------------------------------------------------------------------------
-// D03: Generic Launcher (launcher.exe) -> top score >=58 is accepted by requested Bulk policy
+// D03: Uncertain evidence must require manual review
 // --------------------------------------------------------------------------
 {
 	const launcherCand = createCandidate({
@@ -77,10 +78,10 @@ function createCandidate(overrides = {}) {
 		evidence_tier: 'hint',
 	});
 	const result = evaluateBulkCandidate(dummyContext, [launcherCand]);
-	if (!result.safe || result.candidate?.appid !== '999') {
-		throw new Error(`D03 Failed: 65% top candidate was not accepted. Result: ${JSON.stringify(result)}`);
+	if (result.safe) {
+		throw new Error(`D03 Failed: Uncertain candidate was linked automatically.`);
 	}
-	console.log('✓ D03 Passed: 65% top candidate accepted by max-recall Bulk policy.');
+	console.log('✓ D03 Passed: Uncertain identity requires manual review.');
 }
 
 // --------------------------------------------------------------------------
@@ -114,7 +115,7 @@ function createCandidate(overrides = {}) {
 }
 
 // --------------------------------------------------------------------------
-// D05: Resident Evil 4 Generic (no year) -> highest percentage wins
+// D05: Uncertain evidence must require manual review
 // --------------------------------------------------------------------------
 {
 	const re4_cand1 = createCandidate({
@@ -134,10 +135,10 @@ function createCandidate(overrides = {}) {
 		identity_collision: true,
 	});
 	const result = evaluateBulkCandidate(dummyContext, [re4_cand1, re4_cand2]);
-	if (!result.safe || result.candidate?.appid !== '254700') {
-		throw new Error(`D05 Failed: Highest-scoring RE4 candidate was not selected. Result: ${JSON.stringify(result)}`);
+	if (result.safe) {
+		throw new Error(`D05 Failed: Uncertain candidate was linked automatically.`);
 	}
-	console.log('✓ D05 Passed: Highest-scoring RE4 candidate wins even for a close collision.');
+	console.log('✓ D05 Passed: Uncertain identity requires manual review.');
 }
 
 // --------------------------------------------------------------------------
@@ -180,7 +181,7 @@ function createCandidate(overrides = {}) {
 	if (result.reason !== 'below_bulk_score_threshold') {
 		throw new Error(`D07 Failed: Expected below_bulk_score_threshold reason, got: ${result.reason}`);
 	}
-	console.log('✓ D07 Passed: 55% candidate remains below the 58% Bulk floor.');
+	console.log('✓ D07 Passed: 55% candidate remains below the automatic Bulk floor.');
 }
 
 // --------------------------------------------------------------------------
@@ -252,7 +253,7 @@ function createCandidate(overrides = {}) {
 }
 
 // --------------------------------------------------------------------------
-// D11: Remembered history no longer overrides the highest percentage
+// D11: Uncertain evidence must require manual review
 // --------------------------------------------------------------------------
 {
 	const candA = createCandidate({
@@ -273,14 +274,14 @@ function createCandidate(overrides = {}) {
 	});
 	// Candidate B is remembered, but candidate A has the higher percentage.
 	const result = evaluateBulkCandidate(dummyContext, [candA, candB], '200');
-	if (!result.safe || result.candidate?.appid !== '100') {
-		throw new Error(`D11 Failed: Remembered AppID overrode the highest percentage. Result: ${JSON.stringify(result)}`);
+	if (result.safe) {
+		throw new Error(`D11 Failed: Uncertain candidate was linked automatically.`);
 	}
-	console.log('✓ D11 Passed: Highest percentage wins even when another AppID is remembered.');
+	console.log('✓ D11 Passed: Uncertain identity requires manual review.');
 }
 
 // --------------------------------------------------------------------------
-// D12: Score-first policy accepts a 60% candidate even with only steam_appid.txt evidence
+// D12: Uncertain evidence must require manual review
 // --------------------------------------------------------------------------
 {
 	const wrongTxt = createCandidate({
@@ -292,10 +293,10 @@ function createCandidate(overrides = {}) {
 		evidence_tier: 'hint',
 	});
 	const result = evaluateBulkCandidate(dummyContext, [wrongTxt]);
-	if (!result.safe || result.candidate?.appid !== '480') {
-		throw new Error(`D12 Failed: 60% top candidate was not accepted. Result: ${JSON.stringify(result)}`);
+	if (result.safe) {
+		throw new Error(`D12 Failed: Uncertain candidate was linked automatically.`);
 	}
-	console.log('✓ D12 Passed: 60% top candidate accepted without additional identity gates.');
+	console.log('✓ D12 Passed: Uncertain identity requires manual review.');
 }
 
 // --------------------------------------------------------------------------
@@ -319,7 +320,7 @@ function createCandidate(overrides = {}) {
 }
 
 // --------------------------------------------------------------------------
-// D14: Folder-only 68% candidate is accepted by score-first Bulk
+// D14: Uncertain evidence must require manual review
 // --------------------------------------------------------------------------
 {
 	const folderOnly = createCandidate({
@@ -331,14 +332,14 @@ function createCandidate(overrides = {}) {
 		evidence_tier: 'supporting',
 	});
 	const result = evaluateBulkCandidate(dummyContext, [folderOnly]);
-	if (!result.safe || result.candidate?.appid !== '300') {
-		throw new Error(`D14 Failed: 68% folder candidate was not accepted. Result: ${JSON.stringify(result)}`);
+	if (result.safe) {
+		throw new Error(`D14 Failed: Uncertain candidate was linked automatically.`);
 	}
-	console.log('✓ D14 Passed: 68% folder candidate accepted by score-first Bulk.');
+	console.log('✓ D14 Passed: Uncertain identity requires manual review.');
 }
 
 // --------------------------------------------------------------------------
-// D15: Two close candidates -> highest percentage wins
+// D15: Uncertain evidence must require manual review
 // --------------------------------------------------------------------------
 {
 	const cand1 = createCandidate({
@@ -358,10 +359,10 @@ function createCandidate(overrides = {}) {
 		evidence_tier: 'strong',
 	});
 	const result = evaluateBulkCandidate(dummyContext, [cand1, cand2]);
-	if (!result.safe || result.candidate?.appid !== '10') {
-		throw new Error(`D15 Failed: Highest close candidate was not selected. Result: ${JSON.stringify(result)}`);
+	if (result.safe) {
+		throw new Error(`D15 Failed: Uncertain candidate was linked automatically.`);
 	}
-	console.log('✓ D15 Passed: Highest percentage wins even with a close runner-up.');
+	console.log('✓ D15 Passed: Uncertain identity requires manual review.');
 }
 
 // --------------------------------------------------------------------------
@@ -400,7 +401,7 @@ function createCandidate(overrides = {}) {
 }
 
 // --------------------------------------------------------------------------
-// D18: Original vs Remaster -> score threshold now takes precedence
+// D18: Uncertain evidence must require manual review
 // --------------------------------------------------------------------------
 {
 	const remasterCandidate = createCandidate({
@@ -413,14 +414,14 @@ function createCandidate(overrides = {}) {
 		evidence_tier: 'hint',
 	});
 	const result = evaluateBulkCandidate(dummyContext, [remasterCandidate]);
-	if (!result.safe || result.candidate?.appid !== '570940') {
-		throw new Error(`D18 Failed: 60% top candidate was not accepted by max-recall Bulk.`);
+	if (result.safe) {
+		throw new Error(`D18 Failed: Uncertain candidate was linked automatically.`);
 	}
-	console.log('✓ D18 Passed: 60% top candidate is accepted regardless of previous mismatch gate.');
+	console.log('✓ D18 Passed: Uncertain identity requires manual review.');
 }
 
 // --------------------------------------------------------------------------
-// D19: Short alias (e.g. "ER") -> percentage threshold decides
+// D19: Uncertain evidence must require manual review
 // --------------------------------------------------------------------------
 {
 	const shortAliasCand = createCandidate({
@@ -432,10 +433,10 @@ function createCandidate(overrides = {}) {
 		evidence_tier: 'hint',
 	});
 	const result = evaluateBulkCandidate(dummyContext, [shortAliasCand]);
-	if (!result.safe || result.candidate?.appid !== '1245620') {
-		throw new Error(`D19 Failed: 65% alias candidate was not accepted in Bulk.`);
+	if (result.safe) {
+		throw new Error(`D19 Failed: Uncertain candidate was linked automatically.`);
 	}
-	console.log('✓ D19 Passed: 65% alias candidate accepted by score-first Bulk policy.');
+	console.log('✓ D19 Passed: Uncertain identity requires manual review.');
 }
 
 // --------------------------------------------------------------------------

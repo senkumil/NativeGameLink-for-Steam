@@ -14,16 +14,15 @@ type ActiveNativeInfoTarget = {
 
 type AppClassificationState = {
 	app: any;
-	canonicalAppType: unknown;
-	appType: PropertySnapshot;
-	shortcutMethod: PropertySnapshot;
 	modShortcutMethod: PropertySnapshot;
 };
 
 type StoreBridgeState = {
 	store: any;
 	originalGetAppData: Function;
-	proxyCache: Map<string, any>;
+	wrapper?: Function;
+	originalDescriptor: PropertySnapshot;
+	proxyCache: Map<string, { base: any; value: any }>;
 };
 
 const activeTargets = new WeakMap<Window, ActiveNativeInfoTarget>();
@@ -59,21 +58,16 @@ function setTemporaryValue(target: any, key: string, value: unknown): void {
 
 function patchActiveShortcutClassification(doc: Document, shortcut: MappedShortcut): void {
 	const previous = classificationStates.get(doc);
-	if (previous && Number(previous.app?.appid) === Number(shortcut.id)) return;
-	if (previous) restoreActiveShortcutClassification(doc);
 	const app = getShortcutAppById(shortcut.id, doc);
+	if (previous?.app === app) return;
+	if (previous) restoreActiveShortcutClassification(doc);
 	if (!app) return;
 	const state: AppClassificationState = {
 		app,
-		canonicalAppType: app.canonicalAppType,
-		appType: ownDescriptor(app, 'app_type'),
-		shortcutMethod: ownDescriptor(app, 'BIsShortcut'),
 		modShortcutMethod: ownDescriptor(app, 'BIsModOrShortcut'),
 	};
 	classificationStates.set(doc, state);
-	try { app.canonicalAppType = 1; } catch {}
-	setTemporaryValue(app, 'app_type', 1);
-	setTemporaryValue(app, 'BIsShortcut', function (): boolean { return false; });
+	// Do not change app_type or BIsShortcut: artwork and launch routing depend on them.
 	if (typeof app.BIsModOrShortcut === 'function' || state.modShortcutMethod) {
 		setTemporaryValue(app, 'BIsModOrShortcut', function (): boolean { return false; });
 	}
@@ -83,9 +77,7 @@ function restoreActiveShortcutClassification(doc: Document): void {
 	const state = classificationStates.get(doc);
 	if (!state) return;
 	classificationStates.delete(doc);
-	try { state.app.canonicalAppType = state.canonicalAppType; } catch {}
-	restoreOwnDescriptor(state.app, 'app_type', state.appType);
-	restoreOwnDescriptor(state.app, 'BIsShortcut', state.shortcutMethod);
+
 	restoreOwnDescriptor(state.app, 'BIsModOrShortcut', state.modShortcutMethod);
 }
 
@@ -94,7 +86,8 @@ function gameSignature(shortcut: MappedShortcut, game: SteamGameData | null): st
 		shortcut.id,
 		shortcut.steamAppId,
 		game?.name || '',
-		game?.short_description || '',
+		game?.short_description || '', game?.about_the_game || '', game?.detailed_description || '',
+		(game?.franchises || []).join('|'),
 		(game?.developers || []).join('|'),
 		(game?.publishers || []).join('|'),
 		game?.release_date?.date || '',
@@ -114,7 +107,7 @@ function buildSyntheticDetails(base: any, target: ActiveNativeInfoTarget): any {
 	const categories = Array.isArray(game.categories) ? game.categories : [];
 	const genres = Array.isArray(game.genres) ? game.genres : [];
 	Object.assign(details, {
-		unAppID: Number(target.shortcut.steamAppId),
+		unAppID: base?.unAppID ?? target.shortcut.id,
 		strDeveloper: developers,
 		strPublisher: publishers,
 		strFranchise: franchise,
@@ -123,7 +116,6 @@ function buildSyntheticDetails(base: any, target: ActiveNativeInfoTarget): any {
 		strShortDescription: description,
 		rgCategories: categories,
 		rgGenres: genres,
-		nSteamDeckCompatibility: game.controller_support === 'full' ? 3 : (game.controller_support === 'partial' ? 2 : undefined),
 	});
 	if (!Array.isArray(details.vecStoreCategories)) {
 		details.vecStoreCategories = categories.map(category => ({
@@ -147,7 +139,7 @@ function installStoreBridge(doc: Document): void {
 	const store = resolveNativeAppDetailsStore(doc);
 	if (!store || typeof store.GetAppData !== 'function') return;
 	const originalGetAppData = store.GetAppData;
-	const bridge: StoreBridgeState = { store, originalGetAppData, proxyCache: new Map() };
+	const bridge: StoreBridgeState = { store, originalGetAppData, originalDescriptor: ownDescriptor(store, 'GetAppData'), proxyCache: new Map() };
 	storeBridgeByWindow.set(win, bridge);
 	store.GetAppData = function (appId: number): any {
 		const target = activeTargets.get(win);
@@ -156,25 +148,32 @@ function installStoreBridge(doc: Document): void {
 		const unsigned = target.shortcut.id < 0 ? (target.shortcut.id >>> 0) : target.shortcut.id;
 		const signed = toSignedShortcutAppId(unsigned);
 		if (requested !== unsigned && requested !== signed) return originalGetAppData.call(this, appId);
-		const linkedId = Number(target.shortcut.steamAppId);
-		if (Number.isFinite(linkedId) && linkedId > 0) {
-			try {
-				const linked = originalGetAppData.call(this, linkedId);
-				if (linked?.details) return linked;
-			} catch {}
-		}
 		const base = originalGetAppData.call(this, appId);
 		if (!base || typeof base !== 'object' || !target.game) return base;
 		const cacheKey = `${target.signature}|${requested}`;
 		const cached = bridge.proxyCache.get(cacheKey);
-		if (cached) return cached;
-		const proxy = Object.create(Object.getPrototypeOf(base) || Object.prototype);
-		Object.assign(proxy, base);
-		proxy.details = buildSyntheticDetails(base.details, target);
-		bridge.proxyCache.clear();
-		bridge.proxyCache.set(cacheKey, proxy);
+		if (cached?.base === base) return cached.value;
+		const metadata: Record<string, any> = {};
+		Object.defineProperties(metadata, {
+			details: { configurable: true, writable: true, value: buildSyntheticDetails(base.details, target) },
+			descriptionsData: { configurable: true, writable: true, value: { ...base.descriptionsData,
+				strSnippet: base.descriptionsData?.strSnippet || target.game.short_description || '', strFullDescription: base.descriptionsData?.strFullDescription || target.game.about_the_game || target.game.detailed_description || '',
+			} },
+			associationData: { configurable: true, writable: true, value: { ...base.associationData,
+				rgDevelopers: base.associationData?.rgDevelopers?.length ? base.associationData.rgDevelopers : (target.game.developers || []).map(strName => ({ strName, strURL: 'https://store.steampowered.com/search/?developer=' + encodeURIComponent(strName) })),
+				rgPublishers: base.associationData?.rgPublishers?.length ? base.associationData.rgPublishers : (target.game.publishers || []).map(strName => ({ strName, strURL: 'https://store.steampowered.com/search/?publisher=' + encodeURIComponent(strName) })),
+				rgFranchises: base.associationData?.rgFranchises?.length ? base.associationData.rgFranchises : (target.game.franchises || []).map(strName => ({ strName, strURL: 'https://store.steampowered.com/search/?term=' + encodeURIComponent(strName) })),
+			} },
+		});
+		const proxy = new Proxy(base, {
+			get: (object, key) => Object.prototype.hasOwnProperty.call(metadata, key) ? metadata[key as string] : Reflect.get(object, key, object),
+			set: (object, key, value) => Reflect.set(object, key, value, object),
+		});
+		if (bridge.proxyCache.size >= 4) bridge.proxyCache.delete(bridge.proxyCache.keys().next().value);
+		bridge.proxyCache.set(cacheKey, { base, value: proxy });
 		return proxy;
 	};
+	bridge.wrapper = store.GetAppData;
 	backendLog('[NGL][Gamepad] Installed linked AppDetailsStore bridge for native Game Information');
 }
 
@@ -203,7 +202,12 @@ export function activateNativeGameInfoBridge(doc: Document, shortcut: MappedShor
 
 export function deactivateNativeGameInfoBridge(doc: Document): void {
 	const win = doc.defaultView;
-	if (win) activeTargets.delete(win);
+	if (win) {
+		activeTargets.delete(win);
+		const bridge = storeBridgeByWindow.get(win);
+		if (bridge?.store.GetAppData === bridge?.wrapper && bridge) restoreOwnDescriptor(bridge.store, 'GetAppData', bridge.originalDescriptor);
+		storeBridgeByWindow.delete(win);
+	}
 	restoreActiveShortcutClassification(doc);
 	const timer = rerenderTimers.get(doc);
 	if (timer) clearTimeout(timer);

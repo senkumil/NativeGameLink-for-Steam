@@ -69,6 +69,20 @@
 		gap: 8px;
 		min-width: 0;
 	}
+	.gdl-properties-injected .gdl-link-actions {
+		position: sticky;
+		bottom: 0;
+		z-index: 2;
+		margin-top: 12px;
+		background: #19232e;
+		grid-template-columns: minmax(0, 1fr);
+	}
+	.gdl-properties-injected .gdl-link-actions .gdl-native-controls {
+		flex-wrap: wrap;
+	}
+	.gdl-properties-injected .gdl-link-actions .gdl-native-button {
+		flex: 0 0 auto;
+	}
 	.gdl-properties-injected .gdl-native-input, .gdl-properties-injected .gdl-native-select {
 		min-width: 0;
 		height: 38px;

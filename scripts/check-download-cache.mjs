@@ -1,0 +1,23 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import vm from 'node:vm';
+import ts from 'typescript';
+let calls=0,now=0,fail=false;
+let payload='A'.repeat(1024);
+const ctx=vm.createContext({exports:{},URL,AbortController,setTimeout,clearTimeout,Date:{now:()=>now},require:()=>({fetchArtworkImageBackend:async()=>{
+ calls++;await new Promise(resolve=>setImmediate(resolve));
+ return JSON.stringify(fail?{ok:false,status:503}:{ok:true,mime:'image/png',data_base64:payload});
+}})});
+vm.runInContext(ts.transpileModule(fs.readFileSync('frontend/features/library/artwork-image.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText,ctx);
+const get=ctx.exports.imageUrlToBase64;
+const url=n=>`https://shared.steamstatic.com/${n}.png`;
+const result=await Promise.all(Array.from({length:12},()=>get(url('shared'))));
+assert.equal(calls,1);assert.ok(result.every(value=>value===result[0]));
+await get(url('shared'));assert.equal(calls,1);
+now=60001;await get(url('shared'));assert.equal(calls,2,'Expired success must refresh');
+fail=true;await get(url('retry'));await get(url('retry'));assert.equal(calls,4,'Transient errors must not be cached');
+fail=false;payload='B'.repeat(3*1024*1024);
+await get(url('large1'));await get(url('large2'));await get(url('large1'));let before=calls;
+await get(url('large3'));await get(url('large2'));assert.equal(calls,before+2,'LRU budget must evict old images');
+payload='C'.repeat(9*1024*1024);before=calls;await get(url('oversize'));await get(url('oversize'));assert.equal(calls,before+2,'Oversized success must not be retained');
+console.log('Download cache passed: 12 concurrent consumers share one transfer, expiry, retry, 16 MiB LRU and oversized entries.');

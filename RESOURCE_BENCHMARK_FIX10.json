@@ -1,0 +1,104 @@
+{
+  "scope": "Real Steam CDN transfers through the actual frontend loader; Node HTTP adapter replaces Millennium IPC. Two concurrent consumers per URL; not end-to-end linking.",
+  "measuredAt": "2026-09-08T18:17:00.263Z",
+  "results": [
+    {
+      "file": "ngl-artwork-image-before-fix10.ts",
+      "group": "modern",
+      "id": "1091500",
+      "coldMs": 282,
+      "coldRequests": 4,
+      "coldBytes": 229068,
+      "warmMs": 88,
+      "warmRequests": 4,
+      "warmBytes": 229068,
+      "peak": 4,
+      "statuses": {
+        "200": 8
+      },
+      "successfulResults": 4
+    },
+    {
+      "file": "ngl-artwork-image-before-fix10.ts",
+      "group": "older",
+      "id": "12210",
+      "coldMs": 45,
+      "coldRequests": 4,
+      "coldBytes": 184890,
+      "warmMs": 34,
+      "warmRequests": 4,
+      "warmBytes": 184890,
+      "peak": 4,
+      "statuses": {
+        "200": 8
+      },
+      "successfulResults": 4
+    },
+    {
+      "file": "ngl-artwork-image-before-fix10.ts",
+      "group": "delisted",
+      "id": "221430",
+      "coldMs": 180,
+      "coldRequests": 4,
+      "coldBytes": 93090,
+      "warmMs": 33,
+      "warmRequests": 2,
+      "warmBytes": 92798,
+      "peak": 4,
+      "statuses": {
+        "200": 4,
+        "404": 2
+      },
+      "successfulResults": 2
+    },
+    {
+      "file": "artwork-image.ts",
+      "group": "modern",
+      "id": "1091500",
+      "coldMs": 33,
+      "coldRequests": 2,
+      "coldBytes": 114534,
+      "warmMs": 0,
+      "warmRequests": 0,
+      "warmBytes": 0,
+      "peak": 2,
+      "statuses": {
+        "200": 2
+      },
+      "successfulResults": 4
+    },
+    {
+      "file": "artwork-image.ts",
+      "group": "older",
+      "id": "12210",
+      "coldMs": 29,
+      "coldRequests": 2,
+      "coldBytes": 92445,
+      "warmMs": 0,
+      "warmRequests": 0,
+      "warmBytes": 0,
+      "peak": 2,
+      "statuses": {
+        "200": 2
+      },
+      "successfulResults": 4
+    },
+    {
+      "file": "artwork-image.ts",
+      "group": "delisted",
+      "id": "221430",
+      "coldMs": 31,
+      "coldRequests": 2,
+      "coldBytes": 46545,
+      "warmMs": 0,
+      "warmRequests": 0,
+      "warmBytes": 0,
+      "peak": 2,
+      "statuses": {
+        "200": 1,
+        "404": 1
+      },
+      "successfulResults": 2
+    }
+  ]
+}

@@ -175,3 +175,4 @@ export const suppressAdminPromptBackend = callable<[{ exe_path: string }], boole
 export const factoryResetBackend = callable<[{ request_json: string }], string>('factory_reset');
 
 export const readCustomLogoPositionBackend = callable<[{ shortcut_app_id: string }], string>('read_custom_logo_position');
+export const readLogoLayoutImagesBackend = callable<[{ shortcut_app_id: string }], string>('read_logo_layout_images');

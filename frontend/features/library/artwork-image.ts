@@ -1,21 +1,37 @@
 import { fetchArtworkImageBackend } from '../../api/backend';
 
+const missingImages = new Map<string, number>();
+export function imageUrlKnownMissing(url: string): boolean {
+	const expiry = missingImages.get(url);
+	if (!expiry) return false;
+	if (expiry > Date.now()) return true;
+	missingImages.delete(url);
+	return false;
+}
+function rememberMissingImage(url: string, status: number): void {
+	if (status !== 404 && status !== 410) return;
+	if (missingImages.size >= 256) missingImages.delete(missingImages.keys().next().value);
+	missingImages.set(url, Date.now() + 60_000);
+}
+
 /** Fetch an image URL with a bounded direct request and a CORS fallback for
  * non-Steam providers. Explicit client errors are authoritative misses. */
-export async function imageUrlToBase64(url: string): Promise<string | null> {
+async function downloadImage(url: string): Promise<string | null> {
 	if (!url || typeof url !== 'string') return null;
+	if (imageUrlKnownMissing(url)) return null;
 	if (/^data:image\/(?:png|jpe?g|webp);base64,[A-Za-z0-9+/=\s]+$/i.test(url)) return url;
 	const fetchWithTimeout = async (value: string, timeoutMs = 4000): Promise<{ ok: boolean; status: number; blob: Blob | null }> => {
 		const controller = new AbortController();
 		const timer = setTimeout(() => controller.abort(), timeoutMs);
 		try {
 			const response = await fetch(value, { signal: controller.signal });
-			clearTimeout(timer);
 			if (!response.ok) return { ok: false, status: response.status, blob: null };
 			return { ok: true, status: response.status, blob: await response.blob() };
 		} catch {
-			clearTimeout(timer);
 			return { ok: false, status: 0, blob: null };
+		} finally {
+			// Keep the deadline alive while reading the body, not just the headers.
+			clearTimeout(timer);
 		}
 	};
 	const blobToDataUrl = (blob: Blob): Promise<string | null> => new Promise(resolve => {
@@ -32,7 +48,10 @@ export async function imageUrlToBase64(url: string): Promise<string | null> {
 			const dataUrl = await blobToDataUrl(direct.blob);
 			if (dataUrl) return dataUrl;
 		}
-		if (direct.status >= 400 && direct.status < 500) return null;
+		if (direct.status >= 400 && direct.status < 500) {
+			rememberMissingImage(url, direct.status);
+			return null;
+		}
 		try {
 			const proxied = 'https://wsrv.nl/?url=' + encodeURIComponent(url.replace(/^https?:\/\//, '')) + '&output=png';
 			const fallback = await fetchWithTimeout(proxied, 8000);
@@ -47,11 +66,49 @@ export async function imageUrlToBase64(url: string): Promise<string | null> {
 		const raw = await fetchArtworkImageBackend({ request_json: JSON.stringify({ url }) });
 		let value: any = raw;
 		for (let attempt = 0; attempt < 3 && typeof value === 'string'; attempt += 1) value = JSON.parse(value);
+		rememberMissingImage(url, Number(value?.status));
 		const base64 = typeof value?.data_base64 === 'string' ? value.data_base64 : '';
 		const mime = typeof value?.mime === 'string' && /^image\/(?:png|jpeg|webp)$/.test(value.mime) ? value.mime : '';
 		if (value?.ok === true && base64 && mime) return `data:${mime};base64,${base64}`;
 	} catch {}
 	return null;
+}
+
+// Share transfers across concurrent links and retain a small, short-lived LRU
+// for repeated slots/repairs. Size accounts for UTF-16 base64 strings.
+const imageTransfers = new Map<string, Promise<string | null>>();
+const imageResults = new Map<string, { value: string; expires: number }>();
+const IMAGE_CACHE_BUDGET = 16 * 1024 * 1024;
+let imageCacheBytes = 0;
+
+export function imageUrlToBase64(url: string): Promise<string | null> {
+	if (!url || typeof url !== 'string') return Promise.resolve(null);
+	if (url.startsWith('data:')) return downloadImage(url);
+	const now = Date.now();
+	for (const [key, entry] of imageResults) {
+		if (entry.expires <= now) { imageCacheBytes -= entry.value.length * 2; imageResults.delete(key); }
+	}
+	const cached = imageResults.get(url);
+	if (cached) {
+		imageResults.delete(url); imageResults.set(url, cached);
+		return Promise.resolve(cached.value);
+	}
+	const active = imageTransfers.get(url);
+	if (active) return active;
+	const request = downloadImage(url).then(value => {
+		if (value && value.length * 2 <= IMAGE_CACHE_BUDGET) {
+			while (imageCacheBytes + value.length * 2 > IMAGE_CACHE_BUDGET && imageResults.size) {
+				const key = imageResults.keys().next().value;
+				imageCacheBytes -= imageResults.get(key)!.value.length * 2;
+				imageResults.delete(key);
+			}
+			imageResults.set(url, { value, expires: Date.now() + 60_000 });
+			imageCacheBytes += value.length * 2;
+		}
+		return value;
+	}).finally(() => imageTransfers.delete(url));
+	imageTransfers.set(url, request);
+	return request;
 }
 
 /**

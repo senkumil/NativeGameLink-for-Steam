@@ -7,7 +7,7 @@ import { imageUrlToBase64 } from './artwork-image';
 import { getModernLibraryAssets, getResolvedLibraryAssets } from './library-assets';
 import { waitForSteamBridge } from './steam-bridge';
 
-export const SHORTCUT_ICON_STORAGE_PREFIX = 'gdl_shortcut_icon4_';
+export const SHORTCUT_ICON_STORAGE_PREFIX = 'gdl_shortcut_icon5_';
 const shortcutIconGenerations = new Map<number, number>();
 const shortcutIconInFlight = new Map<string, Promise<boolean>>();
 
@@ -103,7 +103,8 @@ function shortcutIconMarkerMatches(shortcutAppId: number, steamAppId: string): b
 		const app = getShortcutAppById(shortcutAppId);
 		const currentPath = readShortcutOverviewField(app,
 			'strShortcutIcon', 'm_strShortcutIcon', 'shortcut_icon', 'strIconPath');
-		return Boolean(currentPath);
+		const normalizePath = (value: unknown): string => String(value || '').replace(/\\/g, '/').toLowerCase();
+		return Boolean(currentPath && marker.path && normalizePath(currentPath) === normalizePath(marker.path));
 	} catch { return false; }
 }
 

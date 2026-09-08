@@ -45,13 +45,31 @@ export function isRealSteamUiWindow(win: Window | undefined): boolean {
 	} catch { return false; }
 }
 
+/** Steam menus also have a Steam title and can contain "SP Desktop" in their
+ * name. They are auxiliary render targets, never the Library document. */
+export function isDesktopSteamWindow(win: Window | undefined, contextName = ''): boolean {
+	if (!win || win.closed) return false;
+	try {
+		const names = `${contextName} ${win.name || ''}`;
+		if (/shared\s*js\s*context|popup|menu|tooltip|login|overlay|SP BPM|big\s*picture|gamepad/i.test(names)) return false;
+		if (!win.document?.body) return false;
+		if (/^SP Desktop(?:_uid\d+)?$/.test(contextName || win.name || '')) return true;
+		// Generic titles such as "Steam" are shared by context menus. Require
+		// the desktop navigation or Library tree when no canonical name exists.
+		return Boolean(win.document.querySelector(
+			'[class*="libraryroot" i], [class*="libraryhome" i], [class*="appdetailsview" i], [class*="steamdesktop" i], [class*="supernav" i]',
+		));
+	} catch { return false; }
+}
+
 export function getCanonicalDesktopPopup(manager?: any): any {
 	const pm = manager || (typeof window !== 'undefined' ? (window as any).g_PopupManager : null);
 	if (pm) {
 		for (const name of ['SP Desktop_uid0', 'SP Desktop']) {
 			try {
 				const popup = pm.GetExistingPopup?.(name) || pm.m_mapPopups?.get?.(name);
-				if (popup) return popup;
+				const context = resolveSteamWindowContext(popup);
+				if (isDesktopSteamWindow(context.popupWin, context.popupName || name)) return popup;
 			} catch {}
 		}
 	}
@@ -61,7 +79,7 @@ export function getCanonicalDesktopPopup(manager?: any): any {
 	// background realm where plugins themselves are evaluated.
 	try {
 		const sp = findSP();
-		if (sp?.document?.body && !sp.closed && isRealSteamUiWindow(sp)) {
+		if (sp?.document?.body && !sp.closed && isDesktopSteamWindow(sp)) {
 			return { window: sp, m_strName: sp.name || 'SP Desktop', m_strTitle: sp.document.title || '' };
 		}
 	} catch {}

@@ -343,7 +343,7 @@ function M.fetch_library_assets(request_json)
         install_size = official_install_size_bytes(type(body.data[appid]) == "table" and body.data[appid].depots or nil),
         install_size_algorithm = 3,
     }
-    if result.logo == "" then result.logo = legacy_logo end
+    -- common.logo is an old opaque store banner, not a transparent library logo.
     if result.wide == "" then result.wide = legacy_header end
     local encoded = cjson.encode(result)
     lru.put(library_assets_cache, cache_key, { value = encoded, time = os.time() }, LIBRARY_ASSETS_CACHE_LIMIT)
@@ -404,7 +404,7 @@ function M.save_shortcut_artwork(request_json)
     local body = nil
     local url = tostring(request.url or "")
     if url ~= "" and url:match("^https?://") then
-        local ok_http, res = pcall(http.get, url, {
+        local ok_http, res = pcall(deps.binary_http.get, url, {
             headers = {
                 ["Accept"] = "image/png,image/jpeg,image/webp,*/*",
                 ["User-Agent"] = USER_AGENT,
@@ -495,7 +495,7 @@ function M.save_shortcut_icon(request_json)
 
     local icon_url = tostring(request.url or request.icon_url or "")
     if icon_url ~= "" and icon_url:match("^https?://") then
-        local ok_http, res = pcall(http.get, icon_url, {
+        local ok_http, res = pcall(deps.binary_http.get, icon_url, {
             headers = { ["Accept"] = "image/png,image/jpeg,image/x-icon,*/*", ["User-Agent"] = USER_AGENT },
             timeout = 15,
         })
@@ -544,7 +544,7 @@ function M.save_shortcut_icon(request_json)
         if (url:match("^https://cdn%.cloudflare%.steamstatic%.com/steamcommunity/public/images/apps/%d+/[0-9a-f]+%.[a-z]+$")
                 or url:match("^https://shared%.fastly%.steamstatic%.com/community_assets/images/apps/%d+/[0-9a-f]+%.[a-z]+$"))
             and (ext == "tga" or ext == "png" or ext == "ico" or ext == "jpg") then
-            local ok_http, res = pcall(http.get, url, { timeout = 20 })
+            local ok_http, res = pcall(deps.binary_http.get, url, { timeout = 20 })
             if ok_http and res and res.status == 200 and res.body and #res.body > 100 then
                 if not icon_files.validate(res.body, ext) then
                     -- Steam publishes several icon candidates for the same app. Some
@@ -659,6 +659,25 @@ function M.clear_all_linked_artworks()
     end
     logger:info("Dismount cleanup: removed " .. tostring(removed) .. " grid files for linked shortcuts.")
     return cjson.encode({ ok = true, removed = removed })
+end
+
+function M.read_logo_layout_images(request)
+    local id = type(request) == "table" and tostring(request.shortcut_app_id or "") or ""
+    local account = get_active_account_id()
+    if not id:match("^%d+$") or tonumber(id) < 2147483648 or not account then return cjson.encode({ok=false}) end
+    local root = fs.join(millennium.steam_path(), "userdata", account, "config", "grid")
+    local result = {ok=true}
+    for _, slot in ipairs({"logo", "hero"}) do
+        for _, ext in ipairs({"png", "jpg", "webp"}) do
+            local path = fs.join(root, id .. "_" .. slot .. "." .. ext)
+            if fs.exists(path) then
+                local ok, image = pcall(cjson.decode, deps.artwork_image_io.read_local(cjson.encode({path=path})))
+                if ok and image.ok then result[slot] = "data:" .. image.mime .. ";base64," .. image.data_base64 end
+                break
+            end
+        end
+    end
+    return cjson.encode(result)
 end
 
 function M.read_custom_logo_position(request_param)

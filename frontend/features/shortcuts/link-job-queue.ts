@@ -86,11 +86,10 @@ function sameLogicalShortcut(left: Pick<PendingLinkJob, 'shortcutAppId' | 'short
 	const rightId = Number(right.shortcutAppId || 0);
 	const leftHasId = Number.isFinite(leftId) && leftId >= 2147483648;
 	const rightHasId = Number.isFinite(rightId) && rightId >= 2147483648;
-	if (leftHasId && rightHasId && leftId === rightId) return true;
+	if (leftHasId && rightHasId) return leftId === rightId;
 	const leftExe = normalizedExecutable(left.shortcutExecutable);
 	const rightExe = normalizedExecutable(right.shortcutExecutable);
 	if (leftExe && rightExe) return leftExe === rightExe;
-	if (leftHasId && rightHasId) return false;
 	if (leftExe || rightExe) return false;
 	return String(left.title || '').trim().toLocaleLowerCase() === String(right.title || '').trim().toLocaleLowerCase();
 }
@@ -217,23 +216,24 @@ export function getPendingLinkJob(id: string): PendingLinkJob | null {
 	return readJobs().find(job => job.id === id) || null;
 }
 
+function matchesRequestedShortcut(job: PendingLinkJob, shortcutAppId: number | null | undefined, title: string): boolean {
+	if (shortcutAppId != null && job.shortcutAppId != null) return job.shortcutAppId === shortcutAppId;
+	return Boolean(title && job.title.trim().toLowerCase() === title.trim().toLowerCase());
+}
+
 /** A user who pressed Link has already made a decision; the detector must not
  * reopen its confirmation modal while that work is queued or retried. */
 export function hasPendingLinkJob(shortcutAppId: number | null | undefined, title = ''): boolean {
-	const normalizedTitle = String(title || '').trim().toLowerCase();
 	return readJobs().some(job => job.status !== 'failed'
-		&& ((shortcutAppId != null && job.shortcutAppId === shortcutAppId)
-			|| (!!normalizedTitle && job.title.trim().toLowerCase() === normalizedTitle)));
+		&& matchesRequestedShortcut(job, shortcutAppId, title));
 }
 
 /** Fast-track a specific shortcut job to the front of the background link queue. */
 export function prioritizePendingLinkJob(shortcutAppId: number | null | undefined, title = ''): boolean {
 	const jobs = readJobs();
-	const normalizedTitle = String(title || '').trim().toLowerCase();
 	const targetIndex = jobs.findIndex(job =>
 		job.status !== 'failed'
-		&& ((shortcutAppId != null && job.shortcutAppId === shortcutAppId)
-			|| (!!normalizedTitle && job.title.trim().toLowerCase() === normalizedTitle)));
+		&& matchesRequestedShortcut(job, shortcutAppId, title));
 	if (targetIndex < 0) return false;
 	const [job] = jobs.splice(targetIndex, 1);
 	job.nextAttemptAt = 0;
@@ -247,11 +247,7 @@ export function prioritizePendingLinkJob(shortcutAppId: number | null | undefine
 /** Cancel durable link work for a shortcut before an explicit unlink. */
 export function cancelPendingLinkJobs(shortcutAppId?: number | null, title = ''): number {
 	const jobs = readJobs();
-	const normalizedTitle = String(title || '').trim().toLowerCase();
-	const kept = jobs.filter(job => !(
-		(shortcutAppId != null && job.shortcutAppId === shortcutAppId)
-		|| (!!normalizedTitle && job.title.trim().toLowerCase() === normalizedTitle)
-	));
+	const kept = jobs.filter(job => !matchesRequestedShortcut(job, shortcutAppId, title));
 	const removed = jobs.length - kept.length;
 	if (removed > 0) { writeJobs(kept); scheduleNextRetry(kept); }
 	return removed;
@@ -270,7 +266,11 @@ export async function processPendingLinkJobs(targetDoc?: Document | null): Promi
 	if (processing) return processing;
 	processing = (async () => {
 		let jobs = readJobs();
-		for (const job of jobs) {
+		for (const snapshot of jobs) {
+			// A preceding asynchronous attempt may have cancelled/replaced later jobs.
+			jobs = readJobs();
+			const job = jobs.find(candidate => candidate.id === snapshot.id);
+			if (!job) continue;
 			if (job.status === 'staged') continue;
 			if (processingPauseDepth > 0 || isFactoryResetInProgress() || !isFactoryEpochCurrent(epoch)) {
 				backendLog('[NGL][Retry] Halting queue processing due to pause or reset barrier');
@@ -311,7 +311,7 @@ export async function processPendingLinkJobs(targetDoc?: Document | null): Promi
 
 			jobs = readJobs();
 			const current = jobs.find(candidate => candidate.id === job.id);
-			if (!current) continue;
+			if (!current || current.status === 'staged' || current.createdAt !== job.createdAt) continue;
 			if (result?.shortcutAppId && result.shortcutAppId !== current.shortcutAppId) {
 				current.shortcutAppId = result.shortcutAppId;
 			}
@@ -331,8 +331,8 @@ export async function processPendingLinkJobs(targetDoc?: Document | null): Promi
 			}
 
 			current.attempts += 1;
-			current.lastError = resourcesComplete ? String(result?.error || 'link_failed') : 'resource_sync_incomplete';
-			const isTerminalError = new Set(['invalid_appid', 'refusing_to_modify_native_steam_app', 'shortcut_not_found']).has(current.lastError);
+			current.lastError = String(result?.error || (isMapped && !resourcesComplete ? 'resource_sync_incomplete' : 'link_failed')).replace(/^Error:\s*/, '');
+			const isTerminalError = new Set(['invalid_appid', 'refusing_to_modify_native_steam_app', 'shortcut_not_found', 'shortcut_identity_ambiguous']).has(current.lastError);
 			const hardFailure = current.attempts >= 5 || isTerminalError;
 			if (hardFailure) {
 				current.status = 'failed';

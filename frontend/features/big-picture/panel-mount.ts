@@ -393,6 +393,8 @@ export function ensureCloudDivider(doc: Document, strip: HTMLElement): HTMLEleme
 	const parent = tabContainer.parentElement;
 	if (!parent) return null;
 	const cloudScope = parent.parentElement || parent;
+	const cloudHost = cloudScope;
+	const cloudAnchor = cloudHost === parent ? tabContainer : parent;
 	const stripRect = strip.getBoundingClientRect();
 	const hasNativeCloud = Array.from(cloudScope.querySelectorAll<HTMLElement>(
 		'[class*="CloudStatus"], [class*="cloudStatus"], [class*="CloudSync"], [class*="cloudSync"]'
@@ -414,9 +416,13 @@ export function ensureCloudDivider(doc: Document, strip: HTMLElement): HTMLEleme
 		divider.dataset.gdlCloudDivider = '1';
 		divider.setAttribute('role', 'status');
 		divider.setAttribute('aria-label', 'Steam Cloud');
-		parent.insertBefore(divider, tabContainer);
-	} else if (divider.parentElement !== parent || divider.nextElementSibling !== tabContainer) {
-		parent.insertBefore(divider, tabContainer);
+		divider.dataset.gdlCloudOutsideTabs = cloudHost === parent ? '0' : '1';
+		cloudHost.insertBefore(divider, cloudAnchor);
+	} else {
+		divider.dataset.gdlCloudOutsideTabs = cloudHost === parent ? '0' : '1';
+		if (divider.parentElement !== cloudHost || divider.nextElementSibling !== cloudAnchor) {
+			cloudHost.insertBefore(divider, cloudAnchor);
+		}
 	}
 	const playbar = PLAYBAR_CLASSES();
 	divider.className = playbar.CloudStatusRow || '';

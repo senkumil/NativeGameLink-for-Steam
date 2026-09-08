@@ -47,7 +47,47 @@ function newsDayLabel(item: NewsItem): string {
 	}
 }
 
-function showNativeNewsModal(doc: Document, item: NewsItem, imageUrl: string | undefined, classes: NativeAppDetailsClasses): void {
+function decodeNewsEntities(value: string): string {
+	return value
+		.replace(/&nbsp;/gi, ' ')
+		.replace(/&amp;/gi, '&')
+		.replace(/&lt;/gi, '<')
+		.replace(/&gt;/gi, '>')
+		.replace(/&quot;/gi, '"')
+		.replace(/&#39;|&apos;/gi, "'");
+}
+
+function cleanNewsModalText(contents: string): string {
+	return decodeNewsEntities(String(contents || ''))
+		.replace(/<br\s*\/?\s*>/gi, '\n')
+		.replace(/<\/p\s*>/gi, '\n\n')
+		.replace(/<[^>]+>/g, ' ')
+		.replace(/\[\*\]/g, '\n• ')
+		.replace(/\[\/\*\]/g, '')
+		.replace(/\[(?:list|olist|ul|ol)(?:=[^\]]+)?\]/gi, '\n')
+		.replace(/\[\/(?:list|olist|ul|ol)\]/gi, '\n')
+		.replace(/\[url(?:=[^\]]+)?\]/gi, '')
+		.replace(/\[\/url\]/gi, '')
+		.replace(/\[img(?:=[^\]]+)?\][\s\S]*?\[\/img\]/gi, '')
+		.replace(/\[\/?(?:b|i|u|s|h1|h2|h3|quote|code|spoiler|center|left|right|table|tr|td|th)(?:=[^\]]+)?\]/gi, '')
+		.replace(/\[[^\]]+\]/g, '')
+		.replace(/[ \t]+/g, ' ')
+		.replace(/ *\n */g, '\n')
+		.replace(/\n{3,}/g, '\n\n')
+		.trim();
+}
+
+function newsModalParagraphs(contents: string): string[] {
+	const clean = cleanNewsModalText(contents);
+	if (!clean) return [];
+	return clean
+		.split(/\n{2,}/)
+		.map(block => block.trim())
+		.filter(Boolean)
+		.slice(0, 36);
+}
+
+function showNativeNewsModal(doc: Document, item: NewsItem, imageUrl: string | undefined, _classes: NativeAppDetailsClasses): void {
 	dismissBigPictureFocusRing(doc);
 	let handle: { Close(): void } | undefined;
 	const close = () => {
@@ -57,30 +97,42 @@ function showNativeNewsModal(doc: Document, item: NewsItem, imageUrl: string | u
 	const title = item.title || loc('AppDetails_SectionTitle_News', 'Noticias');
 	const type = item.event_type ? eventTypeLabel(Number(item.event_type)) : (item.feedlabel || gdlText('feed_news', 'News'));
 	const date = newsDate(item);
-	const text = newsExcerpt(item.contents || '', 2000);
-	const event = classes.ActivityEvent;
+	const paragraphs = newsModalParagraphs(item.contents || '');
 
 	try {
 		handle = showModal(
-			<ModalRoot onCancel={close} closeModal={close} bAllowFullSize>
-				<div className={nativeClasses(event?.Event, event?.PartnerEvent, event?.PartnerEventMediumImage)}>
-					{imageUrl ? (
-						<div className={nativeClasses(event?.MediumImageContainer, classes.Media?.ScreenshotModal)}>
-							<img className={event?.PartnerEventMediumImage_Image} src={imageUrl} alt="" width="100%" />
-						</div>
-					) : null}
-					<div className={event?.PartnerEventType}>{type} {date ? `• ${date}` : ''}</div>
-					<div className={event?.PartnerEventMediumImage_Title}>{title}</div>
-					<div className={event?.PartnerEventMediumImage_Summary}>{text}</div>
-					<div className={classes.PostTextEntry?.Controls}>
-						{item.url ? (
-							<NativeButton {...clickProps(() => { close(); openSteamNavigationUrl(doc, item.url); })}>
-								{loc('AppDetails_ViewNewsOnline', 'Ver en Steam')}
-							</NativeButton>
+			<ModalRoot onCancel={close} closeModal={close} bAllowFullSize bDisableBackgroundDismiss>
+				<div id="gdl-bp-news-modal" className="gdl-bp-news-modal-shell">
+					<div className="gdl-bp-news-modal-window">
+						{imageUrl ? (
+							<div className="gdl-bp-news-modal-hero">
+								<img src={imageUrl} alt="" />
+							</div>
 						) : null}
-						<NativeButton {...clickProps(close)}>
-							{loc('Button_Close', 'Cerrar')}
-						</NativeButton>
+						<div className="gdl-bp-news-modal-content">
+							<div className="gdl-bp-news-modal-meta">{type}{date ? <><span>•</span>{date}</> : null}</div>
+							<div className="gdl-bp-news-modal-title">{title}</div>
+							<div className="gdl-bp-news-modal-body">
+								{paragraphs.length > 0 ? paragraphs.map((paragraph, index) => (
+									<p key={`${item.gid || item.title}-${index}`} className={paragraph.startsWith('• ') ? 'gdl-bp-news-modal-bullet' : undefined}>
+										{paragraph}
+									</p>
+								)) : <p>{loc('AppDetails_Activity_NoDescription', 'No hay más detalles disponibles.')}</p>}
+							</div>
+						</div>
+						<div className="gdl-bp-news-modal-footer">
+							{item.url ? (
+								<NativeButton
+									className="gdl-bp-news-modal-open"
+									{...clickProps(() => { close(); openSteamNavigationUrl(doc, item.url); })}
+								>
+									{loc('AppDetails_ViewNewsOnline', 'Ver en Steam')}
+								</NativeButton>
+							) : null}
+							<NativeButton className="gdl-bp-news-modal-close gdl-bp-news-modal-close-btn" {...clickProps(close)}>
+								{loc('Button_Close', 'Cerrar')}
+							</NativeButton>
+						</div>
 					</div>
 				</div>
 			</ModalRoot>,

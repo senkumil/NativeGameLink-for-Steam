@@ -48,6 +48,17 @@ const bpDetails = read('frontend/features/big-picture/details.ts');
 const gamepadContext = read('frontend/steam/gamepad/GamepadContext.ts');
 const achievementsPlaybar = read('frontend/features/achievements/playbar.ts');
 const bpPanelMount = read('frontend/features/big-picture/panel-mount.ts');
+const activitySection = read('frontend/features/big-picture/activity-section.tsx');
+const virtualKeyboard = read('frontend/steam/gamepad/virtual-keyboard.ts');
+const bpNativeComponents = read('frontend/steam/gamepad/components/AppDetailsNativeComponents.ts');
+const bpControllerIcons = read('frontend/features/big-picture/PlaybarControllerIcons.tsx');
+const bpAchievements = read('frontend/features/big-picture/NativeBigPictureAchievements.tsx');
+const communityLua = read('backend/lib/community.lua');
+const navigationTs = read('frontend/steam/navigation.ts');
+const communityViewTs = read('frontend/features/library/community-view.ts');
+const bpRuntime = read('frontend/features/big-picture/runtime.ts');
+const mappingsTs = read('frontend/core/mappings.ts');
+const existingWindows = read('frontend/runtime/existing-windows.ts');
 
 let passed = 0;
 function assert(condition, message) {
@@ -235,6 +246,11 @@ assert(!bpTabs.includes('order[idx]') && bpTabs.includes('LIBRARY_COLLECTION_KEY
 assert(gamepadContext.includes('NON_DETAILS_ROUTE_PATTERN') && gamepadContext.includes('export function collectActiveRouteValues'), 'GamepadContext exports collectActiveRouteValues and guards against non-details library routes');
 assert(gamepadContext.includes('[role="tablist"]'), 'appIdsFromReactOwners strictly excludes role=tablist to prevent library overview fiber leakage');
 assert(bpDetails.includes('isLibraryOrNonDetailsView(doc)') && bpDetails.includes('removeBigPictureDetailsNodes(doc)'), 'refreshBigPictureShortcutDetails immediately tears down detail nodes and exits on library views');
+assert(!bpTabs.includes('CollectionsHeader') && !gamepadContext.includes('CollectionsHeader') && !bpDetails.includes('CollectionsHeader'), 'CollectionsHeader is not treated as a library overview selector, preserving InfoTab mounting');
+assert(!bpPanelMount.includes('CollectionsHeader') && bpPanelMount.includes('se encuentra en estas colecciones'), 'hideBigPictureNonSteamNotices suppresses non-steam game and collection notices on Info tab without false positive exclusions');
+assert(gamepadContext.indexOf('const identity = activeContextFromIdentity') < gamepadContext.indexOf('const byHeading = headingContext'), 'resolveActiveGameContext prioritizes authoritative identity over heading context, protecting legitimate Steam games');
+assert(bpPanelMount.includes("context.type !== 'shortcut-linked'") && bpPanelMount.includes('removePlaybarControllerStat'), 'ensurePlaybarControllerStat guards against non-shortcut context to prevent duplicate controller icons on legitimate games');
+assert(bpPanelMount.includes('hasNativeCloud') && bpPanelMount.includes('removeCloudDivider'), 'ensureCloudDivider guards against legitimate games and detects document-wide native cloud status');
 
 // Browser shortcut protection & Restart Deadlock Prevention:
 // Prevent Chromium native accelerators (Ctrl+S, Ctrl+P, Ctrl+O) from opening Win32 modal
@@ -258,5 +274,118 @@ assert(libraryRuntime.includes("disposeSteamNavigation(doc)"), 'library runtime 
 assert(achievementsPlaybar.includes('steamUIModeService.isGamepadUI(doc)') && achievementsPlaybar.includes("doc.querySelectorAll<HTMLElement>('[data-gdl-playbar-achievements=\"1\"], #gdl-playbar-achievements').forEach(el => el.remove());"), 'ensureLocalPlaybarStat rejects GamepadUI/Big Picture and purges playbar achievements');
 assert(bpPanelMount.includes("statsSection.querySelectorAll<HTMLElement>('[data-gdl-playbar-achievements=\"1\"], #gdl-playbar-achievements').forEach(el => el.remove());"), 'ensurePlaybarControllerStat purges residual playbar achievement elements in Big Picture mode');
 assert(bpDetails.includes('#gdl-playbar-achievements, [data-gdl-playbar-achievements="1"]'), 'removeBigPictureDetailsNodes purges residual playbar achievement elements');
- 
+
+// Big Picture Tab navigation and Details parity:
+// Ensure activeTabFromNative includes multi-layer detection (aria, classes, focus, background brightness, content fallback),
+// notice suppression enforces display: none !important, and details styles are installed.
+const bpDetailsStyles = read('frontend/features/big-picture/details-styles.ts');
+assert(bpTabs.includes('isNodeSelectedOrActive') && bpTabs.includes('brightestTab') && bpTabs.includes('hasNativeGameInfo'), 'activeTabFromNative has multi-layer tab selection resilience including native content fallback');
+assert(bpPanelMount.includes("style.setProperty('display', 'none', 'important')") && bpPanelMount.includes('NonSteamGameNotice'), 'hideBigPictureNonSteamNotices suppresses non-steam notices and duplicate collections with important display');
+assert(bpDetails.includes('ensureBigPictureDetailStyles(doc)') && bpDetailsStyles.includes('gdl-bp-community-grid') && bpDetailsStyles.includes('gdl-bp-info-root'), 'Big Picture details injects custom layout styles for community and game info');
+
+// Big Picture Modal / Focus Ring Dismissal:
+// Modals (trading card preview, screenshot modal, community image modal, news dialog, Steam dialogs)
+// must dismiss and suppress the focus ring, and gamepad nav must recognize native Steam dialogs.
+assert(gamepadNav.includes('export function dismissBigPictureFocusRing'), 'gamepadNav exports dismissBigPictureFocusRing');
+assert(gamepadNav.includes('[role="dialog"]') && gamepadNav.includes('ModalPosition'), 'gamepadNav getActiveModal detects native Steam modal dialogs');
+assert(bigPictureDetails.includes('dismissBigPictureFocusRing(doc)'), 'NativeBigPictureDetails dismisses focus ring when opening and closing image modals');
+
+// Big Picture Controller Icon Parity:
+// Controller icons in the playbar use Steam's native Webpack components (IconsModule, ControllerType, XboxOutline, Ps4Outline, Ps5Outline)
+// and native ControllerSupportInfo / ControllerSupportRow classes with native 36px sizing (no manual downscaling).
+// ControllerStatus is strictly excluded because it calls useQuery() requiring QueryClientProvider which crashes isolated roots.
+assert(bpPanelMount.includes('mountPlaybarControllerIcons(row, doc, support)'), 'ensurePlaybarControllerStat delegates to mountPlaybarControllerIcons');
+assert(bpPanelMount.includes('playbar.ControllerSupportInfo') && bpPanelMount.includes('playbar.ControllerSupportRow'), 'ensurePlaybarControllerStat applies native Steam ControllerSupportInfo and ControllerSupportRow classes');
+assert(bpControllerIcons.includes('resolveNativeControllerIcons') && bpControllerIcons.includes('IconsModule'), 'PlaybarControllerIcons resolves native Webpack icons from Steam chunk runtime');
+assert(!bpControllerIcons.includes('ControllerStatus') && bpControllerIcons.includes('ControllerType'), 'PlaybarControllerIcons avoids ControllerStatus to prevent QueryClientProvider crash');
+assert(bpControllerIcons.includes('PlaybarErrorBoundary'), 'PlaybarControllerIcons wraps rendering in PlaybarErrorBoundary');
+assert(bpNativeComponents.includes('resolveNativeControllerIcons') && bpNativeComponents.includes('resolveNativeControllerFeatureComponent'), 'native components resolver provides Webpack controller icon and feature resolvers');
+assert(!bpPanelMount.includes("svg.setAttribute('width', '24')"), 'eliminated manual hardcoded 24x20px SVG downsizing in favor of native Steam Webpack sizing');
+
+// Big Picture and CEF Browser Protection:
+// Prevents Chromium from triggering "Save Page As" / "Guardar como" modal dialogs and closing Steam:
+// keydown/keyup capture phase blocks Ctrl+S, Ctrl+P, Ctrl+O, contextmenu blocks native Save As,
+// and activateBigPicture installs browser protection on Big Picture document and window.
+assert(browserProtection.includes("key === 's' || code === 83"), 'browser-protection blocks Ctrl+S / Cmd+S');
+assert(browserProtection.includes('blockContextMenu') && browserProtection.includes('blockAcceleratorHandler'), 'browser-protection suppresses unhandled contextmenu and keyboard accelerators');
+assert(bpRuntime.includes('installBrowserProtection(doc.defaultView, doc)'), 'activateBigPicture installs browser protection in Big Picture mode');
+
+// Big Picture Anti-Flicker & Launch Stabilization:
+// Launching/closing a game must never trigger rapid re-render or tear-down loops:
+// 1. requestBigPictureRerender throttles MILLENNIUM_STEAM_FORCE_RERENDER to at most once per 1.5s
+// 2. refreshBigPicture coalesces rapid back-to-back refresh passes
+// 3. handleBigPictureExit is guarded against active/connected Big Picture sessions
+// 4. steamUIModeService.isGamepadUI strictly evaluates document surface when doc is supplied
+// 5. refreshBigPictureShortcutDetails preserves existing details when tabs momentarily transition
+assert(bpRuntime.includes('requestBigPictureRerender()') && bpRuntime.includes('now - lastRerenderTime < 1500'), 'runtime throttles forced re-renders to prevent render loops');
+assert(bpRuntime.includes('activeRefreshPromise') && bpRuntime.includes('Date.now() - lastRefreshCompletedAt < 250'), 'runtime coalesces rapid Big Picture refreshes');
+assert(runtimeApp.includes('handleBigPictureExit(): void') && runtimeApp.includes('bpDoc && bpDoc.body?.isConnected'), 'handleBigPictureExit is guarded against destroying active Big Picture documents');
+assert(uiModeService.includes('if (doc) return this.isDocumentGamepadSurface(doc);'), 'steamUIModeService strictly scopes isGamepadUI to document when doc is provided');
+assert(bpDetails.includes('if (isLibraryOrNonDetailsView(doc))') && bpDetails.includes('scheduleDetailRetry(doc);'), 'details preserves mounted details during transient tab transitions');
+
+// Library Sidebar: Legitimate Steam games must never disappear or leave empty gaps
+// when a non-Steam shortcut maps to the same AppID. cleanupGhostSidebarEntries must
+// NOT set display: none on virtual list rows, and tryRedirectUnownedMappedGame must
+// use AppStoreAdapter to verify ownership before redirecting.
+const sidebarCleanup = read('frontend/features/library/sidebar-cleanup.ts');
+assert(sidebarCleanup.includes('AppStoreAdapter.getAppOverview(appId)'), 'sidebar cleanup uses AppStoreAdapter for ownership checks');
+assert(!sidebarCleanup.includes("row.style.display = 'none'") && !sidebarCleanup.includes("row.style.setProperty('display', 'none'"), 'cleanupGhostSidebarEntries never hides virtual gamelist rows with display: none');
+assert(sidebarCleanup.includes("row.style.removeProperty('display')"), 'cleanupGhostSidebarEntries restores any previously suppressed virtual rows');
+
+// Big Picture Activity Input & Virtual Keyboard:
+// Selecting the activity post entry bar must NOT turn it white (preserves native dark background with white focus ring),
+// and activating/writing in it must invoke Steam's native on-screen virtual keyboard.
+assert(bpDetailsStyles.includes('.gdl-bp-post-entry-bar') && bpDetailsStyles.includes('.gdl-bp-post-entry-bar.gpfocus'), 'details styles style activity post entry bar and focus state');
+assert(bpDetailsStyles.includes('rgba(255, 255, 255, 0.12) !important') && bpDetailsStyles.includes('border-color: #ffffff !important'), 'activity post entry bar retains dark background and white focus ring instead of turning white');
+assert(activitySection.includes('showSteamVirtualKeyboard(document, textareaRef.current)'), 'PostTextEntry invokes virtual keyboard on activation and textarea focus');
+assert(activitySection.includes('hideSteamVirtualKeyboard(document)'), 'PostTextEntry dismisses virtual keyboard on cancel or publish');
+assert(virtualKeyboard.includes('resolveVirtualKeyboardHandle') && virtualKeyboard.includes('VirtualKeyboardMessage'), 'virtual keyboard service supports Webpack and PostMessage protocols');
+assert(bpNativeComponents.includes('resolveNativePostTextEntryComponent') && bpNativeComponents.includes('resolveNativeFocusableTextarea'), 'native components resolver provides Webpack PostTextEntry and FocusableTextarea');
+assert(activitySection.includes('resolveNativePostTextEntryComponent(document)') && activitySection.includes('resolveNativeFocusableTextarea(document)'), 'activity section uses Webpack native PostTextEntry and FocusableTextarea');
+assert(!activitySection.includes('<div className={postClasses?.PostTextEntryArea}>') && !activitySection.includes("resize: 'vertical'"), 'activity section eliminates nested PostTextEntryArea boxes and vertical resize grip');
+assert(bpDetailsStyles.includes('resize: none !important') && bpDetailsStyles.includes('.gdl-bp-post-entry-active'), 'details styles enforce resize none and clean active post container');
+
+// Big Picture Gamepad Navigation Parity & Non-Skipping:
+// Vertical up/down navigation must NEVER skip adjacent elements. Strict 10px row window,
+// vertical immediacy score weighting, deduplicated keydown/gamepad poller state, and
+// full interactive navigation across Stuff, Community, Info, and Activity sections.
+assert(gamepadNav.includes('v <= minVert + 10'), 'gamepad nav enforces strict immediate-row 10px window avoiding skipping adjacent rows');
+assert(gamepadNav.includes('score = v * 20 + horiz'), 'gamepad nav prioritizes vertical immediacy score over horizontal alignment');
+assert(gamepadNav.includes('lastDirTime.set(dir, now)') && gamepadNav.includes('dirHoldTime.set(dir, now)'), 'gamepad nav onGlobalKeyDown synchronizes poller hold state to eliminate double-stepping');
+assert(gamepadNav.includes('.gdl-bp-trading-card') && gamepadNav.includes('.gdl-bp-badge-action'), 'gamepad nav selector includes trading cards and badge actions');
+assert(gamepadNav.includes('.gdl-bp-info-feature') && gamepadNav.includes('.gdl-bp-info-description'), 'gamepad nav selector includes game info description and features');
+assert(bigPictureDetails.includes('gdl-bp-trading-card') && bigPictureDetails.includes('gdl-bp-badge-action'), 'NativeBigPictureDetails ensures trading cards and badges are focusable and navigable');
+assert(bigPictureDetails.includes('gdl-bp-info-description') && bigPictureDetails.includes('gdl-bp-info-feature'), 'NativeBigPictureDetails ensures game description and feature tags are focusable');
+assert(bigPictureDetails.includes('gdl-bp-community-empty') && bigPictureDetails.includes('AppDetails_Community_Hub'), 'NativeBigPictureDetails provides focusable community hub button when empty');
+assert(bpAchievements.includes('gdl-bp-view-all-achievements') && bpAchievements.includes('AppDetails_Achievements_ViewAll'), 'NativeBigPictureAchievements provides focusable view-all achievements trigger');
+assert(activitySection.includes('profiles/${friend.steamid}') && activitySection.includes('gdl-bp-friend-card'), 'activity section friends cards support focus and activate friend profiles');
+
+// Community Videos Direct Playback:
+// 1. community.lua fetches videos with subsection 3 and artwork with subsection 4
+assert(communityLua.includes('fetch_sub(lang, lang, 3, "video", "Videos")') && communityLua.includes('fetch_sub(lang, lang, 4, "artwork", "Artwork")'), 'community.lua accurately targets Steam Community subsection 3 for videos');
+// 2. community.lua and navigation.ts extract YouTube IDs robustly (including IDs with hyphens)
+assert(communityLua.includes('img%.youtube%.com/vi/([^/"%s]+)') && communityLua.includes("item.image:match('img%.youtube%.com/vi/"), 'community.lua extracts YouTube ID from video cards and preview images');
+assert(navigationTs.includes('extractCommunityYoutubeId') && navigationTs.includes('youtube-nocookie.com/embed/'), 'navigation.ts exports YouTube ID extractor and handles iframe embed');
+// 3. Desktop community-view renders video cards with data-gdl-youtube-id and direct play button
+assert(communityViewTs.includes('extractCommunityYoutubeId(item)') && communityViewTs.includes('data-gdl-youtube-id="${escapeHtml(resolvedYtId)}"'), 'community view ensures video cards receive direct YouTube player attributes');
+// 4. NativeBigPictureDetails provides showNativeVideoModal and plays videos on activate
+assert(bigPictureDetails.includes('showNativeVideoModal') && bigPictureDetails.includes('gdl-bp-video-modal-wrap'), 'NativeBigPictureDetails plays community videos directly via modal dialog');
+assert(bpDetailsStyles.includes('.gdl-bp-video-play-btn') && bpDetailsStyles.includes('.gdl-bp-video-modal-frame'), 'details styles provide Big Picture play button and video modal frame rules');
+
+// Startup Reliability & Window Adoption:
+// 1. filterMappingsForLocalShortcuts must never discard mappings when shortcuts registry has 0 items (e.g. cold start lock)
+assert(mappingsTs.includes('if (!snapshot || !snapshot.ids || snapshot.ids.size === 0) return { mappings: source, removed: [] }'), 'mappings filter guards against wiping mappings when shortcut snapshot is empty on startup');
+assert(mappingsTs.includes('const hasValidShortcutRegistry = Boolean(localShortcuts && localShortcuts.ids && localShortcuts.ids.size > 0)'), 'hydrateMappings checks valid non-empty shortcut registry before purging');
+// 2. existing-windows provides isRealSteamUiWindow and getCanonicalDesktopPopup
+assert(existingWindows.includes('isRealSteamUiWindow') && existingWindows.includes('getCanonicalDesktopPopup'), 'existing windows module exports real Steam UI validator and canonical desktop locator');
+// 3. resolveMainWindowDocument checks getCanonicalDesktopPopup to prioritize real SP Desktop document
+assert(runtimeApp.includes('getCanonicalDesktopPopup()') && runtimeApp.includes('if (!observedDocs.has(doc)) windowCreated(popup)'), 'resolveMainWindowDocument prioritizes canonical desktop popup and adopts it if unobserved');
+// 4. windowCreated includes retry timers for CEF about:blank cross-document navigation
+assert(runtimeApp.includes('setTimeout(() => { try { if (!popupWin.closed && popupWin.document?.body) windowCreated(context);') && runtimeApp.includes('isRealSteamUiWindow(popupWin)'), 'windowCreated uses timeout retries and validates real Steam UI window');
+// 5. app.tsx maintains a recurring adoption interval to guarantee late-mounting Steam popups are adopted
+assert(runtimeApp.includes('const adoptionInterval = setInterval(() => { try { adoptExistingSteamWindows(windowCreated); } catch {} }, 3000)') && runtimeApp.includes('clearInterval(adoptionInterval)'), 'app.tsx maintains recurring adoption interval and cleans up on dismount');
+
 console.log(`All ${passed} user-reported bug regression checks passed.`);
+
+
+

@@ -18,6 +18,31 @@ export function resolveSteamWindowContext(context: any): {
 	};
 }
 
+export function isRealSteamUiWindow(win: Window | undefined): boolean {
+	if (!win) return false;
+	try {
+		const doc = win.document;
+		if (!doc || !doc.body) return false;
+		if (win.name && /SP Desktop|SP BPM|Steam|Gamepad/i.test(win.name)) return true;
+		const href = String(win.location?.href || '');
+		if (href.includes('steamloopback.host') || href.includes('routes/library') || href.includes('gamepadui')) return true;
+		if (doc.querySelector?.('.libraryhomeshowcases, [class*="libraryhome"], [class*="FullModalOverlay"], [class*="GamepadUI"], .GamepadUI, #root')) return true;
+	} catch {}
+	return false;
+}
+
+export function getCanonicalDesktopPopup(manager?: any): any {
+	const pm = manager || (typeof window !== 'undefined' ? (window as any).g_PopupManager : null);
+	if (!pm) return null;
+	for (const name of ['SP Desktop_uid0', 'SP Desktop']) {
+		try {
+			const popup = pm.GetExistingPopup?.(name) || pm.m_mapPopups?.get?.(name);
+			if (popup) return popup;
+		} catch {}
+	}
+	return null;
+}
+
 /**
  * Adopt Steam windows that predate a plugin frontend.
  *
@@ -57,5 +82,7 @@ export function adoptExistingSteamWindows(onWindowCreated: (context: any) => voi
 	}
 
 	for (const context of contexts) onWindowCreated(context);
-	if (contexts.length === 0) onWindowCreated(window);
+	if (contexts.length === 0 && isRealSteamUiWindow(typeof window !== 'undefined' ? window : undefined)) {
+		onWindowCreated(window);
+	}
 }

@@ -46,13 +46,32 @@ export function openSteamNavigationUrl(doc: Document, raw: string): boolean {
 	}
 }
 
+export function extractCommunityYoutubeId(item?: { youtube_id?: string; image?: string; link?: string; video_url?: string } | null): string | null {
+	if (!item) return null;
+	if (item.youtube_id && item.youtube_id.length >= 6) return item.youtube_id;
+	const sources = [item.image, item.link, item.video_url].filter(Boolean) as string[];
+	for (const src of sources) {
+		const m = src.match(/(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/|img\.youtube\.com\/vi\/|i[0-9]?\.ytimg\.com\/vi\/)([a-zA-Z0-9_-]{11})/i);
+		if (m && m[1]) return m[1];
+	}
+	return null;
+}
+
 function handleDelegatedClick(doc: Document, event: MouseEvent): void {
 	const target = event.target as Element | null;
 	if (!target) return;
 
-	const videoCard = target.closest<HTMLElement>('[data-gdl-youtube-id]');
-	if (videoCard && !videoCard.classList.contains('gdl-video-playing')) {
-		const ytId = videoCard.dataset.gdlYoutubeId;
+	const videoCard = target.closest<HTMLElement>('[data-gdl-youtube-id], .gdl-community-card-video');
+	if (videoCard) {
+		if (videoCard.classList.contains('gdl-video-playing')) {
+			return;
+		}
+		let ytId = videoCard.dataset.gdlYoutubeId;
+		if (!ytId) {
+			const img = videoCard.querySelector<HTMLImageElement>('img');
+			const openUrl = videoCard.dataset.gdlOpenUrl;
+			ytId = extractCommunityYoutubeId({ image: img?.src, link: openUrl }) || undefined;
+		}
 		if (ytId) {
 			event.preventDefault();
 			event.stopPropagation();

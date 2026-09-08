@@ -111,8 +111,12 @@ class SteamUIModeService {
 		const href = String(view?.location?.href || doc.location?.href || '');
 		if (/(?:gamepadui|bigpicture|tenfoot)/i.test(href)) return true;
 		if (doc.title && /Big Picture/i.test(doc.title)) return true;
+		if (doc.documentElement && (doc.documentElement.classList.contains('GamepadUI') || doc.documentElement.classList.contains('gamepadui'))) return true;
 		if (doc.body) {
 			if (doc.body.classList.contains('GamepadUI') || doc.body.classList.contains('gamepadui')) return true;
+		}
+		if (typeof doc.querySelector === 'function') {
+			if (doc.querySelector('.GamepadUI, .gamepadui, [class*="GamepadUI"], [class*="gamepadui"]')) return true;
 		}
 		return false;
 	}

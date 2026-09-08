@@ -1,4 +1,5 @@
 import { loc } from '../../steam/localization';
+import { APP_DETAILS_ROUTE_PATTERN, collectActiveRouteValues } from '../../steam/gamepad/GamepadContext';
 import type { BigPictureTab } from './types';
 
 export const TAB_TEXT: Record<BigPictureTab, string[]> = {
@@ -108,7 +109,7 @@ export function findTabTextElement(doc: Document, tab: BigPictureTab): HTMLEleme
 export function clickableTabElement(element: HTMLElement): HTMLElement {
 	let current: HTMLElement | null = element;
 	for (let depth = 0; current && depth < 5; depth++, current = current.parentElement) {
-		if (current.matches('button,[role="button"],[tabindex]')) return current;
+		if (current.matches('button, [role="button"], [role="tab"], [tabindex], [class*="Tab_"], [class*="tab_"], [class*="TabItem"], [class*="tabItem"]')) return current;
 	}
 	return element;
 }
@@ -130,7 +131,9 @@ const LIBRARY_COLLECTION_KEYWORDS = [
 ];
 
 export function findBigPictureTabStrip(doc: Document): { strip: HTMLElement; controls: Map<BigPictureTab, HTMLElement> } | null {
-	if (doc.querySelector('[class*="AllGames"], [class*="CollectionsHeader"], [class*="LibraryHome"], [class*="AllCollections"]')) {
+	const routeValues = collectActiveRouteValues(doc);
+	const hasAppRoute = routeValues.some(v => APP_DETAILS_ROUTE_PATTERN.test(v));
+	if (!hasAppRoute && doc.querySelector('[class*="AllGames"], [class*="LibraryHome"], [class*="AllCollections"]')) {
 		return null;
 	}
 
@@ -138,7 +141,7 @@ export function findBigPictureTabStrip(doc: Document): { strip: HTMLElement; con
 	for (const tab of ['activity', 'stuff', 'community', 'info'] as BigPictureTab[]) {
 		const text = findTabTextElement(doc, tab);
 		if (text) {
-			if (text.closest('#gdl-bp-detail-root, [class*="AllGames"], [class*="CollectionsHeader"], [class*="LibraryHome"], [class*="Shelf"], [class*="Grid"]')) {
+			if (text.closest('#gdl-bp-detail-root, [class*="AllGames"], [class*="LibraryHome"], [class*="Shelf"], [class*="Grid"]')) {
 				continue;
 			}
 			controls.set(tab, clickableTabElement(text));
@@ -153,13 +156,16 @@ export function findBigPictureTabStrip(doc: Document): { strip: HTMLElement; con
 	}
 	if (!strip || strip === doc.body) return null;
 
-	if (strip.closest('[class*="AllGames"], [class*="CollectionsHeader"], [class*="LibraryHome"], [class*="Shelf"], [class*="Grid"]')) {
+	if (strip.closest('[class*="AllGames"], [class*="LibraryHome"], [class*="Shelf"], [class*="Grid"]')) {
 		return null;
 	}
 
-	const stripText = normalizeUiText(strip.textContent || '');
-	if (LIBRARY_COLLECTION_KEYWORDS.some(kw => stripText.includes(kw))) {
-		return null;
+	const isAppDetailsTabs = controls.has('activity') && (controls.has('info') || controls.has('stuff') || controls.has('community'));
+	if (!isAppDetailsTabs) {
+		const stripText = normalizeUiText(strip.textContent || '');
+		if (LIBRARY_COLLECTION_KEYWORDS.some(kw => stripText.includes(kw))) {
+			return null;
+		}
 	}
 
 	while (strip.parentElement && strip.parentElement !== doc.body) {
@@ -167,37 +173,78 @@ export function findBigPictureTabStrip(doc: Document): { strip: HTMLElement; con
 		if (rect.width >= 200 && rect.height > 20 && rect.height <= 150) break;
 		const parent = strip.parentElement;
 		if (!values.every(value => parent.contains(value))) break;
+		if (parent.querySelector('#gdl-bp-detail-root, [class*="AppDetailsOverviewPanel"], [class*="ScrollContainer"]')) break;
 		strip = parent;
 	}
 	return { strip, controls };
 }
 
+function isNodeSelectedOrActive(node: Element | null): boolean {
+	if (!node) return false;
+	if (node.getAttribute('aria-selected') === 'true') return true;
+	if (node.getAttribute('data-selected') === 'true') return true;
+	if (node.getAttribute('aria-current') === 'page' || node.getAttribute('aria-current') === 'true') return true;
+	const cls = String((node as HTMLElement).className || '');
+	if (/(^|[\s_-])(selected|active|current)([\s_-]|$)/i.test(cls)) return true;
+	if (cls.includes('Selected') || cls.includes('selected') || cls.includes('active_') || cls.includes('_active')) return true;
+	return false;
+}
+
 export function activeTabFromNative(doc: Document, controls: Map<BigPictureTab, HTMLElement>): BigPictureTab | null {
 	for (const [tab, el] of controls) {
-		if (el.getAttribute('aria-selected') === 'true') {
+		if (isNodeSelectedOrActive(el)) return tab;
+		let p = el.parentElement;
+		for (let depth = 0; p && depth < 4; depth++, p = p.parentElement) {
+			if (isNodeSelectedOrActive(p)) return tab;
+		}
+		if (el.querySelector('[aria-selected="true"], [data-selected="true"], [class*="Selected"], [class*="selected"], [class*="Active"], [class*="active"]')) {
 			return tab;
 		}
 	}
+
 	for (const [tab, el] of controls) {
-		if (el.getAttribute('aria-current') === 'page' || el.getAttribute('aria-current') === 'true') {
+		if (el.classList.contains('gpfocus') || el.dataset.focus === 'true' || el.matches(':focus, :focus-visible, [class*="gpfocus"]')) {
+			return tab;
+		}
+		if (doc.activeElement && (doc.activeElement === el || el.contains(doc.activeElement))) {
+			return tab;
+		}
+		if (el.querySelector(':focus, [class*="gpfocus"], [data-focus="true"]')) {
 			return tab;
 		}
 	}
+
+	let brightestTab: BigPictureTab | null = null;
+	let maxBgBrightness = 0;
 	for (const [tab, el] of controls) {
-		if (el.classList.contains('gpfocus') || el.dataset.focus === 'true') {
-			return tab;
+		const target = el.matches('button, [role="tab"], [role="button"]') ? el : (el.parentElement || el);
+		const style = doc.defaultView?.getComputedStyle(target);
+		const bg = String(style?.backgroundColor || '');
+		const rgbMatch = bg.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/);
+		if (rgbMatch) {
+			const a = rgbMatch[4] !== undefined ? parseFloat(rgbMatch[4]) : 1;
+			if (a > 0.15) {
+				const brightness = (parseInt(rgbMatch[1], 10) + parseInt(rgbMatch[2], 10) + parseInt(rgbMatch[3], 10)) * a;
+				if (brightness > maxBgBrightness) {
+					maxBgBrightness = brightness;
+					brightestTab = tab;
+				}
+			}
 		}
 	}
-	let best: { tab: BigPictureTab; score: number } | null = null;
-	for (const [tab, el] of controls) {
-		let score = 0;
-		if (el.classList.contains('active') || el.classList.contains('Selected') || el.classList.contains('focus')) score += 50;
-		if (doc.activeElement && (doc.activeElement === el || el.contains(doc.activeElement))) score += 40;
-		const focusedChild = el.querySelector(':focus');
-		if (focusedChild) score += 30;
-		if (score > 0 && (!best || score > best.score)) {
-			best = { tab, score };
-		}
+	if (brightestTab && maxBgBrightness > 50) return brightestTab;
+
+	const hasNativeGameInfo = Boolean(
+		doc.querySelector('[class*="NonSteamGameNotice"], [class*="GameInfoCollections"], [class*="GameInfoContainer"]')
+		|| Array.from(doc.querySelectorAll<HTMLElement>('div, p, [class*="Notice"]')).some(el => {
+			if (el.closest('#gdl-bp-detail-root')) return false;
+			const t = (el.textContent || '').trim().toLowerCase();
+			return t.includes('no es un juego de steam') || t.includes('non-steam game');
+		})
+	);
+	if (hasNativeGameInfo && controls.has('info')) {
+		return 'info';
 	}
-	return best ? best.tab : null;
+
+	return null;
 }

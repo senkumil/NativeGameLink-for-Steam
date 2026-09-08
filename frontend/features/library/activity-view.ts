@@ -2,6 +2,7 @@ import type { NewsItem } from '../../domain/types';
 import { escapeHtml } from '../../core/text';
 import { FEED_CLASSES, POST_CLASSES } from '../../steam/css';
 import { gdlText, loc } from '../../steam/localization';
+import { steamUIModeService } from '../../steam/ui/SteamUIModeService';
 import { GDL_INJECTED } from './constants';
 import { newsItemsSignature } from './news';
 import type { NativeLibraryLayout } from './layout';
@@ -28,6 +29,7 @@ export function createActivityView(
 
 	const postClasses = POST_CLASSES();
 	const feedClasses = FEED_CLASSES();
+	const isGamepad = steamUIModeService.isGamepadUI(doc);
 	// Remote activity is hydrated after the page is mounted. Leave this area
 	// empty until it arrives instead of rendering a second skeleton state.
 	const sortedNews = [...options.newsItems].filter(item => item && item.title && Number(item.date || 0) > 0).sort((a, b) => Number(b.date || 0) - Number(a.date || 0));
@@ -42,6 +44,7 @@ export function createActivityView(
 		<div class="gdl-native-activity-heading-fallback gdl-ui-activity-heading" style="font-family:'Motiva Sans',Arial,Helvetica,sans-serif;font-size:13.5px;font-weight:700;letter-spacing:1.5px;color:#8f98a0;margin:0 0 8px 0 !important;padding:0 !important;text-transform:uppercase;">${escapeHtml(gdlText('activity', loc('AppDetails_SectionTitle_Activity', 'Activity')).toUpperCase())}</div>
 		<div class="${feedClasses.AddToFeed || ''} ${feedClasses.PostTextEntry || ''} gdl-status-box-container ${postClasses.PostTextEntry || ''}" style="display:block !important;margin:0 0 2px 0 !important;min-height:0 !important;position:relative !important;z-index:50 !important;">
 			<textarea id="gdl-status-text" class="${postClasses.PostTextEntryArea}" rows="1" placeholder="${escapeHtml(gdlText('post_placeholder', loc('AppActivity_StatusUpdate_Post', 'Say something about this game to your friends...')))}"></textarea>
+			${!isGamepad ? `
 			<div id="gdl-status-controls" class="${postClasses.Controls}">
 				<div class="${postClasses.FormattingSpacer}"></div>
 				<button type="button" class="${postClasses.EmoticonButton} gdl-emoticon-btn" tabindex="-1" title="${escapeHtml(gdlText('emoticons', 'Emoticons'))}" style="position:relative;">
@@ -53,9 +56,9 @@ export function createActivityView(
 				<button type="button" id="gdl-status-post" class="${postClasses.PostButton}">
 					<div class="${postClasses.Label}">${escapeHtml(gdlText('publish', loc('AppActivity_PostStatusUpdate', 'Post')))}</div>
 				</button>
-			</div>
+			</div>` : ''}
 		</div>
-		${latestNewsUrl ? `<div class="gdl-latest-news-row"><button type="button" class="gdl-latest-news-button" data-gdl-open-url="${escapeHtml(latestNewsUrl)}">${escapeHtml(gdlText('latest_news', loc('AppActivity_ViewLatestNews', 'View latest news')))}</button></div>` : ''}
+		${(!isGamepad && latestNewsUrl) ? `<div class="gdl-latest-news-row"><button type="button" class="gdl-latest-news-button" data-gdl-open-url="${escapeHtml(latestNewsUrl)}">${escapeHtml(gdlText('latest_news', loc('AppActivity_ViewLatestNews', 'View latest news')))}</button></div>` : ''}
 		<div id="gdl-activity-feed" data-gdl-news-signature="${newsItemsSignature(options.newsItems)}" data-gdl-feed-signature="${feedSnapshot.signature}">${feedSnapshot.html}</div>`;
 
 	const sourceHeading = layout.anchorRegion

@@ -36,7 +36,7 @@ import { disposeNativeInfoPreference, reconcileNativeInfoPreference } from '../f
 import { finishLibraryRouteExit, hasOwnedLibraryChrome } from '../features/library/route-exit';
 import { disposeLinkedGamePrefetch, restartLinkedGamePrefetch, startLinkedGamePrefetch } from '../features/library/prefetch';
 import { installGhostSidebarCleanup } from '../features/library/sidebar-cleanup';
-import { adoptExistingSteamWindows, resolveSteamWindowContext } from './existing-windows';
+import { adoptExistingSteamWindows, getCanonicalDesktopPopup, isRealSteamUiWindow, resolveSteamWindowContext } from './existing-windows';
 import { installMappingRefresh } from './mapping-refresh';
 import { installArtworkBatchRefresh } from './artwork-batch-refresh';
 import { syncMissingArtworkForMappedShortcuts } from '../features/library/artwork-sync';
@@ -71,26 +71,26 @@ function disposeDocumentLifecycles(): void {
 	documentLifecycles.clear();
 }
 function resolveMainWindowDocument(): Document | null {
+	try {
+		const popup = getCanonicalDesktopPopup();
+		const doc = popup?.m_popup?.window?.document || popup?.window?.document;
+		if (doc?.body && doc.defaultView && !doc.defaultView.closed && !steamUIModeService.isGamepadUI(doc)) {
+			if (!observedDocs.has(doc)) windowCreated(popup);
+			mainWindowDoc = doc; activeSteamDocuments.add(doc); return doc;
+		}
+	} catch {}
 	if (mainWindowDoc && !mainWindowDoc.defaultView?.closed && mainWindowDoc.body && !steamUIModeService.isGamepadUI(mainWindowDoc)) return mainWindowDoc;
 	for (const doc of activeSteamDocuments) {
 		if (doc?.body && doc.defaultView && !doc.defaultView.closed && !steamUIModeService.isGamepadUI(doc)) {
 			mainWindowDoc = doc; return doc;
 		}
 	}
-	try {
-		const manager = (window as any).g_PopupManager;
-		for (const name of ['SP Desktop_uid0', 'SP Desktop']) {
-			const popup = manager?.GetExistingPopup?.(name);
-			const doc = popup?.m_popup?.window?.document || popup?.window?.document;
-			if (doc?.body && doc.defaultView && !doc.defaultView.closed && !steamUIModeService.isGamepadUI(doc)) {
-				mainWindowDoc = doc; activeSteamDocuments.add(doc); return doc;
-			}
-		}
-	} catch {}
 	return null;
 }
 let hasHadBigPictureSession = false;
 function handleBigPictureExit(): void {
+	const bpDoc = getBigPictureDocument();
+	if (bpDoc && bpDoc.body?.isConnected && !bpDoc.defaultView?.closed && steamUIModeService.isGamepadUI(bpDoc)) return;
 	if (isBigPictureActive()) deactivateBigPicture();
 	hasHadBigPictureSession = false;
 	const targetDoc = resolveMainWindowDocument();
@@ -102,7 +102,7 @@ function handleBigPictureExit(): void {
 	}
 	[60, 150, 350, 750, 1400].forEach(delay => setTimeout(() => {
 		const doc = resolveMainWindowDocument();
-		if (!doc || isBigPictureActive()) return;
+		if (!doc || isBigPictureActive() || (bpDoc && bpDoc.body?.isConnected && !bpDoc.defaultView?.closed)) return;
 		finishLibraryRouteExit(doc);
 		if (!doc.getElementById(GDL_INJECTED) && !doc.getElementById('gdl-main-content-stack') && findNonSteamNotice(doc)) {
 			void tryInjectLibraryData(doc).catch(() => {});
@@ -114,6 +114,8 @@ function windowCreated(context: any): void {
 	if (!popupWin || !popupDoc) return;
 	if (!popupDoc.body) {
 		popupWin.addEventListener('DOMContentLoaded', () => windowCreated(context), { once: true });
+		setTimeout(() => { try { if (!popupWin.closed && popupWin.document?.body) windowCreated(context); } catch {} }, 100);
+		setTimeout(() => { try { if (!popupWin.closed && popupWin.document?.body) windowCreated(context); } catch {} }, 400);
 		return;
 	}
 	if (observedDocs.has(popupDoc)) return;
@@ -123,11 +125,12 @@ function windowCreated(context: any): void {
 	const isOverlayWindow = /desktopoverlay|SP Overlay|Game Overlay/i.test(`${popupName} ${popupTitle}`);
 	const isMainWindow = popupName === 'SP Desktop'
 		|| (popupName.includes('SP Desktop') && !popupName.includes('Popup') && !popupName.includes('Login'))
-		|| (!popupName && popupWin === window && !isBigPictureWindow && !isOverlayWindow);
+		|| (!popupName && isRealSteamUiWindow(popupWin) && !isBigPictureWindow && !isOverlayWindow);
 	// Steam can turn SP Desktop into Big Picture in place; its captured window
 	// name stays unchanged, so classify the live document instead of the hook name.
 	const isBigPictureSurface = (): boolean => {
 		if (isBigPictureWindow) return true;
+		if (steamUIModeService.isGamepadUI(popupDoc)) return true;
 		if (popupDoc.body && (popupDoc.body.classList.contains('GamepadUI') || popupDoc.body.classList.contains('gamepadui'))) return true;
 		if (/(?:gamepadui|bigpicture)/i.test(popupWin.location?.href || popupDoc.location?.href || '')) return true;
 		return false;
@@ -212,7 +215,7 @@ function windowCreated(context: any): void {
 		const currentIsBigPicture = isBigPictureSurface();
 		if (wasBigPictureSurface && !currentIsBigPicture) {
 			wasBigPictureSurface = false;
-			handleBigPictureExit();
+			if (getBigPictureDocument() === popupDoc) handleBigPictureExit();
 		}
 		if (!wasBigPictureSurface && currentIsBigPicture) {
 			wasBigPictureSurface = true;
@@ -425,9 +428,10 @@ export default definePlugin(() => {
 		deferStartup('linked game prefetch', () => startLinkedGamePrefetch(getCurrentInjectedAppId), 1600);
 		void processPendingLinkJobs(mainWindowDoc);
 		void neutralizeSteamAppIdFileBackend({ request_json: '{}' }).catch(() => {});
-		if (mainWindowDoc) {
-			installGhostSidebarCleanup(mainWindowDoc);
-			tryInjectLibraryData(mainWindowDoc).catch(e => backendLog('Post-startup library refresh error: ' + e));
+		const targetDoc = resolveMainWindowDocument();
+		if (targetDoc) {
+			installGhostSidebarCleanup(targetDoc);
+			tryInjectLibraryData(targetDoc).catch(e => backendLog('Post-startup library refresh error: ' + e));
 		}
 		const bigPictureDoc = getBigPictureDocument();
 		if (bigPictureDoc) void refreshBigPicture(bigPictureDoc).catch(e => backendLog('Big Picture refresh error: ' + e));
@@ -447,9 +451,10 @@ export default definePlugin(() => {
 	}); } catch (error) { console.error('[GDL] Mapping refresh startup failed:', error); }
 	const disposeArtworkBatchRefresh = installArtworkBatchRefresh(getCurrentInjectedAppId, () => resetLibraryInjection(true));
 	const onPlaytimeChanged = (): void => {
-		if (mainWindowDoc) {
-			void patchDesktopLibraryHomePlaytime(mainWindowDoc).catch(() => {});
-			void tryInjectLibraryData(mainWindowDoc).catch(() => {});
+		const doc = resolveMainWindowDocument();
+		if (doc) {
+			void patchDesktopLibraryHomePlaytime(doc).catch(() => {});
+			void tryInjectLibraryData(doc).catch(() => {});
 		}
 		const bigPictureDoc = getBigPictureDocument();
 		if (bigPictureDoc) void refreshBigPicture(bigPictureDoc).catch(() => {});
@@ -460,24 +465,24 @@ export default definePlugin(() => {
 		if (!previousLanguage || previousLanguage === language) return;
 		clearGameDataCache(); clearCommunityItemCaches(); clearSocialRuntimeCaches();
 		clearLibraryAssetCaches(); clearShortcutDetectionCache(); clearShortcutRuntimeCaches();
-		clearLocalAchievementCache(false); clearNativeUiBlueprints();
-		restartLinkedGamePrefetch();
-		resetLibraryInjection(true);
+		clearLocalAchievementCache(false); clearNativeUiBlueprints(); restartLinkedGamePrefetch(); resetLibraryInjection(true);
 		const bigPictureDoc = getBigPictureDocument();
 		if (bigPictureDoc) void refreshBigPicture(bigPictureDoc).catch(() => {});
 	}); } catch (error) { console.error('[GDL] Language subscription failed:', error); }
 	deferStartup('language watcher', () => startSteamLanguageWatcher(), 500);
 	deferStartup('Steam language hydration', () => { void getSteamLanguage(true).catch(() => {}); }, 50);
 	try { Millennium.AddWindowCreateHook(windowCreated); } catch (e) { console.error('[GDL] Failed to register window hook:', e); }
-	const existingWindowAdoptionTimers = [0, 250, 1000, 2500].map(delay => setTimeout(() => {
+	const existingWindowAdoptionTimers = [0, 150, 400, 1000, 2500, 5000, 8000].map(delay => setTimeout(() => {
 		try { adoptExistingSteamWindows(windowCreated); } catch (e) { console.error('[GDL] Failed to adopt existing Steam windows:', e); }
 	}, delay));
+	const adoptionInterval = setInterval(() => { try { adoptExistingSteamWindows(windowCreated); } catch {} }, 3000);
 	console.log(`[GDL][Startup] Plugin descriptor ready in ${Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - startupStartedAt)}ms; background services deferred.`);
 	return {
 		title: 'NativeGameLink for Steam',
 		icon: <IconsModule.Settings />,
 		content: <SettingsContent clearAchievementCache={clearLocalAchievementCache} showAchievementToast={showAchievementToast} />,
 		onDismount: () => {
+			clearInterval(adoptionInterval);
 			disposeArtworkBatchRefresh();
 			window.removeEventListener('gdl:playtime-changed', onPlaytimeChanged);
 			for (const timer of existingWindowAdoptionTimers) clearTimeout(timer);

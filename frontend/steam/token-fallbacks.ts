@@ -70,4 +70,6 @@ export const SPANISH_TOKEN_FALLBACKS: Record<string, string> = {
 	AppDetails_Achievement_ViewAllAchievements: 'Ver todos mis logros',
 	AppDetails_ViewAllAchievements: 'Ver todos mis logros',
 	AppDetails_Achievements_ViewAll: 'Ver todos mis logros',
+	Keyboard_Title: 'Teclado',
 };
+

@@ -1,4 +1,4 @@
-﻿export * from './GamepadCapabilities';
+export * from './GamepadCapabilities';
 export * from './GamepadContext';
 export * from './GamepadRuntime';
 export * from './GamepadAppAdapter';
@@ -19,3 +19,4 @@ export * from './components/GameDetailsResolver';
 
 export * from './mounting/NativeMount';
 export * from './mounting/NativeFallback';
+export * from './virtual-keyboard';

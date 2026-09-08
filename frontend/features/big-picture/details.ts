@@ -36,6 +36,7 @@ import {
 } from './panel-mount';
 import { syncNativeAchievementProgressCache } from '../achievements/progress';
 import { activeTabFromNative, findBigPictureTabStrip } from './tabs';
+import { ensureBigPictureDetailStyles } from './details-styles';
 import type { BigPictureDetailData, BigPictureTab, MappedShortcut } from './types';
 
 interface BigPictureDetailState {
@@ -95,9 +96,14 @@ const activeControllerDocs = new Set<Document>();
 
 function ensureControllerSync(doc?: Document): void {
 	if (doc) {
-		activeControllerDocs.add(doc);
 		const shortcut = detectCurrentMappedShortcut(doc);
-		const support = shortcut ? detectGameControllerSupport(shortcut.steamAppId, doc) : undefined;
+		if (!shortcut) {
+			activeControllerDocs.delete(doc);
+			removePlaybarControllerStat(doc);
+			return;
+		}
+		activeControllerDocs.add(doc);
+		const support = detectGameControllerSupport(shortcut.steamAppId, doc);
 		ensurePlaybarControllerStat(doc, support);
 	}
 	if (controllerSyncInstalled) return;
@@ -109,8 +115,13 @@ function ensureControllerSync(doc?: Document): void {
 		for (const d of Array.from(allDocs)) {
 			if (d.body && d.body.isConnected) {
 				const sc = detectCurrentMappedShortcut(d);
-				const sp = sc ? detectGameControllerSupport(sc.steamAppId, d) : undefined;
-				ensurePlaybarControllerStat(d, sp);
+				if (sc) {
+					const sp = detectGameControllerSupport(sc.steamAppId, d);
+					ensurePlaybarControllerStat(d, sp);
+				} else {
+					activeControllerDocs.delete(d);
+					removePlaybarControllerStat(d);
+				}
 			} else {
 				activeControllerDocs.delete(d);
 			}
@@ -170,6 +181,7 @@ function renderNativeRoot(doc: Document, state: BigPictureDetailState): void {
 		steamWebpackRuntime.captureRuntime(doc);
 		gamepadRuntime.initialize(doc);
 	} catch {}
+	ensureBigPictureDetailStyles(doc);
 	hideBigPictureNonSteamNotices(doc);
 	const tabs = findBigPictureTabStrip(doc);
 	ensureCloudDivider(doc, tabs?.strip || state.panel);
@@ -247,7 +259,9 @@ function startDetailHydration(doc: Document, state: BigPictureDetailState): void
 }
 
 function scheduleDetailRetry(doc: Document): void {
-	ensurePlaybarControllerStat(doc);
+	if (detectCurrentMappedShortcut(doc)) {
+		ensurePlaybarControllerStat(doc);
+	}
 	if (detailRetryTimers.has(doc)) return;
 	const attempt = (detailRetryCounts.get(doc) || 0) + 1;
 	if (attempt > 40) return;
@@ -332,16 +346,22 @@ function isLibraryOrNonDetailsView(doc: Document): boolean {
 	if (findBigPictureTabStrip(doc)) {
 		return false;
 	}
-	if (doc.querySelector('[class*="AllGames"], [class*="CollectionsHeader"], [class*="LibraryHome"], [class*="AllCollections"]')) {
+	const routeValues = collectActiveRouteValues(doc);
+	const hasAppRoute = routeValues.some(v => APP_DETAILS_ROUTE_PATTERN.test(v));
+	if (hasAppRoute) {
+		return false;
+	}
+	const hasPlayBar = Boolean(doc.querySelector('[class*="PlayBar"], [class*="PlayButton"], [class*="playButton"], [class*="AppDetailsHeader"], [class*="appDetailsHeader"]'));
+	if (hasPlayBar) {
+		return false;
+	}
+	if (doc.querySelector('[class*="AllGames"], [class*="LibraryHome"], [class*="AllCollections"]')) {
 		return true;
 	}
-	const routeValues = collectActiveRouteValues(doc);
 	const hasLibraryRoute = routeValues.some(v => NON_DETAILS_ROUTE_PATTERN.test(v));
-	const hasAppRoute = routeValues.some(v => APP_DETAILS_ROUTE_PATTERN.test(v));
 	if (hasLibraryRoute && !hasAppRoute) {
 		return true;
 	}
-	const hasPlayBar = Boolean(doc.querySelector('[class*="PlayBar"], [class*="PlayButton"], [class*="playButton"], [class*="AppDetailsHeader"], [class*="appDetailsHeader"]'));
 	if (!hasPlayBar && !hasAppRoute) {
 		return true;
 	}
@@ -390,8 +410,9 @@ export async function refreshBigPictureShortcutDetails(doc: Document): Promise<v
 	const tabs = findBigPictureTabStrip(doc);
 	if (!tabs) {
 		backendLog('Big Picture details: native tab strip not ready, scheduling retry');
-		removeBigPictureDetailsNodes(doc);
-		if (!isLibraryOrNonDetailsView(doc)) {
+		if (isLibraryOrNonDetailsView(doc)) {
+			removeBigPictureDetailsNodes(doc);
+		} else {
 			scheduleDetailRetry(doc);
 		}
 		return;

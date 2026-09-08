@@ -81,11 +81,11 @@ local function parse_hub_cards(html, fallback_type, items, safe_language)
         -- Extract youtube_id if present
         local yt = card:match('data%-youtube%-id="([^"]+)"')
             or card:match('youtubeid="([^"]+)"')
-            or card:match('youtube%.com/watch%?v=([%w_%-]+)')
+            or card:match('img%.youtube%.com/vi/([^/"%s]+)')
+            or card:match('ytimg%.com/vi/([^/"%s]+)')
+            or card:match('youtube%.com/watch%?[^"\'%s]*v=([%w_%-]+)')
             or card:match('youtu%.be/([%w_%-]+)')
-            or card:match('img%.youtube%.com/vi/([%w_%-]+)')
-            or card:match('i%.ytimg%.com/vi/([%w_%-]+)')
-            or card:match('youtube%.com/embed/([%w_%-]+)')
+            or card:match('youtube%.com/embed/([^/"\'%s%?]+)')
 
         if yt and yt ~= "" then
             item.youtube_id = yt
@@ -140,6 +140,19 @@ local function parse_hub_cards(html, fallback_type, items, safe_language)
         end
         if not item.image then
             item.image = card:match('<img[^>]+src="(https://i%.ytimg%.com/[^"]+)"')
+        end
+
+        -- Fallback extraction of youtube_id from resolved image
+        if not item.youtube_id and item.image then
+            item.youtube_id = item.image:match('img%.youtube%.com/vi/([^/"%s]+)')
+                or item.image:match('ytimg%.com/vi/([^/"%s]+)')
+        end
+        if item.youtube_id and item.youtube_id ~= "" then
+            item.type = "video"
+            item.label = "Video"
+            if not item.image then
+                item.image = "https://img.youtube.com/vi/" .. item.youtube_id .. "/hqdefault.jpg"
+            end
         end
 
         -- Title: screenshots use apphub_CardContentTitle, guides use apphub_CardContentGuideTitle
@@ -296,8 +309,8 @@ function M.fetch_community_content(steam_app_id, language)
         for _, lang in ipairs(lang_family) do
             fetch_feed(lang, lang, 2)
             fetch_sub(lang, lang, 9, "guide", "Guides")
-            fetch_sub(lang, lang, 4, "video", "Videos")
-            fetch_sub(lang, lang, 3, "artwork", "Artwork")
+            fetch_sub(lang, lang, 3, "video", "Videos")
+            fetch_sub(lang, lang, 4, "artwork", "Artwork")
             if #items >= 50 then break end
         end
     end
@@ -305,9 +318,9 @@ function M.fetch_community_content(steam_app_id, language)
     -- 2. Fallback: If client language has few items or is English, fetch English/global trending content
     if #items < 24 then
         fetch_feed("english", nil, 2)
-        fetch_sub("english", nil, 4, "video", "Videos")
+        fetch_sub("english", nil, 3, "video", "Videos")
         fetch_sub("english", nil, 9, "guide", "Guides")
-        fetch_sub("english", nil, 3, "artwork", "Artwork")
+        fetch_sub("english", nil, 4, "artwork", "Artwork")
     end
 
     logger:info("Total community content items: " .. tostring(#items))

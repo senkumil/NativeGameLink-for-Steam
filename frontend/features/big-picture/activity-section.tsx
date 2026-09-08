@@ -5,8 +5,11 @@ import { gdlText, loc, steamIntlLocale } from '../../steam/localization';
 import type { NativeAppDetailsClasses } from '../../steam/gamepad/components/AppDetailsNativeClasses';
 import { openSteamNavigationUrl } from '../../steam/navigation';
 import { eventTypeLabel, newsExcerpt } from '../library/news';
-import { loadLocalActivityPosts, saveLocalActivityPost, type LocalActivityPost } from '../library/social/feed';
+import { getCurrentSteamUser, loadLocalActivityPosts, saveLocalActivityPost, type LocalActivityPost } from '../library/social/feed';
 import { getCachedPersona } from '../library/social/personas';
+import { dismissBigPictureFocusRing } from './gamepad-nav';
+import { showSteamVirtualKeyboard, hideSteamVirtualKeyboard } from '../../steam/gamepad/virtual-keyboard';
+import { resolveNativePostTextEntryComponent, resolveNativeFocusableTextarea } from '../../steam/gamepad/components/AppDetailsNativeComponents';
 import type { BigPictureDetailData, MappedShortcut } from './types';
 
 const NativeFocusable = Focusable as React.ComponentType<any>;
@@ -45,8 +48,12 @@ function newsDayLabel(item: NewsItem): string {
 }
 
 function showNativeNewsModal(doc: Document, item: NewsItem, imageUrl: string | undefined, classes: NativeAppDetailsClasses): void {
+	dismissBigPictureFocusRing(doc);
 	let handle: { Close(): void } | undefined;
-	const close = () => handle?.Close();
+	const close = () => {
+		dismissBigPictureFocusRing(doc);
+		handle?.Close();
+	};
 	const title = item.title || loc('AppDetails_SectionTitle_News', 'Noticias');
 	const type = item.event_type ? eventTypeLabel(Number(item.event_type)) : (item.feedlabel || gdlText('feed_news', 'News'));
 	const date = newsDate(item);
@@ -145,16 +152,28 @@ function PostTextEntry({
 	shortcutAppId,
 	classes,
 	onPostAdded,
+	document: targetDoc,
 }: {
 	steamAppId: string;
 	shortcutAppId: string;
 	classes: NativeAppDetailsClasses;
 	onPostAdded: () => void;
+	document?: Document;
 }): React.ReactElement {
-	const [active, setActive] = useState(false);
-	const [text, setText] = useState('');
 	const postClasses = classes.PostTextEntry;
 	const eventClasses = classes.ActivityEvent;
+	const document = targetDoc || (typeof window !== 'undefined' ? window.document : undefined);
+
+	const NativePostEntry = resolveNativePostTextEntryComponent(document);
+	void NativePostEntry;
+	const NativeFocusableArea = resolveNativeFocusableTextarea(document);
+	const InputArea = NativeFocusableArea || 'textarea';
+
+	const [active, setActive] = useState(false);
+	const [text, setText] = useState('');
+	const textareaRef = React.useRef<HTMLTextAreaElement | null>(null);
+	const user = React.useMemo(() => getCurrentSteamUser(document || window.document), [document]);
+	const placeholder = loc('AppActivity_StatusUpdate_Post', 'Diles algo sobre este juego a tus amigos...');
 
 	const handlePublish = () => {
 		const trimmed = text.trim();
@@ -163,122 +182,131 @@ function PostTextEntry({
 			id: `post-${Date.now()}`,
 			text: trimmed,
 			timestamp: Math.floor(Date.now() / 1000),
-			user_name: loc('AppActivity_StatusUpdate_CurrentUser', 'Tú'),
-			user_avatar: '',
+			user_name: user.name || loc('AppActivity_StatusUpdate_CurrentUser', 'Tú'),
+			user_avatar: user.avatar || '',
 		};
 		saveLocalActivityPost(steamAppId, newPost, shortcutAppId);
 		setText('');
 		setActive(false);
+		hideSteamVirtualKeyboard(document);
 		onPostAdded();
 	};
 
-	if (!active) {
-		return (
-			<NativeFocusable
-				focusable
-				onActivate={() => setActive(true)}
-				{...clickProps(() => setActive(true))}
-				className={nativeClasses(eventClasses?.UserStatus, postClasses?.PostTextEntry, 'gdl-bp-post-entry-bar')}
-				style={{
-					width: '100%',
-					height: '44px',
-					display: 'flex',
-					alignItems: 'center',
-					padding: '0 16px',
-					background: 'rgba(255, 255, 255, 0.05)',
-					borderRadius: '4px',
-					cursor: 'text',
-					boxSizing: 'border-box',
-					marginBottom: '8px',
-				}}
-			>
+	const activateComposer = () => {
+		setActive(true);
+		showSteamVirtualKeyboard(document, textareaRef.current);
+		setTimeout(() => {
+			if (textareaRef.current) {
+				textareaRef.current.focus();
+				showSteamVirtualKeyboard(document, textareaRef.current);
+			}
+		}, 30);
+	};
+
+	return (
+		<NativeFocusable
+			focusable
+			onActivate={activateComposer}
+			{...clickProps(activateComposer)}
+			className={nativeClasses(postClasses?.PostTextEntry, 'gdl-bp-post-entry-bar')}
+			style={{
+				width: '100%',
+				minHeight: '44px',
+				display: 'flex',
+				alignItems: 'center',
+				padding: '6px 14px',
+				borderRadius: '4px',
+				cursor: 'text',
+				boxSizing: 'border-box',
+				marginBottom: '8px',
+				gap: '12px',
+			}}
+		>
+			{user.avatar ? (
+				<img
+					src={user.avatar}
+					alt=""
+					style={{
+						width: '28px',
+						height: '28px',
+						borderRadius: '50%',
+						flexShrink: 0,
+						objectFit: 'cover',
+					}}
+				/>
+			) : null}
+			{active ? (
+				<InputArea
+					ref={textareaRef}
+					autoFocus
+					rows={1}
+					value={text}
+					onChange={(e: any) => setText(e.target?.value ?? '')}
+					placeholder={placeholder}
+					className={postClasses?.PostTextEntryArea}
+					onFocus={() => showSteamVirtualKeyboard(document, textareaRef.current)}
+					onClick={() => showSteamVirtualKeyboard(document, textareaRef.current)}
+					onBlur={() => {
+						if (!text.trim()) {
+							setActive(false);
+							hideSteamVirtualKeyboard(document);
+						}
+					}}
+					onKeyDown={(e: any) => {
+						if (e.key === 'Enter') {
+							e.preventDefault();
+							handlePublish();
+						} else if (e.key === 'Escape') {
+							setActive(false);
+							hideSteamVirtualKeyboard(document);
+						}
+					}}
+					style={{
+						flex: 1,
+						background: 'transparent',
+						border: 'none',
+						outline: 'none',
+						color: '#ffffff',
+						fontSize: '14px',
+						fontFamily: 'inherit',
+						padding: 0,
+						margin: 0,
+						boxShadow: 'none',
+						resize: 'none',
+					}}
+				/>
+			) : (
 				<div
 					className={nativeClasses(eventClasses?.StatusText, postClasses?.Label)}
 					style={{
 						fontStyle: 'italic',
 						fontSize: '14px',
-						color: '#8f98a0',
+						color: 'rgba(148, 161, 166, 0.7)',
 						userSelect: 'none',
+						flex: 1,
 					}}
 				>
-					{loc('AppActivity_StatusUpdate_Post', 'Diles algo sobre este juego a tus amigos...')}
+					{placeholder}
 				</div>
-			</NativeFocusable>
-		);
-	}
-
-	return (
-		<NativeFocusable
-			flow-children="column"
-			className={nativeClasses(eventClasses?.UserStatus, postClasses?.PostTextEntry, postClasses?.Active, 'gdl-bp-post-entry-active')}
-			style={{
-				width: '100%',
-				background: 'rgba(255, 255, 255, 0.07)',
-				borderRadius: '4px',
-				padding: '12px 16px',
-				boxSizing: 'border-box',
-				marginBottom: '8px',
-			}}
-		>
-			<div className={postClasses?.PostTextEntryArea}>
-				<textarea
-					autoFocus
-					value={text}
-					onChange={e => setText(e.target.value)}
-					placeholder={loc('AppActivity_StatusUpdate_Post', 'Diles algo sobre este juego a tus amigos...')}
-					className={postClasses?.PostTextEntryArea}
-					style={{
-						width: '100%',
-						minHeight: '80px',
-						background: 'rgba(0, 0, 0, 0.25)',
-						border: '1px solid rgba(255, 255, 255, 0.1)',
-						borderRadius: '4px',
-						color: '#fff',
-						padding: '10px 12px',
-						fontSize: '14px',
-						fontFamily: 'inherit',
-						resize: 'vertical',
-						boxSizing: 'border-box',
-						outline: 'none',
-					}}
-					onKeyDown={e => {
-						if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-							handlePublish();
-						}
-					}}
-				/>
-			</div>
-			<div
-				className={nativeClasses(postClasses?.Controls)}
-				style={{
-					display: 'flex',
-					justifyContent: 'flex-end',
-					gap: '12px',
-					marginTop: '10px',
-				}}
-			>
-				<NativeButton onActivate={() => { setActive(false); setText(''); }} {...clickProps(() => { setActive(false); setText(''); })}>
-					{loc('Button_Cancel', 'Cancelar')}
-				</NativeButton>
-				<NativeButton disabled={!text.trim()} onActivate={handlePublish} {...clickProps(handlePublish)}>
-					{loc('AppActivity_StatusUpdate_Publish', 'Publicar')}
-				</NativeButton>
-			</div>
+			)}
 		</NativeFocusable>
 	);
 }
+
 
 export function FriendsSection(props: {
 	data: BigPictureDetailData;
 	shortcut: MappedShortcut;
 	classes: NativeAppDetailsClasses;
 	SectionComponent: React.ComponentType<any>;
+	document?: Document;
 }): React.ReactElement | null {
 	const played = [...(props.data.friends?.recentlyPlayed || []), ...(props.data.friends?.previouslyPlayed || [])];
 	const wishlisted = props.data.friends?.wishlisted || [];
 	if (played.length === 0 && wishlisted.length === 0) return null;
 	const native = props.classes.Friends;
 	const Section = props.SectionComponent;
+	const doc = props.document || (typeof window !== 'undefined' ? window.document : undefined);
 
 	const renderSubsection = (friends: FriendPlayInfo[], title: string) => (
 		<div
@@ -304,10 +332,16 @@ export function FriendsSection(props: {
 			>
 				{friends.slice(0, 8).map(friend => {
 					const persona = getCachedPersona(friend.steamid);
+					const openProfile = () => {
+						if (doc) openSteamNavigationUrl(doc, `https://steamcommunity.com/profiles/${friend.steamid}`);
+					};
 					return (
 						<NativeFocusable
 							key={friend.steamid}
 							focusable
+							role="button"
+							onActivate={openProfile}
+							{...clickProps(openProfile)}
 							className={nativeClasses(native?.GamepadFriendSectionItem, native?.GamepadFriendSectionItemLong, 'gdl-bp-friend-card')}
 							style={{
 								display: 'flex',
@@ -416,6 +450,7 @@ export function FallbackActivitySection(props: {
 				steamAppId={props.shortcut.steamAppId}
 				shortcutAppId={shortcutIdStr}
 				classes={props.classes}
+				document={props.document}
 				onPostAdded={() => setPosts(loadLocalActivityPosts(props.shortcut.steamAppId, shortcutIdStr))}
 			/>
 			<div

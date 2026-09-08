@@ -1,6 +1,7 @@
 import type { CommunityContentItem, SteamGameData } from '../../domain/types';
 import { escapeHtml } from '../../core/text';
 import { gdlText, loc, steamLanguageSync } from '../../steam/localization';
+import { extractCommunityYoutubeId } from '../../steam/navigation';
 import type { NativeLibraryLayout } from './layout';
 
 const progressiveRevealCleanup = new WeakMap<HTMLElement, () => void>();
@@ -306,8 +307,11 @@ export function renderCommunityContentHtml(data: SteamGameData, communityItems: 
 				${authorBar(item)}
 			</div>`;
 		}
-		if (item.type === 'video') {
-			const ytAttr = item.youtube_id ? ` data-gdl-youtube-id="${escapeHtml(item.youtube_id)}"` : '';
+		const ytId = item.type === 'video' ? extractCommunityYoutubeId(item) : null;
+		if (item.type === 'video' || ytId) {
+			const resolvedYtId = ytId || extractCommunityYoutubeId(item);
+			const ytAttr = resolvedYtId ? ` data-gdl-youtube-id="${escapeHtml(resolvedYtId)}"` : '';
+			const click = resolvedYtId ? '' : (item.link ? ` data-gdl-open-url="${escapeHtml(item.link)}"` : '');
 			return `<div class="gdl-community-card gdl-community-card-video" data-gdl-community-card="${index}"${ytAttr}${click}>
 				<div class="gdl-community-video-thumb" style="position:relative;width:100%;max-width:100%;aspect-ratio:16/9;overflow:hidden;background:#000;">
 					<img src="${escapeHtml(item.image || '')}" loading="lazy" decoding="async" style="width:100%;height:100%;object-fit:cover;display:block;" data-gdl-hide-on-error="1" />

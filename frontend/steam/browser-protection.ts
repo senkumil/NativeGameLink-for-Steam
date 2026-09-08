@@ -18,6 +18,12 @@ function isSaveOrBrowserAccelerator(event: KeyboardEvent): boolean {
 	// Ctrl+O / Cmd+O: Open file dialog
 	if (key === 'o' || code === 79) return true;
 
+	// Ctrl+J / Cmd+J: Downloads page
+	if (key === 'j' || code === 74) return true;
+
+	// Ctrl+U / Cmd+U: View page source
+	if (key === 'u' || code === 85) return true;
+
 	return false;
 }
 
@@ -29,6 +35,23 @@ function blockAcceleratorHandler(event: KeyboardEvent): void {
 			event.stopImmediatePropagation();
 		}
 	}
+}
+
+function blockContextMenu(event: MouseEvent): void {
+	const target = event.target as HTMLElement | null;
+	const isEditable = target && (
+		target.tagName === 'INPUT' ||
+		target.tagName === 'TEXTAREA' ||
+		target.isContentEditable
+	);
+	// Prevents Chromium's native "Save page as...", "Print...", etc. from opening Win32 dialogs
+	if (!isEditable) {
+		event.preventDefault();
+	}
+}
+
+function blockDragDrop(event: DragEvent): void {
+	event.preventDefault();
 }
 
 function blockDownloadClicks(event: MouseEvent): void {
@@ -59,8 +82,12 @@ export function installBrowserProtection(win: Window | null | undefined, doc: Do
 		try {
 			protectedWindows.add(win);
 			win.addEventListener('keydown', blockAcceleratorHandler, true);
+			win.addEventListener('keyup', blockAcceleratorHandler, true);
 			cleanups.push(() => {
-				try { win.removeEventListener('keydown', blockAcceleratorHandler, true); } catch {}
+				try {
+					win.removeEventListener('keydown', blockAcceleratorHandler, true);
+					win.removeEventListener('keyup', blockAcceleratorHandler, true);
+				} catch {}
 				protectedWindows.delete(win);
 			});
 		} catch {}
@@ -70,11 +97,19 @@ export function installBrowserProtection(win: Window | null | undefined, doc: Do
 		try {
 			protectedDocuments.add(doc);
 			doc.addEventListener('keydown', blockAcceleratorHandler, true);
+			doc.addEventListener('keyup', blockAcceleratorHandler, true);
 			doc.addEventListener('click', blockDownloadClicks, true);
+			doc.addEventListener('contextmenu', blockContextMenu, false);
+			doc.addEventListener('dragover', blockDragDrop, false);
+			doc.addEventListener('drop', blockDragDrop, false);
 			cleanups.push(() => {
 				try {
 					doc.removeEventListener('keydown', blockAcceleratorHandler, true);
+					doc.removeEventListener('keyup', blockAcceleratorHandler, true);
 					doc.removeEventListener('click', blockDownloadClicks, true);
+					doc.removeEventListener('contextmenu', blockContextMenu, false);
+					doc.removeEventListener('dragover', blockDragDrop, false);
+					doc.removeEventListener('drop', blockDragDrop, false);
 				} catch {}
 				protectedDocuments.delete(doc);
 			});

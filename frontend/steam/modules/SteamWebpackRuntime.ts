@@ -99,6 +99,20 @@ class SteamWebpackRuntime {
 		return this.requireFn;
 	}
 
+	public async ensureChunk(chunkId: number | string): Promise<boolean> {
+		const req = this.getRequire();
+		if (req && typeof req.e === 'function') {
+			try {
+				await req.e(chunkId);
+				this.captureRuntime();
+				return true;
+			} catch (err) {
+				backendLog(`[NGL][Webpack] Failed to load chunk ${chunkId}: ${err}`);
+			}
+		}
+		return false;
+	}
+
 	private bindWindowUnload(win: Window): void {
 		if (this.boundWindows.has(win)) return;
 		this.boundWindows.add(win);

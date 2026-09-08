@@ -4,6 +4,8 @@ import { escapeHtml } from '../../../core/text';
 import { POST_CLASSES } from '../../../steam/css';
 import { gdlText } from '../../../steam/localization';
 import { postStatusUpdate } from '../../../steam/social';
+import { steamUIModeService } from '../../../steam/ui/SteamUIModeService';
+import { showSteamVirtualKeyboard, hideSteamVirtualKeyboard } from '../../../steam/gamepad/virtual-keyboard';
 import {
 	getCurrentSteamUser,
 	applyUnifiedActivityFeed,
@@ -34,7 +36,9 @@ export function setupStatusPostBox(
 	const postButton = wrapper.querySelector('#gdl-status-post') as HTMLButtonElement | null;
 	const emoticonButton = wrapper.querySelector('.gdl-emoticon-btn') as HTMLButtonElement | null;
 	const latestNewsButton = wrapper.querySelector('.gdl-latest-news-button') as HTMLButtonElement | null;
-	if (!statusArea || !statusRow || !postButton) return;
+	if (!statusArea) return;
+
+	const isGamepad = steamUIModeService.isGamepadUI(doc);
 
 	const lifecycle = new DisposableRegistry(() => {
 		doc.getElementById('gdl-emoticon-picker')?.remove();
@@ -46,6 +50,7 @@ export function setupStatusPostBox(
 	const enabledClass = POST_CLASSES().Enabled;
 	const container = (wrapper.querySelector('.gdl-status-box-container') as HTMLElement | null) || wrapper;
 	const syncPostButtonState = (): void => {
+		if (!postButton) return;
 		const enabled = statusArea.value.trim().length > 0;
 		postButton.classList.toggle(enabledClass, enabled);
 		postButton.classList.toggle('is-enabled', enabled);
@@ -71,9 +76,37 @@ export function setupStatusPostBox(
 	};
 
 	const setActive = (active: boolean): void => {
-		statusRow.classList.toggle(activeClass, active);
+		if (statusRow) statusRow.classList.toggle(activeClass, active);
 		container.classList.toggle('gdl-composer-active', active);
 		autoResizeTextarea();
+	};
+
+	const submitPost = (): void => {
+		const text = statusArea.value.trim();
+		if (!text) return;
+		const user = getCurrentSteamUser(doc);
+		saveLocalActivityPost(steamAppId, {
+			id: 'post_' + Date.now(),
+			text,
+			timestamp: Math.floor(Date.now() / 1000),
+			user_name: user.name,
+			user_avatar: user.avatar,
+		}, shortcutAppId);
+		statusArea.value = '';
+		syncPostButtonState();
+		setActive(false);
+		autoResizeTextarea();
+		doc.getElementById('gdl-emoticon-picker')?.remove();
+
+		const numericAppId = Number.parseInt(steamAppId, 10);
+		if (Number.isFinite(numericAppId) && numericAppId > 0) void postStatusUpdate(numericAppId, text).catch(() => {});
+
+		const feedContainer = doc.getElementById('gdl-activity-feed');
+		if (feedContainer) {
+			delete feedContainer.dataset.gdlFeedSignature;
+			applyUnifiedActivityFeed(feedContainer, steamAppId, shortcutAppId, newsItems, fallbackImage);
+			setupPostDeleteHandlers(doc, steamAppId, shortcutAppId, newsItems, fallbackImage);
+		}
 	};
 
 	lifecycle.listen(statusArea, 'input', () => {
@@ -83,6 +116,14 @@ export function setupStatusPostBox(
 	lifecycle.listen(statusArea, 'focus', () => {
 		setActive(true);
 		autoResizeTextarea();
+		if (isGamepad) {
+			showSteamVirtualKeyboard(doc, statusArea);
+		}
+	});
+	lifecycle.listen(statusArea, 'click', () => {
+		if (isGamepad) {
+			showSteamVirtualKeyboard(doc, statusArea);
+		}
 	});
 	lifecycle.listen(statusArea, 'blur', () => {
 		lifecycle.timeout(() => {
@@ -94,8 +135,26 @@ export function setupStatusPostBox(
 	});
 	lifecycle.listen(statusArea, 'keydown', rawEvent => {
 		const event = rawEvent as KeyboardEvent;
-		if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) postButton.click();
+		if (event.key === 'Enter') {
+			if (isGamepad) {
+				if (!event.shiftKey) {
+					event.preventDefault();
+					submitPost();
+					hideSteamVirtualKeyboard(doc);
+				}
+			} else if (event.ctrlKey || event.metaKey) {
+				submitPost();
+			}
+		} else if (event.key === 'Escape') {
+			if (isGamepad) {
+				hideSteamVirtualKeyboard(doc);
+			}
+		}
 	});
+
+	if (postButton) {
+		lifecycle.listen(postButton, 'click', submitPost);
+	}
 
 	syncPostButtonState();
 	autoResizeTextarea();
@@ -194,34 +253,6 @@ export function setupStatusPostBox(
 			if (picker && !picker.contains(event.target as Node) && event.target !== emoticonButton && !emoticonButton.contains(event.target as Node)) picker.remove();
 		});
 	}
-
-	lifecycle.listen(postButton, 'click', () => {
-		const text = statusArea.value.trim();
-		if (!text) return;
-		const user = getCurrentSteamUser(doc);
-		saveLocalActivityPost(steamAppId, {
-			id: 'post_' + Date.now(),
-			text,
-			timestamp: Math.floor(Date.now() / 1000),
-			user_name: user.name,
-			user_avatar: user.avatar,
-		}, shortcutAppId);
-		statusArea.value = '';
-		syncPostButtonState();
-		setActive(false);
-		autoResizeTextarea();
-		doc.getElementById('gdl-emoticon-picker')?.remove();
-
-		const numericAppId = Number.parseInt(steamAppId, 10);
-		if (Number.isFinite(numericAppId) && numericAppId > 0) void postStatusUpdate(numericAppId, text).catch(() => {});
-
-		const feedContainer = doc.getElementById('gdl-activity-feed');
-		if (feedContainer) {
-			delete feedContainer.dataset.gdlFeedSignature;
-			applyUnifiedActivityFeed(feedContainer, steamAppId, shortcutAppId, newsItems, fallbackImage);
-			setupPostDeleteHandlers(doc, steamAppId, shortcutAppId, newsItems, fallbackImage);
-		}
-	});
 
 	setupPostDeleteHandlers(doc, steamAppId, shortcutAppId, newsItems, fallbackImage);
 }

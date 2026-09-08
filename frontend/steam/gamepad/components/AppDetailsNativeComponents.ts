@@ -71,6 +71,81 @@ export function resolveNativeActivityComponent(doc?: Document): ComponentType<Na
 	return null;
 }
 
+export interface NativePostTextEntryProps {
+	className?: string;
+	placeholder?: string;
+	OnPostClicked?: (text: string) => void;
+	onFocus?: (e: any) => void;
+	onBlur?: (e: any) => void;
+	[key: string]: any;
+}
+
+let cachedPostTextEntryComponent: ComponentType<NativePostTextEntryProps> | null | undefined;
+let cachedFocusableTextarea: ComponentType<any> | null | undefined;
+
+export function resolveNativePostTextEntryComponent(doc?: Document): ComponentType<NativePostTextEntryProps> | null {
+	if (cachedPostTextEntryComponent !== undefined) return cachedPostTextEntryComponent;
+	steamWebpackRuntime.captureRuntime(doc);
+	for (const module of steamWebpackRuntime.getAllModules()) {
+		const exp = module.exports as any;
+		if (exp && typeof exp.K === 'function' && exp.K.prototype?.OnPostClicked && exp.K.prototype?.InsertEmoticon) {
+			cachedPostTextEntryComponent = exp.K as ComponentType<NativePostTextEntryProps>;
+			backendLog(`[NGL][Gamepad] Resolved native PostTextEntry component from module ${module.id}`);
+			return cachedPostTextEntryComponent;
+		}
+	}
+	const req = steamWebpackRuntime.getRequire();
+	if (req) {
+		try {
+			const exp = req(12975);
+			if (exp && typeof exp.K === 'function' && exp.K.prototype?.OnPostClicked) {
+				cachedPostTextEntryComponent = exp.K as ComponentType<NativePostTextEntryProps>;
+				backendLog(`[NGL][Gamepad] Resolved native PostTextEntry component by requiring module 12975`);
+				return cachedPostTextEntryComponent;
+			}
+		} catch {}
+		if (typeof req.e === 'function') {
+			req.e(8732).then(() => {
+				try {
+					const exp = req(12975);
+					if (exp && typeof exp.K === 'function') {
+						cachedPostTextEntryComponent = exp.K as ComponentType<NativePostTextEntryProps>;
+						backendLog('[NGL][Gamepad] Asynchronously loaded native PostTextEntry component from chunk 8732');
+					}
+				} catch {}
+			}).catch(() => {});
+		}
+	}
+	cachedPostTextEntryComponent = null;
+	return null;
+}
+
+export function resolveNativeFocusableTextarea(doc?: Document): ComponentType<any> | null {
+	if (cachedFocusableTextarea !== undefined) return cachedFocusableTextarea;
+	steamWebpackRuntime.captureRuntime(doc);
+	for (const module of steamWebpackRuntime.getAllModules()) {
+		const exp = module.exports as any;
+		if (exp && typeof exp.dO === 'function' && typeof exp.BA === 'function') {
+			cachedFocusableTextarea = exp.dO;
+			backendLog(`[NGL][Gamepad] Resolved native Focusable textarea from module ${module.id}`);
+			return cachedFocusableTextarea;
+		}
+	}
+	const req = steamWebpackRuntime.getRequire();
+	if (req) {
+		try {
+			const exp = req(90242);
+			if (exp && typeof exp.dO === 'function') {
+				cachedFocusableTextarea = exp.dO;
+				backendLog('[NGL][Gamepad] Resolved native Focusable textarea by requiring module 90242');
+				return cachedFocusableTextarea;
+			}
+		} catch {}
+	}
+	cachedFocusableTextarea = null;
+	return null;
+}
+
 export function resolveNativeCommunityComponent(doc?: Document): ComponentType<NativeCommunityProps> | null {
 	if (cachedCommunityComponent !== undefined) return cachedCommunityComponent;
 	steamWebpackRuntime.captureRuntime(doc);
@@ -405,9 +480,240 @@ export function resolveSteamNav(doc: Document): { navNode: any; navContext: any 
 	return null;
 }
 
+export interface NativeControllerIcons {
+	ControllerStatus?: ComponentType<any>;
+	ControllerType?: ComponentType<any>;
+	Controller?: ComponentType<any>;
+	XboxOneControllerFrontOutline?: ComponentType<any>;
+	PS4ControllerFrontOutline?: ComponentType<any>;
+	PS5ControllerFrontOutline?: ComponentType<any>;
+	FrankenController?: ComponentType<any>;
+}
+
+let cachedControllerIcons: NativeControllerIcons | null | undefined;
+let cachedControllerFeatureComponent: ComponentType<any> | null | undefined;
+
+export function resolveNativeControllerIcons(doc?: Document): NativeControllerIcons | null {
+	if (cachedControllerIcons !== undefined) return cachedControllerIcons;
+	steamWebpackRuntime.captureRuntime(doc);
+	for (const module of steamWebpackRuntime.getAllModules()) {
+		const exp = module.exports as any;
+		if (exp && typeof exp.ControllerStatus === 'function' && typeof exp.ControllerType === 'function') {
+			cachedControllerIcons = {
+				ControllerStatus: exp.ControllerStatus,
+				ControllerType: exp.ControllerType,
+				Controller: exp.Controller,
+				XboxOneControllerFrontOutline: exp.XboxOneControllerFrontOutline,
+				PS4ControllerFrontOutline: exp.PS4ControllerFrontOutline,
+				PS5ControllerFrontOutline: exp.PS5ControllerFrontOutline,
+				FrankenController: exp.FrankenController,
+			};
+			backendLog(`[NGL][Gamepad] Resolved native controller icons from module ${module.id}`);
+			return cachedControllerIcons;
+		}
+	}
+	const req = steamWebpackRuntime.getRequire();
+	if (req) {
+		try {
+			const exp = req(35488);
+			if (exp && typeof exp.ControllerStatus === 'function' && typeof exp.ControllerType === 'function') {
+				cachedControllerIcons = {
+					ControllerStatus: exp.ControllerStatus,
+					ControllerType: exp.ControllerType,
+					Controller: exp.Controller,
+					XboxOneControllerFrontOutline: exp.XboxOneControllerFrontOutline,
+					PS4ControllerFrontOutline: exp.PS4ControllerFrontOutline,
+					PS5ControllerFrontOutline: exp.PS5ControllerFrontOutline,
+					FrankenController: exp.FrankenController,
+				};
+				backendLog(`[NGL][Gamepad] Resolved native controller icons by requiring module 35488`);
+				return cachedControllerIcons;
+			}
+		} catch {}
+	}
+	cachedControllerIcons = null;
+	return null;
+}
+
+export function resolveNativeControllerFeatureComponent(doc?: Document): ComponentType<any> | null {
+	if (cachedControllerFeatureComponent !== undefined) return cachedControllerFeatureComponent;
+	steamWebpackRuntime.captureRuntime(doc);
+	for (const module of steamWebpackRuntime.getAllModules()) {
+		const exp = module.exports as any;
+		if (exp && typeof exp.n$ === 'function' && typeof exp.zX === 'function') {
+			cachedControllerFeatureComponent = exp.n$;
+			backendLog(`[NGL][Gamepad] Resolved native controller feature component (n$) from module ${module.id}`);
+			return cachedControllerFeatureComponent;
+		}
+	}
+	const req = steamWebpackRuntime.getRequire();
+	if (req) {
+		try {
+			const exp = req(28346);
+			if (exp && typeof exp.n$ === 'function') {
+				cachedControllerFeatureComponent = exp.n$;
+				backendLog(`[NGL][Gamepad] Resolved native controller feature component (n$) by requiring module 28346`);
+				return cachedControllerFeatureComponent;
+			}
+		} catch {}
+	}
+	cachedControllerFeatureComponent = null;
+	return null;
+}
+
+export interface NativeAchievementsSectionProps {
+	details: { unAppID: number };
+}
+
+export function ensureAppDetailsStoreGuarded(store: any): void {
+	if (!store || store.__ngl_achievements_guarded) return;
+	try {
+		const origGetAchievements = store.GetAchievements;
+		if (typeof origGetAchievements === 'function') {
+			store.GetAchievements = function (appId: number) {
+				try {
+					const appData = this.GetAppData(appId);
+					if (appData) {
+						if (!appData.details) {
+							appData.details = { unAppID: appId };
+						}
+						if (!appData.details.achievements) {
+							appData.details.achievements = {
+								nTotal: 0,
+								nAchieved: 0,
+								vecHighlight: [],
+								vecUnachieved: [],
+								vecAchievedHidden: [],
+							};
+						}
+					}
+				} catch {}
+				return origGetAchievements.call(this, appId);
+			};
+			store.__ngl_achievements_guarded = true;
+			backendLog('[NGL][Gamepad] Guarded native AppDetailsStore.GetAchievements to prevent undefined crash');
+		}
+	} catch (e) {
+		backendLog(`[NGL][Gamepad] Failed to guard AppDetailsStore: ${e}`);
+	}
+}
+
+let cachedAchievementsSectionComponent: ComponentType<NativeAchievementsSectionProps> | null | undefined;
+let cachedAppDetailsStore: any | null | undefined;
+let cachedAchievementStore: any | null | undefined;
+
+export function resolveNativeAchievementsSectionComponent(doc?: Document): ComponentType<NativeAchievementsSectionProps> | null {
+	if (cachedAchievementsSectionComponent) return cachedAchievementsSectionComponent;
+	steamWebpackRuntime.captureRuntime(doc);
+	const req = steamWebpackRuntime.getRequire();
+	if (req) {
+		try {
+			const exp = req(57665);
+			if (exp && exp.Jq && (typeof exp.Jq === 'function' || typeof exp.Jq === 'object')) {
+				cachedAchievementsSectionComponent = exp.Jq as ComponentType<NativeAchievementsSectionProps>;
+				backendLog(`[NGL][Gamepad] Resolved native AchievementsSection component (Jq) by requiring module 57665`);
+				return cachedAchievementsSectionComponent;
+			}
+		} catch {}
+	}
+	for (const module of steamWebpackRuntime.getAllModules()) {
+		const exp = module.exports as any;
+		if (exp && exp.Jq && (typeof exp.Jq === 'function' || typeof exp.Jq === 'object') && exp.hs && exp.Tv) {
+			cachedAchievementsSectionComponent = exp.Jq as ComponentType<NativeAchievementsSectionProps>;
+			backendLog(`[NGL][Gamepad] Resolved native AchievementsSection component (Jq) from module ${module.id}`);
+			return cachedAchievementsSectionComponent;
+		}
+	}
+	if (req && typeof req.e === 'function') {
+		steamWebpackRuntime.ensureChunk(9858).catch(() => {});
+	}
+	return null;
+}
+
+export function resolveNativeAppDetailsStore(doc?: Document): any | null {
+	if (cachedAppDetailsStore) return cachedAppDetailsStore;
+	steamWebpackRuntime.captureRuntime(doc);
+	const req = steamWebpackRuntime.getRequire();
+	if (req) {
+		try {
+			const exp = req(78057);
+			if (exp && exp.H && typeof exp.H.GetAppData === 'function') {
+				cachedAppDetailsStore = exp.H;
+				ensureAppDetailsStoreGuarded(cachedAppDetailsStore);
+				backendLog(`[NGL][Gamepad] Resolved native AppDetailsStore by requiring module 78057`);
+				return cachedAppDetailsStore;
+			}
+		} catch {}
+	}
+	for (const module of steamWebpackRuntime.getAllModules()) {
+		const exp = module.exports as any;
+		if (exp && exp.H && typeof exp.H.GetAppData === 'function' && typeof exp.H.GetAchievements === 'function') {
+			cachedAppDetailsStore = exp.H;
+			ensureAppDetailsStoreGuarded(cachedAppDetailsStore);
+			backendLog(`[NGL][Gamepad] Resolved native AppDetailsStore from module ${module.id}`);
+			return cachedAppDetailsStore;
+		}
+	}
+	if (req && typeof req.e === 'function') {
+		steamWebpackRuntime.ensureChunk(9858).catch(() => {});
+	}
+	return null;
+}
+
+export function resolveNativeAchievementStore(doc?: Document): any | null {
+	if (cachedAchievementStore) return cachedAchievementStore;
+	steamWebpackRuntime.captureRuntime(doc);
+	const req = steamWebpackRuntime.getRequire();
+	if (req) {
+		try {
+			const exp = req(32179);
+			if (exp && exp.p6 && typeof exp.p6.GetMyAchievements === 'function') {
+				cachedAchievementStore = exp.p6;
+				return cachedAchievementStore;
+			}
+		} catch {}
+	}
+	for (const module of steamWebpackRuntime.getAllModules()) {
+		const exp = module.exports as any;
+		if (exp && exp.p6 && typeof exp.p6.GetMyAchievements === 'function') {
+			cachedAchievementStore = exp.p6;
+			return cachedAchievementStore;
+		}
+	}
+	return null;
+}
+
+let cachedConfigContext: any | null | undefined;
+
+export function resolveNativeConfigContext(doc?: Document): any | null {
+	if (cachedConfigContext !== undefined) return cachedConfigContext;
+	steamWebpackRuntime.captureRuntime(doc);
+	const req = steamWebpackRuntime.getRequire();
+	if (req) {
+		try {
+			const exp = req(72476);
+			if (exp && exp.QO) {
+				cachedConfigContext = exp.QO;
+				return cachedConfigContext;
+			}
+		} catch {}
+	}
+	for (const module of steamWebpackRuntime.getAllModules()) {
+		const exp = module.exports as any;
+		if (exp && exp.QO && exp.ss && exp.Qn) {
+			cachedConfigContext = exp.QO;
+			return cachedConfigContext;
+		}
+	}
+	cachedConfigContext = null;
+	return null;
+}
+
 export function clearNativeComponentsCache(): void {
 	cachedFriendsComponent = undefined;
 	cachedActivityComponent = undefined;
+	cachedPostTextEntryComponent = undefined;
+	cachedFocusableTextarea = undefined;
 	cachedCommunityComponent = undefined;
 	cachedTradingCardComponent = undefined;
 	cachedDLCComponent = undefined;
@@ -415,6 +721,12 @@ export function clearNativeComponentsCache(): void {
 	cachedReviewComponent = undefined;
 	cachedNotesComponent = undefined;
 	cachedWorkshopComponent = undefined;
+	cachedControllerIcons = undefined;
+	cachedControllerFeatureComponent = undefined;
+	cachedAchievementsSectionComponent = undefined;
+	cachedAppDetailsStore = undefined;
+	cachedAchievementStore = undefined;
+	cachedConfigContext = undefined;
 	navContext = null;
 }
 

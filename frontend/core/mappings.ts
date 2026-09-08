@@ -148,7 +148,7 @@ async function readLocalShortcutSnapshot(): Promise<LocalShortcutSnapshot | null
 }
 
 function filterMappingsForLocalShortcuts(source: Mappings, snapshot: LocalShortcutSnapshot | null): { mappings: Mappings; removed: string[] } {
-	if (!snapshot) return { mappings: source, removed: [] };
+	if (!snapshot || !snapshot.ids || snapshot.ids.size === 0) return { mappings: source, removed: [] };
 	const result: Mappings = {};
 	const removed: string[] = [];
 	for (const [key, value] of Object.entries(source)) {
@@ -171,18 +171,23 @@ async function hydrateMappings(): Promise<void> {
 			const parsed = parseMappingsResponse(await getAllMappings());
 			if (!parsed) throw new Error('invalid_mappings_response');
 			const localShortcuts = await readLocalShortcutSnapshot();
-			const backendFiltered = filterMappingsForLocalShortcuts(cleanMappings(parsed), localShortcuts);
-			const cachedFiltered = filterMappingsForLocalShortcuts(cleanMappings({ ...mappings }), localShortcuts);
+			const hasValidShortcutRegistry = Boolean(localShortcuts && localShortcuts.ids && localShortcuts.ids.size > 0);
+			const backendFiltered = hasValidShortcutRegistry
+				? filterMappingsForLocalShortcuts(cleanMappings(parsed), localShortcuts)
+				: { mappings: cleanMappings(parsed), removed: [] };
+			const cachedFiltered = hasValidShortcutRegistry
+				? filterMappingsForLocalShortcuts(cleanMappings({ ...mappings }), localShortcuts)
+				: { mappings: cleanMappings({ ...mappings }), removed: [] };
 			let backendMappings = backendFiltered.mappings;
 			const cachedMappings = cachedFiltered.mappings;
 
-			if (backendFiltered.removed.length > 0) {
+			if (hasValidShortcutRegistry && backendFiltered.removed.length > 0) {
 				const purgeRaw = await updateMappingsBackend({ request_json: JSON.stringify({ set: {}, remove: backendFiltered.removed }) });
 				const purge = parseMappingMutationResponse(purgeRaw);
 				if (purge?.ok && purge.data) backendMappings = cleanMappings(purge.data);
 				backendLog(`Discarded ${backendFiltered.removed.length} mapping(s) that do not belong to the active Steam shortcut registry${localShortcuts?.accountId ? ` (account ${localShortcuts.accountId})` : ''}.`);
 			}
-			if (cachedFiltered.removed.length > 0) {
+			if (hasValidShortcutRegistry && cachedFiltered.removed.length > 0) {
 				backendLog(`Ignored ${cachedFiltered.removed.length} stale cached mapping(s) from a previous or foreign installation.`);
 			}
 

@@ -159,7 +159,7 @@ function appIdsFromReactOwners(doc: Document): number[] {
 		if (!element.isConnected || (element.offsetParent === null && element.offsetWidth === 0 && element.offsetHeight === 0)) {
 			continue;
 		}
-		if (element.closest('#gdl-bp-detail-root, #gdl-bp-detail-shell, #gdl-bp-detail-fallback-panel, [id^="gdl-"], [data-gdl-big-picture-details], [class*="AllGames"], [class*="CollectionsHeader"], [class*="LibraryHome"], [class*="Shelf"], [class*="Grid"], [class*="Carousel"], [role="tablist"]')) {
+		if (element.closest('#gdl-bp-detail-root, #gdl-bp-detail-shell, #gdl-bp-detail-fallback-panel, [id^="gdl-"], [data-gdl-big-picture-details], [class*="AllGames"], [class*="LibraryHome"], [class*="Shelf"], [class*="Grid"], [class*="Carousel"], [role="tablist"]')) {
 			continue;
 		}
 		let current: HTMLElement | null = element;
@@ -198,7 +198,7 @@ function activeContextFromIdentity(doc: Document, shortcuts: MappedShortcut[]): 
 		}
 	}
 
-	if (doc.querySelector('[class*="AllGames"], [class*="CollectionsHeader"], [class*="LibraryHome"]')) {
+	if (!hasAppRoute && doc.querySelector('[class*="AllGames"], [class*="LibraryHome"], [class*="AllCollections"]')) {
 		return { type: 'none' };
 	}
 
@@ -212,13 +212,29 @@ function activeContextFromIdentity(doc: Document, shortcuts: MappedShortcut[]): 
 }
 
 function headingContext(doc: Document, shortcuts: MappedShortcut[]): ActiveGameContext | null {
-	if (doc.querySelector('[class*="AllGames"], [class*="CollectionsHeader"], [class*="LibraryHome"], [class*="AllCollections"]')) {
-		return null;
-	}
 	const routeValues = collectActiveRouteValues(doc);
-	if (routeValues.some(v => NON_DETAILS_ROUTE_PATTERN.test(v)) && !routeValues.some(v => APP_DETAILS_ROUTE_PATTERN.test(v))) {
+	const hasAppRoute = routeValues.some(v => APP_DETAILS_ROUTE_PATTERN.test(v));
+	if (!hasAppRoute && doc.querySelector('[class*="AllGames"], [class*="LibraryHome"], [class*="AllCollections"]')) {
 		return null;
 	}
+	if (routeValues.some(v => NON_DETAILS_ROUTE_PATTERN.test(v)) && !hasAppRoute) {
+		return null;
+	}
+	for (const value of routeValues) {
+		const match = APP_DETAILS_ROUTE_PATTERN.exec(value);
+		if (match) {
+			const id = Number(match[1]);
+			const unsigned = id < 0 ? (id >>> 0) : id;
+			if (unsigned > 0 && unsigned < 2147483648) {
+				const isShortcut = shortcuts.some(item => mappedShortcutIds(item).includes(id));
+				if (!isShortcut) return { type: 'steam', steamAppId: unsigned };
+			}
+		}
+	}
+	const stateIds = [...activeAppIdsFromStores(doc), ...appIdsFromReactOwners(doc)];
+	const official = stateIds.find(id => id > 0 && id < 2147483648 && !shortcuts.some(item => mappedShortcutIds(item).includes(id)));
+	if (official) return { type: 'steam', steamAppId: official };
+
 	const byLongestTitle = [...shortcuts].sort((a, b) => b.title.length - a.title.length);
 	const headings = Array.from(doc.querySelectorAll<HTMLElement>(
 		'h1, h2, h3, [class*="logo" i] img[alt], [class*="Hero" i] img[alt], svg[aria-label], [class*="title" i], [class*="logo" i]'
@@ -238,7 +254,9 @@ function headingContext(doc: Document, shortcuts: MappedShortcut[]): ActiveGameC
 export function resolveActiveGameContext(doc?: Document): ActiveGameContext {
 	const targetDoc = doc || (typeof document !== 'undefined' ? document : null);
 	if (!targetDoc) return { type: 'none' };
-	if (targetDoc.querySelector('[class*="AllGames"], [class*="CollectionsHeader"], [class*="LibraryHome"], [class*="AllCollections"]')) {
+	const routeValues = collectActiveRouteValues(targetDoc);
+	const hasAppRoute = routeValues.some(v => APP_DETAILS_ROUTE_PATTERN.test(v));
+	if (!hasAppRoute && targetDoc.querySelector('[class*="AllGames"], [class*="LibraryHome"], [class*="AllCollections"]')) {
 		return { type: 'none' };
 	}
 	const shortcuts = getMappedShortcuts();
@@ -257,11 +275,13 @@ export function resolveActiveGameContext(doc?: Document): ActiveGameContext {
 		return { type: 'shortcut-unlinked', shortcutAppId: rawAppId >>> 0, title: title || `App ${rawAppId >>> 0}` };
 	}
 
-	const byHeading = headingContext(targetDoc, shortcuts);
-	if (byHeading?.type === 'shortcut-linked') return byHeading;
-
 	const identity = activeContextFromIdentity(targetDoc, shortcuts);
 	if (identity?.type === 'shortcut-linked') return identity;
 	if (identity?.type === 'steam') return identity;
+
+	const byHeading = headingContext(targetDoc, shortcuts);
+	if (byHeading?.type === 'shortcut-linked') return byHeading;
+	if (byHeading?.type === 'steam') return byHeading;
+
 	return identity || { type: 'none' };
 }

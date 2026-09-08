@@ -1,6 +1,9 @@
-const protectedWindows = new WeakSet<Window>();
-const protectedDocuments = new WeakSet<Document>();
+const acceleratorWindows = new WeakSet<Window>();
+const acceleratorDocuments = new WeakSet<Document>();
+const transientProtectedDocuments = new WeakSet<Document>();
 const cleanupCallbacks = new Set<() => void>();
+const WINDOW_ACCELERATOR_GUARD_KEY = Symbol.for('NativeGameLink.browserProtection.windowAcceleratorGuard.v1');
+const DOCUMENT_ACCELERATOR_GUARD_KEY = Symbol.for('NativeGameLink.browserProtection.documentAcceleratorGuard.v1');
 
 function isSaveOrBrowserAccelerator(event: KeyboardEvent): boolean {
 	if (!event.ctrlKey && !event.metaKey) return false;
@@ -28,13 +31,48 @@ function isSaveOrBrowserAccelerator(event: KeyboardEvent): boolean {
 }
 
 function blockAcceleratorHandler(event: KeyboardEvent): void {
-	if (isSaveOrBrowserAccelerator(event)) {
-		event.preventDefault();
-		event.stopPropagation();
-		if (typeof event.stopImmediatePropagation === 'function') {
-			event.stopImmediatePropagation();
+	if (!isSaveOrBrowserAccelerator(event)) return;
+	event.preventDefault();
+	event.stopPropagation();
+	if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation();
+}
+
+function installStickyWindowAcceleratorGuard(win: Window): void {
+	if (acceleratorWindows.has(win)) return;
+	try {
+		if ((win as any)[WINDOW_ACCELERATOR_GUARD_KEY]) {
+			acceleratorWindows.add(win);
+			return;
 		}
-	}
+		Object.defineProperty(win, WINDOW_ACCELERATOR_GUARD_KEY, { value: true, configurable: false });
+	} catch {}
+	acceleratorWindows.add(win);
+	try {
+		win.addEventListener('keydown', blockAcceleratorHandler, true);
+		win.addEventListener('keyup', blockAcceleratorHandler, true);
+		// Do not remove this guard when the plugin is hot-disabled. A CEF renderer
+		// can still deliver a queued Ctrl+S while Steam is tearing the window down,
+		// which opens a Win32 "Guardar como <AppID>" dialog. The window owns this
+		// safety guard for the full lifetime of the realm. WeakSet membership and
+		// DOM listeners disappear with the destroyed CEF window, so no explicit
+		// beforeunload removal can open a shutdown race.
+	} catch {}
+}
+
+function installStickyDocumentAcceleratorGuard(doc: Document): void {
+	if (acceleratorDocuments.has(doc)) return;
+	try {
+		if ((doc as any)[DOCUMENT_ACCELERATOR_GUARD_KEY]) {
+			acceleratorDocuments.add(doc);
+			return;
+		}
+		Object.defineProperty(doc, DOCUMENT_ACCELERATOR_GUARD_KEY, { value: true, configurable: false });
+	} catch {}
+	acceleratorDocuments.add(doc);
+	try {
+		doc.addEventListener('keydown', blockAcceleratorHandler, true);
+		doc.addEventListener('keyup', blockAcceleratorHandler, true);
+	} catch {}
 }
 
 function blockContextMenu(event: MouseEvent): void {
@@ -44,10 +82,7 @@ function blockContextMenu(event: MouseEvent): void {
 		target.tagName === 'TEXTAREA' ||
 		target.isContentEditable
 	);
-	// Prevents Chromium's native "Save page as...", "Print...", etc. from opening Win32 dialogs
-	if (!isEditable) {
-		event.preventDefault();
-	}
+	if (!isEditable) event.preventDefault();
 }
 
 function blockDragDrop(event: DragEvent): void {
@@ -58,78 +93,56 @@ function blockDownloadClicks(event: MouseEvent): void {
 	const target = event.target as Element | null;
 	if (!target) return;
 	const anchor = target.closest<HTMLAnchorElement>('a[download]');
-	if (anchor) {
-		const href = String(anchor.getAttribute('href') || '');
-		if (href.includes('steamloopback.host') || href.startsWith('/') || href.startsWith('steam:')) {
-			event.preventDefault();
-			event.stopPropagation();
-			if (typeof event.stopImmediatePropagation === 'function') {
-				event.stopImmediatePropagation();
-			}
-		}
+	if (!anchor) return;
+	const href = String(anchor.getAttribute('href') || '');
+	if (href.includes('steamloopback.host') || href.startsWith('/') || href.startsWith('steam:')) {
+		event.preventDefault();
+		event.stopPropagation();
+		if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation();
 	}
 }
 
 /**
- * Attaches capture-phase keyboard interceptors to prevent Chromium from invoking
- * native browser accelerators (e.g. Save Page As, Print, Open File) which spawn modal
- * Win32 file dialogs that deadlock the CEF message loop and block Steam from restarting.
+ * Installs a lifetime accelerator guard plus disposable interaction guards.
+ * The accelerator layer intentionally survives plugin hot-disable until the CEF
+ * window unloads so queued Chromium shortcuts cannot escape during restart.
  */
 export function installBrowserProtection(win: Window | null | undefined, doc: Document | null | undefined): () => void {
+	if (win) installStickyWindowAcceleratorGuard(win);
+	if (doc) installStickyDocumentAcceleratorGuard(doc);
+
 	const cleanups: (() => void)[] = [];
-
-	if (win && !protectedWindows.has(win)) {
+	if (doc && !transientProtectedDocuments.has(doc)) {
 		try {
-			protectedWindows.add(win);
-			win.addEventListener('keydown', blockAcceleratorHandler, true);
-			win.addEventListener('keyup', blockAcceleratorHandler, true);
-			cleanups.push(() => {
-				try {
-					win.removeEventListener('keydown', blockAcceleratorHandler, true);
-					win.removeEventListener('keyup', blockAcceleratorHandler, true);
-				} catch {}
-				protectedWindows.delete(win);
-			});
-		} catch {}
-	}
-
-	if (doc && !protectedDocuments.has(doc)) {
-		try {
-			protectedDocuments.add(doc);
-			doc.addEventListener('keydown', blockAcceleratorHandler, true);
-			doc.addEventListener('keyup', blockAcceleratorHandler, true);
+			transientProtectedDocuments.add(doc);
 			doc.addEventListener('click', blockDownloadClicks, true);
 			doc.addEventListener('contextmenu', blockContextMenu, false);
 			doc.addEventListener('dragover', blockDragDrop, false);
 			doc.addEventListener('drop', blockDragDrop, false);
 			cleanups.push(() => {
 				try {
-					doc.removeEventListener('keydown', blockAcceleratorHandler, true);
-					doc.removeEventListener('keyup', blockAcceleratorHandler, true);
 					doc.removeEventListener('click', blockDownloadClicks, true);
 					doc.removeEventListener('contextmenu', blockContextMenu, false);
 					doc.removeEventListener('dragover', blockDragDrop, false);
 					doc.removeEventListener('drop', blockDragDrop, false);
 				} catch {}
-				protectedDocuments.delete(doc);
+				transientProtectedDocuments.delete(doc);
 			});
 		} catch {}
 	}
 
+	if (cleanups.length === 0) return () => {};
 	const combinedCleanup = () => {
 		for (const fn of cleanups) {
 			try { fn(); } catch {}
 		}
 		cleanupCallbacks.delete(combinedCleanup);
 	};
-
 	cleanupCallbacks.add(combinedCleanup);
 	return combinedCleanup;
 }
 
-/**
- * Dismounts all active protection listeners across all Steam documents and windows.
- */
+/** Removes disposable interaction guards. Accelerator guards remain until realm destruction. */
 export function disposeAllBrowserProtection(): void {
 	for (const cleanup of Array.from(cleanupCallbacks)) {
 		try { cleanup(); } catch {}

@@ -27,9 +27,13 @@ export function getCachedFriendData(steamAppId: string): { data: FriendCategorie
 
 export function friendDataSignature(data: FriendCategories | null | undefined): string {
 	if (!data) return '0';
-	const values = [...data.recentlyPlayed, ...data.previouslyPlayed, ...(data.wishlisted || [])];
-	return `${data.totalCount}:` + values.map(friend =>
-		`${friend.steamid}:${friend.minutes_played_recently}:${friend.minutes_played}`).join('|');
+	const encode = (prefix: string, values: FriendPlayInfo[]) => values.map(friend =>
+		`${prefix}:${friend.steamid}:${friend.minutes_played_recently}:${friend.minutes_played}`).join('|');
+	return `${data.totalCount}:` + [
+		encode('recent', data.recentlyPlayed),
+		encode('previous', data.previouslyPlayed),
+		encode('wishlist', data.wishlisted || []),
+	].filter(Boolean).join('|');
 }
 
 export async function getFriendData(steamAppId: string): Promise<{ html: string; data: FriendCategories | null }> {
@@ -47,6 +51,7 @@ export async function getFriendData(steamAppId: string): Promise<{ html: string;
 async function loadFriendData(steamAppId: string): Promise<{ html: string; data: FriendCategories | null }> {
 	const appIdNum = parseInt(steamAppId, 10);
 	if (!Number.isFinite(appIdNum) || appIdNum <= 0) return { html: '', data: null };
+	const retained = cacheRead<FriendCategories>('friends_' + steamAppId, CACHE_TTL.friends, CACHE_RETENTION.friends)?.data || null;
 
 	try {
 		// 1. Fetch comprehensive friends gameplay info via Steam protobuf RPC & Store API
@@ -143,6 +148,17 @@ async function loadFriendData(steamAppId: string): Promise<{ html: string; data:
 					}
 				}
 			} catch {}
+		}
+
+		// Wishlist visibility is sourced from Steam RPC/store state that can be
+		// transiently empty during client hydration. Do not let one partial
+		// response erase a previously confirmed second column within retention.
+		if (wishlisted.length === 0 && (retained?.wishlisted?.length || 0) > 0) {
+			const occupied = new Set([...recentlyPlayed, ...previouslyPlayed].map(friend => friend.steamid));
+			for (const friend of retained?.wishlisted || []) {
+				if (!friend.steamid || occupied.has(friend.steamid) || wishlisted.some(item => item.steamid === friend.steamid)) continue;
+				wishlisted.push({ ...friend });
+			}
 		}
 
 		recentlyPlayed.sort((a, b) => b.minutes_played_recently - a.minutes_played_recently);

@@ -51,6 +51,17 @@ const signatures: Record<NativeClassFamily, readonly string[]> = {
 const cache = new Map<NativeClassFamily, NativeClassModule | null>();
 let scanned = false;
 let summaryCarousel: ComponentType<any> | null | undefined;
+let cachedRuntimeIdentity: object | null = null;
+
+function ensureNativeClassRuntime(doc?: Document): void {
+	steamWebpackRuntime.captureRuntime(doc);
+	const identity = steamWebpackRuntime.getRuntimeIdentity(doc);
+	if (identity && cachedRuntimeIdentity === identity) return;
+	cache.clear();
+	scanned = false;
+	summaryCarousel = undefined;
+	cachedRuntimeIdentity = identity;
+}
 
 function classModuleCandidates(module: WebpackModuleEntry): NativeClassModule[] {
 	const exports = module.exports as any;
@@ -67,9 +78,10 @@ function matches(module: NativeClassModule, keys: readonly string[]): boolean {
 	return keys.every(key => typeof module[key] === 'string' && module[key].length > 0);
 }
 
-function scanNativeAppDetailsClasses(): void {
+function scanNativeAppDetailsClasses(doc?: Document): void {
+	ensureNativeClassRuntime(doc);
 	if (scanned) return;
-	const modules = steamWebpackRuntime.getAllModules();
+	const modules = steamWebpackRuntime.getAllModules(doc);
 	if (modules.length === 0) return;
 	const unresolved = new Set<NativeClassFamily>(Object.keys(signatures) as NativeClassFamily[]);
 	for (const module of modules) {
@@ -87,8 +99,8 @@ function scanNativeAppDetailsClasses(): void {
 	scanned = true;
 }
 
-export function resolveNativeAppDetailsClasses(): NativeAppDetailsClasses {
-	scanNativeAppDetailsClasses();
+export function resolveNativeAppDetailsClasses(doc?: Document): NativeAppDetailsClasses {
+	scanNativeAppDetailsClasses(doc);
 	return {
 		Section: cache.get('Section') || null,
 		SectionHeader: cache.get('SectionHeader') || null,
@@ -128,9 +140,10 @@ export const FALLBACK_FOCUS_RING_CLASSES: Readonly<{
 };
 
 /** Steam's AppDetails carousel is not the public Millennium Carousel. */
-export function resolveNativeSummaryCarousel(): ComponentType<any> | null {
+export function resolveNativeSummaryCarousel(doc?: Document): ComponentType<any> | null {
+	ensureNativeClassRuntime(doc);
 	if (summaryCarousel !== undefined) return summaryCarousel;
-	const modules = steamWebpackRuntime.getAllModules();
+	const modules = steamWebpackRuntime.getAllModules(doc);
 	if (modules.length === 0) return null;
 	for (const module of modules) {
 		const exports = module.exports as any;
@@ -148,6 +161,7 @@ export function resolveNativeSummaryCarousel(): ComponentType<any> | null {
 }
 
 export function clearNativeAppDetailsClassCache(): void {
+	cachedRuntimeIdentity = null;
 	cache.clear();
 	scanned = false;
 	summaryCarousel = undefined;

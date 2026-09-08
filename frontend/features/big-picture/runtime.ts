@@ -1,10 +1,12 @@
 import { backendLog } from '../../api/backend';
 import { normalizeTitle } from '../../core/text';
 import { loc, officialSteamText, steamIntlLocale } from '../../steam/localization';
-import { findMappingForTitle, loadMappings } from '../../core/mappings';
-import { getMappedShortcuts, getShortcutAppById, getShortcutPlaytimeMinutes, toSignedShortcutAppId } from '../../steam/shortcuts';
+import { findMappingForTitle } from '../../core/mappings';
+import { getShortcutAppById, getShortcutPlaytimeMinutes, getSteamAppStore, toSignedShortcutAppId } from '../../steam/shortcuts';
 import { fetchPlaytimeStatsBatch } from '../playtime/service';
 import { disposeBigPictureShortcutDetails, refreshBigPictureShortcutDetails } from './details';
+import { collectMappedShortcutApps } from './library-candidates';
+import { getBigPictureMappedShortcuts, invalidateBigPictureMappedShortcuts } from './mapped-shortcuts-cache';
 import { syncMissingArtworkForMappedShortcuts } from '../library/artwork-sync';
 import { defaultBigPictureModeEnabled, subscribePreferences } from '../../core/preferences';
 import { installBrowserProtection } from '../../steam/browser-protection';
@@ -40,7 +42,6 @@ type BigPictureSavedShortcutState = {
 	shortcutMethod?: Function; deckVerifiedMethod?: Function;
 };
 const bigPictureShortcutState = new Map<object, BigPictureSavedShortcutState>();
-
 // Big Picture renders the "recently played" cards in a separate window from
 // the desktop library. Steam already knows the playtime for shortcut AppIDs,
 // but this view can still render its empty-state label while the shortcut's
@@ -67,12 +68,13 @@ function formatBigPicturePlaytime(minutes: number): string {
 }
 
 function applyShortcutPlaytimeToOverview(
+	doc: Document,
 	shortcutAppId: number,
 	minutesForever: number,
 	minutesLastTwoWeeks: number,
 	lastPlayedAt?: number,
 ): boolean {
-	const app = getShortcutAppById(shortcutAppId);
+	const app = getShortcutAppById(shortcutAppId, doc);
 	if (!app) return false;
 	let changed = false;
 	const forever = Math.max(0, Math.floor(minutesForever));
@@ -110,9 +112,27 @@ function findMappedTitleInScope(scope: Element, shortcuts: MappedShortcut[]): Ma
 	return null;
 }
 
+const bigPictureHomePlaytimeInFlight = new WeakSet<Document>();
+const bigPictureHomePlaytimeLastRun = new WeakMap<Document, number>();
+const BIG_PICTURE_HOME_PLAYTIME_MIN_INTERVAL_MS = 1500;
+
 export async function patchBigPictureHomePlaytime(doc: Document): Promise<void> {
+	if (!doc.body?.isConnected || doc.defaultView?.closed) return;
+	if (bigPictureHomePlaytimeInFlight.has(doc)) return;
+	const lastRun = bigPictureHomePlaytimeLastRun.get(doc) || 0;
+	if (Date.now() - lastRun < BIG_PICTURE_HOME_PLAYTIME_MIN_INTERVAL_MS) return;
+	bigPictureHomePlaytimeInFlight.add(doc);
+	try {
+		await patchBigPictureHomePlaytimePass(doc);
+	} finally {
+		bigPictureHomePlaytimeInFlight.delete(doc);
+		bigPictureHomePlaytimeLastRun.set(doc, Date.now());
+	}
+}
+
+async function patchBigPictureHomePlaytimePass(doc: Document): Promise<void> {
 	if (!doc.body) return;
-	const shortcuts = getMappedShortcuts();
+	const shortcuts = getBigPictureMappedShortcuts(doc);
 	if (shortcuts.length === 0) return;
 
 	// SteamClient.GetPlaytime commonly returns no data for non-Steam shortcuts.
@@ -127,7 +147,7 @@ export async function patchBigPictureHomePlaytime(doc: Document): Promise<void> 
 		steamAppId: shortcut.steamAppId,
 	})));
 	await Promise.all(shortcuts.map(async (shortcut) => {
-		const app = getShortcutAppById(shortcut.id);
+		const app = getShortcutAppById(shortcut.id, doc);
 		const knownNativeMinutes = Number(app?.minutes_playtime_forever || 0);
 		const nativeMinutes = knownNativeMinutes > 0
 			? knownNativeMinutes
@@ -150,7 +170,7 @@ export async function patchBigPictureHomePlaytime(doc: Document): Promise<void> 
 			Number(fallback?.lastPlayedAt || 0),
 		);
 		resolved.set(shortcut.id, { forever, recent });
-		if (applyShortcutPlaytimeToOverview(shortcut.id, forever, recent, lastPlayed)) overviewChanged = true;
+		if (applyShortcutPlaytimeToOverview(doc, shortcut.id, forever, recent, lastPlayed)) overviewChanged = true;
 	}));
 	if (overviewChanged && !isBigPictureGameDetailSurface(doc)) {
 		requestBigPictureRerender();
@@ -181,7 +201,6 @@ export async function patchBigPictureHomePlaytime(doc: Document): Promise<void> 
 		backendLog(`Big Picture playtime shown for "${match.title}": ${minutes} minutes`);
 	}
 }
-
 // Big Picture normally keeps shortcuts in a separate "Non-Steam" tab and
 // excludes them from All Games, Installed and controller-focused lists. Steam
 // rebuilds these overview objects while navigating, so use both the store's
@@ -287,9 +306,9 @@ function setBigPicturePlaytimeField(target: any, key: BigPicturePlaytimeKey, val
 }
 
 export function mergeShortcutsIntoBigPictureLibrary(_doc: Document): void {
-	const appStore = (window as any).appStore;
+	const appStore = getSteamAppStore(_doc);
 	if (!appStore?.m_mapApps) return;
-	const mappedShortcuts = getMappedShortcuts();
+	const mappedShortcuts = getBigPictureMappedShortcuts(_doc);
 	gdlBigPictureMappedShortcutIds.clear();
 	for (const shortcut of mappedShortcuts) {
 		gdlBigPictureMappedShortcutIds.add(shortcut.id);
@@ -300,9 +319,7 @@ export function mergeShortcutsIntoBigPictureLibrary(_doc: Document): void {
 	}
 	gdlBigPictureActive = true;
 
-	const candidates: any[] = [];
-	try { for (const app of appStore.m_mapApps.values()) candidates.push(app); } catch {}
-	try { candidates.push(...Array.from(appStore.allApps || [])); } catch {}
+	const candidates = collectMappedShortcutApps(appStore, mappedShortcuts);
 	const seen = new Set<object>();
 	let changed = false;
 
@@ -378,7 +395,6 @@ export function mergeShortcutsIntoBigPictureLibrary(_doc: Document): void {
 	if (changed && !isBigPictureGameDetailSurface(_doc)) {
 		requestBigPictureRerender();
 	}
-	void syncMissingArtworkForMappedShortcuts();
 }
 
 export function restoreBigPictureShortcutState(): void {
@@ -423,16 +439,19 @@ export function restoreBigPictureShortcutState(): void {
 let cleanupBigPictureBrowserProtection: (() => void) | null = null;
 
 export function activateBigPicture(doc: Document): void {
+	const sameDocument = gdlBigPictureActive && gdlBigPictureDoc === doc;
 	gdlBigPictureActive = true;
 	gdlBigPictureDoc = doc;
+	if (sameDocument) return;
 	cleanupBigPictureBrowserProtection?.();
 	cleanupBigPictureBrowserProtection = installBrowserProtection(doc.defaultView, doc);
-	void loadMappings().catch(() => {});
+	void syncMissingArtworkForMappedShortcuts().catch(error => backendLog('Big Picture artwork reconciliation failed: ' + error));
 }
 
 export function deactivateBigPicture(): void {
 	cleanupBigPictureBrowserProtection?.();
 	cleanupBigPictureBrowserProtection = null;
+	invalidateBigPictureMappedShortcuts(gdlBigPictureDoc);
 	disposeBigPictureShortcutDetails(gdlBigPictureDoc);
 	gdlBigPictureActive = false;
 	gdlBigPictureDoc = null;
@@ -447,15 +466,18 @@ export function isBigPictureActive(): boolean {
 	return gdlBigPictureActive;
 }
 
-let activeRefreshPromise: Promise<void> | null = null;
-let lastRefreshCompletedAt = 0;
+const activeRefreshPromises = new WeakMap<Document, Promise<void>>();
+const lastRefreshCompletedAt = new WeakMap<Document, number>();
 
 export async function refreshBigPicture(doc: Document | null = gdlBigPictureDoc): Promise<void> {
-	if (!doc) return;
+	if (!doc || !doc.body?.isConnected || doc.defaultView?.closed) return;
 	activateBigPicture(doc);
+	const activeRefreshPromise = activeRefreshPromises.get(doc);
 	if (activeRefreshPromise) return activeRefreshPromise;
-	if (Date.now() - lastRefreshCompletedAt < 250) return;
+	const lastCompletedAt = lastRefreshCompletedAt.get(doc) || 0;
+	if (Date.now() - lastCompletedAt < 250) return;
 	const run = async () => {
+		if (!doc.body?.isConnected || doc.defaultView?.closed) return;
 		const detailRefresh = refreshBigPictureShortcutDetails(doc);
 		mergeShortcutsIntoBigPictureLibrary(doc);
 		if (!isBigPictureGameDetailSurface(doc)) {
@@ -464,11 +486,12 @@ export async function refreshBigPicture(doc: Document | null = gdlBigPictureDoc)
 		}
 		await detailRefresh;
 	};
-	activeRefreshPromise = run().finally(() => {
-		activeRefreshPromise = null;
-		lastRefreshCompletedAt = Date.now();
+	const refreshPromise = run().finally(() => {
+		if (activeRefreshPromises.get(doc) === refreshPromise) activeRefreshPromises.delete(doc);
+		lastRefreshCompletedAt.set(doc, Date.now());
 	});
-	return activeRefreshPromise;
+	activeRefreshPromises.set(doc, refreshPromise);
+	return refreshPromise;
 }
 
 subscribePreferences(() => {

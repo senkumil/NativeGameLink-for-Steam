@@ -12,6 +12,152 @@ export interface BigPictureNativeTabs {
 	controls: Map<BigPicturePanelTab, HTMLElement>;
 }
 
+interface PlaybarControllerMountState {
+	steamAppId: string;
+	support: GameControllerSupport;
+}
+
+const playbarControllerStates = new WeakMap<Document, PlaybarControllerMountState>();
+const playbarControllerObservers = new WeakMap<Document, MutationObserver>();
+const playbarControllerObserverTargets = new WeakMap<Document, HTMLElement>();
+const playbarControllerRepairTimers = new WeakMap<Document, ReturnType<typeof setTimeout>>();
+const playbarControllerContextGapSince = new WeakMap<Document, number>();
+
+interface CloudDividerScrollState {
+	strip: HTMLElement;
+	divider: HTMLElement;
+	initialStripTop: number;
+	onScroll: () => void;
+}
+
+const cloudDividerScrollStates = new WeakMap<Document, CloudDividerScrollState>();
+const MIN_CLOUD_SCROLL_BEFORE_COLLAPSE = 96;
+
+function detailVerticalScrollOffset(doc: Document, strip: HTMLElement): number {
+	let offset = Number((doc.scrollingElement as HTMLElement | null)?.scrollTop || 0);
+	for (let current = strip.parentElement; current && current !== doc.body; current = current.parentElement) {
+		offset = Math.max(offset, Number(current.scrollTop || 0));
+	}
+	return offset;
+}
+
+function isPlaybarStillVisible(doc: Document): boolean {
+	const playbar = PLAYBAR_CLASSES();
+	const stats = doc.querySelector<HTMLElement>(
+		`[class*="${playbar.GameStatsSection || 'GameStatsSection'}"], [class*="GameStatsSection"], [class*="gameStatsSection"]`
+	);
+	if (!stats || !isRenderedElement(doc, stats)) return false;
+	const rect = stats.getBoundingClientRect();
+	return rect.bottom > 8 && rect.top < (doc.defaultView?.innerHeight || 1080);
+}
+
+function syncCloudDividerScrollVisibility(doc: Document, state: CloudDividerScrollState): void {
+	const { strip, divider } = state;
+	const offset = detailVerticalScrollOffset(doc, strip);
+	const stripTop = strip.getBoundingClientRect().top;
+	const upwardTravel = Math.max(0, state.initialStripTop - stripTop);
+	const playbarVisible = isPlaybarStillVisible(doc);
+	const viewportHeight = doc.defaultView?.innerHeight || 1080;
+	const stickyBandTop = Math.max(88, Math.min(144, Math.round(viewportHeight * 0.13)));
+	const headerCollapsed = !playbarVisible
+		&& offset >= MIN_CLOUD_SCROLL_BEFORE_COLLAPSE
+		&& (upwardTravel >= MIN_CLOUD_SCROLL_BEFORE_COLLAPSE || stripTop <= stickyBandTop);
+
+	divider.dataset.gdlCloudScrolled = headerCollapsed ? '1' : '0';
+	if (headerCollapsed) {
+		divider.hidden = true;
+		divider.setAttribute('aria-hidden', 'true');
+		divider.style.setProperty('display', 'none', 'important');
+	} else {
+		divider.hidden = false;
+		divider.removeAttribute('aria-hidden');
+		divider.style.removeProperty('display');
+	}
+}
+
+function unbindCloudDividerScroll(doc: Document): void {
+	const state = cloudDividerScrollStates.get(doc);
+	if (!state) return;
+	doc.removeEventListener('scroll', state.onScroll, true);
+	doc.defaultView?.removeEventListener('scroll', state.onScroll);
+	cloudDividerScrollStates.delete(doc);
+}
+
+function bindCloudDividerScroll(doc: Document, strip: HTMLElement, divider: HTMLElement): void {
+	const existing = cloudDividerScrollStates.get(doc);
+	if (existing?.strip === strip && existing.divider === divider) {
+		existing.initialStripTop = Math.max(existing.initialStripTop, strip.getBoundingClientRect().top);
+		syncCloudDividerScrollVisibility(doc, existing);
+		return;
+	}
+	unbindCloudDividerScroll(doc);
+	const state: CloudDividerScrollState = {
+		strip,
+		divider,
+		initialStripTop: strip.getBoundingClientRect().top,
+		onScroll: () => {
+			const live = cloudDividerScrollStates.get(doc);
+			if (!live || !live.strip.isConnected || !live.divider.isConnected) return;
+			syncCloudDividerScrollVisibility(doc, live);
+		},
+	};
+	cloudDividerScrollStates.set(doc, state);
+	doc.addEventListener('scroll', state.onScroll, { capture: true, passive: true });
+	doc.defaultView?.addEventListener('scroll', state.onScroll, { passive: true });
+	syncCloudDividerScrollVisibility(doc, state);
+}
+
+function bindPlaybarControllerRepair(doc: Document, statsSection: HTMLElement): void {
+	const target = statsSection.parentElement || statsSection;
+	if (playbarControllerObservers.has(doc) && playbarControllerObserverTargets.get(doc) === target) return;
+	playbarControllerObservers.get(doc)?.disconnect();
+	const observer = new MutationObserver(() => {
+		const state = playbarControllerStates.get(doc);
+		if (!state || !target.isConnected || doc.getElementById('gdl-bp-playbar-controller')) return;
+		if (playbarControllerRepairTimers.has(doc)) return;
+		const timer = setTimeout(() => {
+			playbarControllerRepairTimers.delete(doc);
+			const liveState = playbarControllerStates.get(doc);
+			if (!liveState || !target.isConnected || doc.getElementById('gdl-bp-playbar-controller')) return;
+			ensurePlaybarControllerStat(doc, liveState.support);
+		}, 80);
+		playbarControllerRepairTimers.set(doc, timer);
+	});
+	observer.observe(target, { childList: true, subtree: true });
+	playbarControllerObservers.set(doc, observer);
+	playbarControllerObserverTargets.set(doc, target);
+}
+
+function isRenderedElement(doc: Document, element: HTMLElement | null): element is HTMLElement {
+	if (!element?.isConnected || element.hidden || element.getAttribute('aria-hidden') === 'true') return false;
+	if (element.dataset.gdlBpHiddenNotice === '1') return false;
+	const style = doc.defaultView?.getComputedStyle(element);
+	if (style?.display === 'none' || style?.visibility === 'hidden') return false;
+	const rect = element.getBoundingClientRect();
+	return rect.width > 0 && rect.height > 0;
+}
+
+export function restoreNativePanelChildren(panel: HTMLElement | null): void {
+	if (!panel) return;
+	for (const child of Array.from(panel.children)) {
+		const element = child as HTMLElement;
+		if (element.dataset.gdlBpPanelSiblingHidden !== '1') continue;
+		element.hidden = false;
+		element.style.removeProperty('display');
+		delete element.dataset.gdlBpPanelSiblingHidden;
+	}
+}
+
+export function commitNativePanelRoot(panel: HTMLElement, root: HTMLElement): void {
+	for (const child of Array.from(panel.children)) {
+		if (child === root || child.id === 'gdl-bp-detail-root') continue;
+		const element = child as HTMLElement;
+		element.hidden = true;
+		element.style.setProperty('display', 'none', 'important');
+		element.dataset.gdlBpPanelSiblingHidden = '1';
+	}
+}
+
 function panelFromControl(doc: Document, control: HTMLElement): HTMLElement | null {
 	let current: HTMLElement | null = control;
 	for (let depth = 0; current && depth < 5; depth += 1, current = current.parentElement) {
@@ -168,15 +314,9 @@ export function ensureNativePanelRoot(
 	root.setAttribute('flow-children', 'column');
 	root.setAttribute('focusable', 'false');
 	panel.dataset.gdlBpNativePanel = '1';
+	if (root.parentElement && root.parentElement !== panel) restoreNativePanelChildren(root.parentElement);
 	if (root.parentElement !== panel) panel.appendChild(root);
 	if (panel.firstChild !== root) panel.insertBefore(root, panel.firstChild);
-	Array.from(panel.children).forEach(child => {
-		if (child !== root && child.id !== 'gdl-bp-detail-root') {
-			(child as HTMLElement).hidden = true;
-			(child as HTMLElement).style.setProperty('display', 'none', 'important');
-			(child as HTMLElement).dataset.gdlBpHiddenNotice = '1';
-		}
-	});
 	const fallback = doc.getElementById('gdl-bp-detail-fallback-panel');
 	if (nativePanel && fallback && fallback !== panel) fallback.remove();
 	return { panel, root };
@@ -201,7 +341,13 @@ export function hideBigPictureNonSteamNotices(doc: Document): void {
 		if (text && anchors.some(anchor => text.includes(anchor))) {
 			const container = (el.closest('[class*="Section"], [class*="Container"], [class*="Panel"]') as HTMLElement) || el;
 			if (container.closest('#gdl-bp-detail-root, [class*="AllGames"], [class*="LibraryHome"], [class*="Shelf"], [class*="Grid"]')) continue;
-			const target = root && container.contains(root) ? el : container;
+			// Never hide an ancestor that contains our mounted React root. Steam's
+			// Info notice often shares its outer panel with the injected content.
+			let target: HTMLElement | null = container;
+			if (root && target.contains(root)) {
+				target = el !== root && !el.contains(root) ? el : null;
+			}
+			if (!target || target === root || (root && target.contains(root))) continue;
 			target.hidden = true;
 			target.style.setProperty('display', 'none', 'important');
 			target.dataset.gdlBpHiddenNotice = '1';
@@ -231,7 +377,12 @@ export function restoreBigPictureNonSteamNotices(doc: Document): void {
 
 export function ensureCloudDivider(doc: Document, strip: HTMLElement): HTMLElement | null {
 	const context = resolveActiveGameContext(doc);
-	if (context.type !== 'shortcut-linked') {
+	const linkedDetailRoot = doc.getElementById('gdl-bp-detail-root')?.dataset.gdlSteamAppId;
+	// Steam can briefly expose an incomplete route/context while GamepadUI is
+	// replacing the active details tree. Do not tear down a valid linked-game
+	// cloud row during that transition; true detail teardown removes it.
+	if (context.type !== 'shortcut-linked' && !linkedDetailRoot) {
+		unbindCloudDividerScroll(doc);
 		doc.getElementById('gdl-bp-cloud-divider')?.remove();
 		return null;
 	}
@@ -241,17 +392,18 @@ export function ensureCloudDivider(doc: Document, strip: HTMLElement): HTMLEleme
 	) || strip;
 	const parent = tabContainer.parentElement;
 	if (!parent) return null;
-	const hasNativeCloud = Boolean(
-		Array.from(doc.querySelectorAll<HTMLElement>(
-			'[class*="CloudStatus"], [class*="cloudStatus"], [class*="CloudSync"], [class*="cloudSync"]'
-		)).find(el => el.id !== 'gdl-bp-cloud-divider' && !el.closest('#gdl-bp-cloud-divider'))
-		|| Array.from(doc.querySelectorAll<HTMLElement>('div, span, p')).find(el =>
-			el.id !== 'gdl-bp-cloud-divider'
-			&& !el.closest('#gdl-bp-cloud-divider')
-			&& /steam\s*cloud/i.test(el.textContent || '')
-		)
-	);
+	const cloudScope = parent.parentElement || parent;
+	const stripRect = strip.getBoundingClientRect();
+	const hasNativeCloud = Array.from(cloudScope.querySelectorAll<HTMLElement>(
+		'[class*="CloudStatus"], [class*="cloudStatus"], [class*="CloudSync"], [class*="cloudSync"]'
+	)).some(element => {
+		if (element.id === 'gdl-bp-cloud-divider' || element.closest('#gdl-bp-cloud-divider')) return false;
+		if (!isRenderedElement(doc, element)) return false;
+		const rect = element.getBoundingClientRect();
+		return rect.bottom >= stripRect.top - 180 && rect.top <= stripRect.bottom + 80;
+	});
 	if (hasNativeCloud) {
+		unbindCloudDividerScroll(doc);
 		doc.getElementById('gdl-bp-cloud-divider')?.remove();
 		return null;
 	}
@@ -295,36 +447,67 @@ export function ensureCloudDivider(doc: Document, strip: HTMLElement): HTMLEleme
 	}
 	labelSpan.className = playbar.CloudStatusLabel || '';
 	labelSpan.textContent = `STEAM CLOUD: ${loc('AppDetails_CloudStatus_Synchronized', 'ACTUALIZADO').toUpperCase()}`;
+	bindCloudDividerScroll(doc, strip, divider);
 	return divider;
 }
 
 export function removeCloudDivider(doc: Document): void {
+	unbindCloudDividerScroll(doc);
 	doc.getElementById('gdl-bp-cloud-divider')?.remove();
 }
 
 export function ensurePlaybarControllerStat(doc: Document, supportOverride?: GameControllerSupport): HTMLElement | null {
 	const context = resolveActiveGameContext(doc);
-	if (context.type !== 'shortcut-linked') {
-		removePlaybarControllerStat(doc);
-		return null;
-	}
-
-	doc.getElementById('gdl-bp-playbar-controller-styles')?.remove();
-	ensureBigPictureDetailStyles(doc);
-
+	const linkedDetailRoot = doc.getElementById('gdl-bp-detail-root')?.dataset.gdlSteamAppId;
 	const playbar = PLAYBAR_CLASSES();
 	const statsSection = doc.querySelector<HTMLElement>(
 		`[class*="${playbar.GameStatsSection || 'GameStatsSection'}"], [class*="GameStatsSection"], [class*="gameStatsSection"]`
 	);
-	if (!statsSection) return null;
+	const previousState = playbarControllerStates.get(doc);
+	const explicitSteamAppId = context.type === 'shortcut-linked'
+		? String(context.identity?.steamAppId || context.steamAppId || '')
+		: String(linkedDetailRoot || previousState?.steamAppId || '');
 
-	const nativeController = Array.from(statsSection.children).find(el =>
-		el.id !== 'gdl-bp-playbar-controller'
-		&& (el.className.includes('Controller') || /control|controller/i.test(el.textContent || ''))
-	);
-	if (nativeController) {
+	if (context.type === 'steam' || context.type === 'shortcut-unlinked') {
 		removePlaybarControllerStat(doc);
 		return null;
+	}
+	if (context.type !== 'shortcut-linked' && !supportOverride && !linkedDetailRoot) {
+		// GamepadUI briefly reports `none` while replacing the details header.
+		// Preserve a known linked controller row during that bounded gap; a real
+		// library/non-details transition removes the GameStatsSection altogether.
+		if (!previousState || !statsSection) {
+			removePlaybarControllerStat(doc);
+			return null;
+		}
+		const gapStarted = playbarControllerContextGapSince.get(doc) || Date.now();
+		playbarControllerContextGapSince.set(doc, gapStarted);
+		if (Date.now() - gapStarted > 1200) {
+			removePlaybarControllerStat(doc);
+			return null;
+		}
+		supportOverride = previousState.support;
+	} else {
+		playbarControllerContextGapSince.delete(doc);
+	}
+	if (!statsSection) return null;
+
+	doc.getElementById('gdl-bp-playbar-controller-styles')?.remove();
+	ensureBigPictureDetailStyles(doc);
+
+	const nativeControllerClass = playbar.ControllerSupportInfo || '';
+	for (const child of Array.from(statsSection.children)) {
+		const element = child as HTMLElement;
+		if (element.id === 'gdl-bp-playbar-controller') continue;
+		if (!nativeControllerClass || !element.classList.contains(nativeControllerClass)) continue;
+		// A linked shortcut can inherit Steam's stale/generic controller row. Keep
+		// it intact but suppress it while our AppID-backed row owns this playbar.
+		if (element.dataset.gdlBpNativeControllerHidden !== '1') {
+			element.dataset.gdlBpNativeControllerHidden = '1';
+			element.dataset.gdlBpNativeControllerDisplay = element.style.display || '';
+		}
+		element.hidden = true;
+		element.style.setProperty('display', 'none', 'important');
 	}
 
 	let stat = doc.getElementById('gdl-bp-playbar-controller');
@@ -364,13 +547,33 @@ export function ensurePlaybarControllerStat(doc: Document, supportOverride?: Gam
 			support = detectGameControllerSupport(steamAppId, doc);
 		}
 	}
+	if (!support) support = previousState?.support || { xbox: true, ps4: false, ps5: false };
+	playbarControllerStates.set(doc, { steamAppId: explicitSteamAppId, support });
+	stat.dataset.gdlSteamAppId = explicitSteamAppId;
+	bindPlaybarControllerRepair(doc, statsSection);
 
 	mountPlaybarControllerIcons(row, doc, support);
 	return stat;
 }
 
 export function removePlaybarControllerStat(doc: Document): void {
+	playbarControllerObservers.get(doc)?.disconnect();
+	playbarControllerObservers.delete(doc);
+	playbarControllerObserverTargets.delete(doc);
+	const repairTimer = playbarControllerRepairTimers.get(doc);
+	if (repairTimer) clearTimeout(repairTimer);
+	playbarControllerRepairTimers.delete(doc);
+	playbarControllerStates.delete(doc);
+	playbarControllerContextGapSince.delete(doc);
 	doc.getElementById('gdl-bp-playbar-controller-styles')?.remove();
 	const stat = doc.getElementById('gdl-bp-playbar-controller');
 	stat?.remove();
+	for (const native of Array.from(doc.querySelectorAll<HTMLElement>('[data-gdl-bp-native-controller-hidden="1"]'))) {
+		native.hidden = false;
+		const previous = native.dataset.gdlBpNativeControllerDisplay || '';
+		if (previous) native.style.setProperty('display', previous);
+		else native.style.removeProperty('display');
+		delete native.dataset.gdlBpNativeControllerHidden;
+		delete native.dataset.gdlBpNativeControllerDisplay;
+	}
 }

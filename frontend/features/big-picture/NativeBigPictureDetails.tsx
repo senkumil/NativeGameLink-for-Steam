@@ -1,18 +1,14 @@
 import React, { Component, type ReactNode } from 'react';
 import { DialogButton, Focusable, IconsModule, ModalRoot, ProgressBar, Spinner, showModal } from '@steambrew/client';
 import { backendLog } from '../../api/backend';
-import { steamGameMainPageUrl } from '../../core/steam-links';
 import type { CommunityContentItem } from '../../domain/types';
 import { gdlText, loc } from '../../steam/localization';
 import {
 	resolveNativeAppDetailsClasses,
 	resolveNativeSummaryCarousel,
 	type NativeAppDetailsClasses,
-	type NativeClassModule,
 } from '../../steam/gamepad/components/AppDetailsNativeClasses';
 import { steamWebpackRuntime } from '../../steam/modules/SteamWebpackRuntime';
-import { steamNativeGameInfo } from '../library/native-game-model';
-import { getResolvedLibraryAssets } from '../library/library-assets';
 import { AppStoreAdapter } from '../../steam/gamepad/stores/AppStoreAdapter';
 import {
 	resolveNativeTradingCardComponent,
@@ -210,7 +206,7 @@ function LoadingContent({ hydrating, empty, className }: { hydrating: boolean; e
 }
 
 function ActivityTab(props: NativeDetailsProps): React.ReactElement {
-	const classes = resolveNativeAppDetailsClasses();
+	const classes = resolveNativeAppDetailsClasses(props.document);
 	const event = classes.ActivityEvent;
 	void (
 		event?.PartnerEventMediumImage_Container,
@@ -237,12 +233,11 @@ function ActivityTab(props: NativeDetailsProps): React.ReactElement {
 			/>
 		</NativeDetailsBoundary>
 	);
-	return <>{friendsNode}{activityNode}</>;
+	return <div className={nativeClasses('gdl-bp-activity-tab-content')}>{friendsNode}{activityNode}</div>;
 }
 
-const NativeCarousel = resolveNativeSummaryCarousel();
-
 function AchievementsSection(props: NativeDetailsProps & { classes: NativeAppDetailsClasses; hideIfEmpty?: boolean }): React.ReactElement | null {
+	const NativeCarousel = resolveNativeSummaryCarousel(props.document);
 	const _achievementItem = props.classes.Achievement?.AchievementCarouselItem;
 	return (
 		<NativeBigPictureAchievements
@@ -499,7 +494,7 @@ function NotesSection(props: NativeDetailsProps & { classes: NativeAppDetailsCla
 }
 
 function StuffTab(props: NativeDetailsProps): React.ReactElement {
-	const classes = resolveNativeAppDetailsClasses();
+	const classes = resolveNativeAppDetailsClasses(props.document);
 	const appid = Number(props.shortcut.steamAppId || 0);
 	const overview = AppStoreAdapter.getAppOverview(appid) || { appid, display_name: props.shortcut.title };
 	const details = React.useMemo(() => resolveNativeAppDetails(props.document, appid) || { unAppID: appid, vecDLC: [] }, [props.document, appid]);
@@ -567,139 +562,17 @@ function FallbackCommunitySection({ props, classes }: { props: NativeDetailsProp
 }
 
 function CommunityTab(props: NativeDetailsProps): React.ReactElement {
-	const classes = resolveNativeAppDetailsClasses();
+	const classes = resolveNativeAppDetailsClasses(props.document);
 	return <FallbackCommunitySection props={props} classes={classes} />;
 }
 
-function AssociationRow({ native, label, values, document }: { native: NativeClassModule | null; label: string; values: string[]; document: Document }): React.ReactElement | null {
-	if (values.length === 0) return null;
-	return (
-		<div className={nativeClasses(native?.AssociationList, 'gdl-bp-info-stat-item')}>
-			<div className={nativeClasses(native?.Label, 'gdl-bp-info-stat-label')}>{label}</div>
-			<div className={nativeClasses(native?.Association, 'gdl-bp-info-stat-value')}>
-				{values.map(value => (
-					<NativeFocusable
-						key={value}
-						focusable
-						role="link"
-						className={nativeClasses(native?.Name, 'gdl-bp-info-link')}
-						onActivate={() => openSteamNavigationUrl(document, `https://store.steampowered.com/search/?developer=${encodeURIComponent(value)}`)}
-						{...clickProps(() => openSteamNavigationUrl(document, `https://store.steampowered.com/search/?developer=${encodeURIComponent(value)}`))}
-					>
-						{value}
-					</NativeFocusable>
-				))}
-			</div>
-		</div>
-	);
-}
-
-function NativeFeature({ kind, label, classes }: { kind: string; label: string; classes: NativeAppDetailsClasses }): React.ReactElement {
-	const native = classes.Feature;
-	let Icon: any = null;
-	if (kind === 'achievements') {
-		const AchIcon = NativeIcons.Achievement;
-		Icon = AchIcon ? <AchIcon className={native?.Icon} /> : null;
-	} else if (kind === 'ps4') {
-		Icon = NativeIcons.ControllerType
-			? <NativeIcons.ControllerType className={native?.Icon} controllerType={34} />
-			: (NativeIcons.Controller ? <NativeIcons.Controller className={native?.Icon} type="ps4" /> : (NativeIcons.ControllerStatus ? <NativeIcons.ControllerStatus className={native?.Icon} /> : null));
-	} else if (kind === 'ps5') {
-		Icon = NativeIcons.ControllerType
-			? <NativeIcons.ControllerType className={native?.Icon} controllerType={45} />
-			: (NativeIcons.Controller ? <NativeIcons.Controller className={native?.Icon} type="ps5" /> : (NativeIcons.ControllerStatus ? <NativeIcons.ControllerStatus className={native?.Icon} /> : null));
-	} else if (kind === 'controller-partial') {
-		Icon = NativeIcons.ControllerStatus
-			? <NativeIcons.ControllerStatus className={native?.Icon} partial={true} />
-			: (NativeIcons.Controller ? <NativeIcons.Controller className={native?.Icon} type="xbox" partial={true} /> : null);
-	} else if (kind === 'controller-full') {
-		Icon = NativeIcons.ControllerStatus
-			? <NativeIcons.ControllerStatus className={native?.Icon} partial={false} />
-			: (NativeIcons.Controller ? <NativeIcons.Controller className={native?.Icon} type="xbox" /> : null);
-	} else if (kind === 'steam-input' && NativeIcons.FrankenController) {
-		const FC = NativeIcons.FrankenController;
-		Icon = <FC className={native?.Icon} />;
-	} else {
-		const iconNames: Record<string, string[]> = {
-			'single-player': ['SinglePlayer', 'User'], multiplayer: ['MultiPlayer', 'Friends'], coop: ['Coop', 'MultiPlayer'],
-			cloud: ['CloudSync', 'Cloud'], workshop: ['Workshop'], 'remote-play': ['RemotePlayTogether'], 'family-sharing': ['FamilySharing'],
-		};
-		const IconComp = (iconNames[kind] || ['Information']).map(name => NativeIcons[name]).find(Boolean);
-		Icon = IconComp ? <IconComp className={native?.Icon} /> : null;
-	}
-	return (
-		<NativeFocusable focusable role="text" className={nativeClasses(native?.Container, 'gdl-bp-info-feature')}>
-			{Icon}
-			<div className={native?.Label}>{label}</div>
-		</NativeFocusable>
-	);
-}
-
-function InfoTab(props: NativeDetailsProps): React.ReactElement {
-	const classes = resolveNativeAppDetailsClasses();
-	const game = props.data.game;
-	const native = classes.GameInfo;
-	const frame = classes.GameInfoFrame;
-	const appid = props.shortcut.steamAppId;
-	const modern = getResolvedLibraryAssets(appid);
-	const model = game ? steamNativeGameInfo(game, appid, modern) : null;
-	const overview = AppStoreAdapter.getAppOverview(Number(appid));
-	const franchise = model?.franchise || (Array.isArray(overview?.rgFranchises) ? overview.rgFranchises.join(', ') : '') || modern?.franchise || '';
-	const linkClasses = classes.Links;
-	const cover = `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${appid}/library_600x900.jpg`;
-	const links: Array<[string, string]> = [
-		[loc('AppDetails_Links_Store', gdlText('store_page', 'Store page')), steamGameMainPageUrl(appid, game?.is_delisted === true)],
-		[loc('AppDetails_Links_Community', gdlText('community_hub', 'Community hub')), `https://steamcommunity.com/app/${appid}`],
-		[loc('AppDetails_Links_PointsShop', gdlText('points_shop', 'Points shop')), `https://store.steampowered.com/points/shop/app/${appid}`],
-		[loc('AppDetails_Link_Discussions', gdlText('discussions', 'Discussions')), `https://steamcommunity.com/app/${appid}/discussions/`],
-		[loc('AppDetails_Link_Guides', gdlText('guides', 'Guides')), `https://steamcommunity.com/app/${appid}/guides/`],
-		[loc('AppDetails_Link_Support', gdlText('support', 'Support')), `https://help.steampowered.com/en/wizard/HelpWithGame/?appid=${appid}`],
-	];
-	return (
-		<Section
-			classes={classes}
-			className={nativeClasses(classes.QuickLinks?.AppDetailsContent, classes.QuickLinks?.GameInfoContainer, 'gdl-bp-info-root')}
-		>
-			<div className={nativeClasses(frame?.AppGameInfoContainer, frame?.AppDetailsExpanded, frame?.SuppressTransition, frame?.Glassy, 'gdl-bp-info-main')}>
-				<div className={nativeClasses(native?.Container, 'gdl-bp-info-body')}>
-					<div className={nativeClasses(native?.InnerContainer, 'gdl-bp-info-main')}>
-						<div className={nativeClasses(native?.Portrait, 'gdl-bp-info-cover-wrap')}><img className={nativeClasses(native?.BoxArt, 'gdl-bp-info-cover-img')} width="100%" src={cover} alt={game?.name || props.shortcut.title} /></div>
-						<div className={nativeClasses(native?.Description, native?.SectionContainer, 'gdl-bp-info-body')}>
-							<NativeFocusable focusable role="region" aria-label={loc('AppDetails_Description', 'Descripción')} className={nativeClasses(native?.GameDescription, 'gdl-bp-info-description')}>
-								{plainText(model?.description || loc('Loading', 'Cargando…'), 720)}
-							</NativeFocusable>
-							<div className={nativeClasses(native?.Stats, native?.SectionContainer, 'gdl-bp-info-stats')}>
-								<AssociationRow native={native} label={gdlText('developer', 'Developer')} values={model?.developer ? [model.developer] : []} document={props.document} />
-								<AssociationRow native={native} label={gdlText('publisher', 'Publisher')} values={model?.publisher ? [model.publisher] : []} document={props.document} />
-								<AssociationRow native={native} label={gdlText('franchise', 'Franchise')} values={franchise ? [franchise] : []} document={props.document} />
-								{model?.release ? <div className={nativeClasses(native?.Release, 'gdl-bp-info-stat-item')}><div className={nativeClasses(native?.Label, 'gdl-bp-info-stat-label')}>{gdlText('release_date', 'Release date')}</div><div className={nativeClasses(native?.Date, 'gdl-bp-info-stat-value')}>{model.release}</div></div> : null}
-							</div>
-							<div className={nativeClasses(native?.FeaturesList, native?.SectionContainer, 'gdl-bp-info-features')}>
-								{(model?.features || []).map((feature: any) => <NativeFeature key={feature.key} kind={feature.kind} label={feature.label} classes={classes} />)}
-							</div>
-						</div>
-					</div>
-				</div>
-				<div className={frame?.GameInfoShadow} />
-			</div>
-			<NativeFocusable focusable flow-children="row" className={nativeClasses(classes.QuickLinks?.GameInfoQuickLinks || '_2GqvVM-UeNGM7ptNftUVn_', 'gdl-bp-info-quick-links')}>
-				{links.map(([label, url]) => (
-					<NativeFocusable key={label} role="link" className={nativeClasses(linkClasses?.Anchor)} onActivate={() => openSteamNavigationUrl(props.document, url)} {...clickProps(() => openSteamNavigationUrl(props.document, url))} focusable>
-						<div className={nativeClasses(linkClasses?.Link)}><span className={nativeClasses(linkClasses?.Text)}>{label}</span></div>
-					</NativeFocusable>
-				))}
-			</NativeFocusable>
-		</Section>
-	);
-}
-
 function SafeTabFallback(props: NativeDetailsProps): React.ReactElement {
-	const classes = resolveNativeAppDetailsClasses();
+	const classes = resolveNativeAppDetailsClasses(props.document);
 	return <Section classes={classes} label={props.shortcut.title}><LoadingContent hydrating={props.hydrating} empty={loc('Loading', 'Cargando…')} /></Section>;
 }
 
 export function NativeBigPictureDetails(props: NativeDetailsProps): React.ReactElement {
-	const classes = resolveNativeAppDetailsClasses();
+	const classes = resolveNativeAppDetailsClasses(props.document);
 
 	React.useEffect(() => {
 		const doc = props.document;
@@ -735,7 +608,7 @@ export function NativeBigPictureDetails(props: NativeDetailsProps): React.ReactE
 	switch (props.tab) {
 		case 'stuff': content = <StuffTab {...props} />; break;
 		case 'community': content = <CommunityTab {...props} />; break;
-		case 'info': content = <InfoTab {...props} />; break;
+		case 'info': content = <SafeTabFallback {...props} />; break;
 		default: content = <ActivityTab {...props} />; break;
 	}
 
@@ -771,11 +644,14 @@ const nativeRoots = new WeakMap<HTMLElement, ReactRootHandle>();
 
 export function findReactDom(doc: Document): any | null {
 	const docWindow = doc.defaultView as any;
-	for (const candidate of [docWindow?.SP_REACTDOM, (window as any)?.SP_REACTDOM, docWindow?.ReactDOM, (window as any)?.ReactDOM]) {
+	const globalWindow = typeof window !== 'undefined' ? (window as any) : null;
+	const candidates = [docWindow?.SP_REACTDOM, docWindow?.ReactDOM];
+	if (globalWindow === docWindow) candidates.push(globalWindow?.SP_REACTDOM, globalWindow?.ReactDOM);
+	for (const candidate of candidates) {
 		if (candidate && (typeof candidate.createRoot === 'function' || (typeof candidate.render === 'function' && typeof candidate.unmountComponentAtNode === 'function'))) return candidate;
 	}
 	steamWebpackRuntime.captureRuntime(doc);
-	for (const module of steamWebpackRuntime.getAllModules()) {
+	for (const module of steamWebpackRuntime.getAllModules(doc)) {
 		const candidates = [module.exports, module.exports?.default, ...Object.values(module.exports || {})];
 		for (const candidate of candidates) {
 			if (candidate && (typeof (candidate as any).createRoot === 'function' || (typeof (candidate as any).render === 'function' && typeof (candidate as any).unmountComponentAtNode === 'function'))) return candidate;

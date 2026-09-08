@@ -48,18 +48,14 @@ export function detectConnectedController(doc?: Document): ConnectedControllerIn
 		if (store) {
 			const list = typeof store.GetControllers === 'function' ? store.GetControllers() : store.m_controllerList;
 			if (Array.isArray(list) && list.length > 0) {
-				const active = list.filter(isSteamControllerConnected);
-				const candidate = active.length > 0 ? active[0] : list[0];
-				const eType = Number(candidate?.eControllerType || 0);
-				let type: ControllerType = 'xbox';
-				if (eType === 33 || eType === 34 || eType === 45 || eType === 47 || eType === 48) {
-					type = 'playstation';
-				} else if (eType === 38 || eType === 39 || eType === 40 || eType === 41 || eType === 42 || eType === 44 || eType === 51) {
-					type = 'switch';
-				} else {
-					type = 'xbox';
+				const candidate = list.find(isSteamControllerConnected);
+				if (candidate) {
+					const eType = Number(candidate?.eControllerType || 0);
+					let type: ControllerType = 'xbox';
+					if (eType === 33 || eType === 34 || eType === 45 || eType === 47 || eType === 48) type = 'playstation';
+					else if (eType === 38 || eType === 39 || eType === 40 || eType === 41 || eType === 42 || eType === 44 || eType === 51) type = 'switch';
+					return { connected: true, name: candidate?.strName || 'Controller', type };
 				}
-				return { connected: true, name: candidate?.strName || 'Controller', type };
 			}
 			if (typeof store.BHasExternalGamepadConnected === 'function' && store.BHasExternalGamepadConnected()) {
 				return { connected: true, name: 'Controller', type: 'xbox' };
@@ -90,7 +86,8 @@ export function detectConnectedController(doc?: Document): ConnectedControllerIn
 
 	// 3. Check SteamClient.Input (Steam's internal controller service)
 	try {
-		const steamInput = (window as any).SteamClient?.Input;
+		const view = doc?.defaultView || (typeof window !== 'undefined' ? window : null);
+		const steamInput = (view as any)?.SteamClient?.Input || (typeof window !== 'undefined' ? (window as any).SteamClient?.Input : null);
 		if (steamInput) {
 			if (Array.isArray(steamInput.m_unboundControllerList) && steamInput.m_unboundControllerList.length > 0) {
 				return { connected: true, name: 'Controller', type: 'xbox' };
@@ -133,7 +130,7 @@ export function subscribeControllerChanges(doc: Document, onChange: (info: Conne
 
 	let unregisterSteam: any = null;
 	try {
-		const steamInput = (window as any).SteamClient?.Input;
+		const steamInput = (win as any)?.SteamClient?.Input || (typeof window !== 'undefined' ? (window as any).SteamClient?.Input : null);
 		if (typeof steamInput?.RegisterForUnboundControllerListChanges === 'function') {
 			unregisterSteam = steamInput.RegisterForUnboundControllerListChanges(() => {
 				onGamepadEvent();
@@ -141,7 +138,9 @@ export function subscribeControllerChanges(doc: Document, onChange: (info: Conne
 		}
 	} catch {}
 
-	timer = setInterval(check, 100);
+	// Hardware/browser events provide the fast path. This timer is only a
+	// watchdog for Steam builds that do not emit controller-store changes.
+	timer = setInterval(check, 1000);
 
 	return () => {
 		if (typeof window !== 'undefined') {

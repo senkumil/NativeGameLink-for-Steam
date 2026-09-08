@@ -1,6 +1,6 @@
 import React from 'react';
 import { Millennium, IconsModule, definePlugin } from '@steambrew/client';
-import { backendLog, neutralizeSteamAppIdFileBackend } from '../api/backend';
+import { backendLog } from '../api/backend';
 import { mappings, loadMappings } from '../core/mappings';
 import { clearGameDataCache } from '../core/game-data';
 import { pruneCacheStorage, setProtectedCacheAppIds } from '../core/cache';
@@ -427,7 +427,6 @@ export default definePlugin(() => {
 		deferStartup('achievement launch watcher', () => startFirstLaunchAchievementWatcher(), 1100);
 		deferStartup('linked game prefetch', () => startLinkedGamePrefetch(getCurrentInjectedAppId), 1600);
 		void processPendingLinkJobs(mainWindowDoc);
-		void neutralizeSteamAppIdFileBackend({ request_json: '{}' }).catch(() => {});
 		const targetDoc = resolveMainWindowDocument();
 		if (targetDoc) {
 			installGhostSidebarCleanup(targetDoc);

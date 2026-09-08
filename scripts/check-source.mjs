@@ -1062,12 +1062,16 @@ try {
 
 	const completeNativeSections = [
 		'resolveNativeAppDetailsClasses', 'NativeCarousel', 'classes.ActivityEvent',
-		'classes.Achievement', 'classes.Community', 'classes.GameInfo',
-		'PartnerEventMediumImage_Container', 'AchievementCarouselItem', 'CommunityItem', 'AppGameInfoContainer',
-		'function ActivityTab(', 'function StuffTab(', 'function CommunityTab(', 'function InfoTab(',
+		'classes.Achievement', 'classes.Community',
+		'PartnerEventMediumImage_Container', 'AchievementCarouselItem', 'CommunityItem',
+		'function ActivityTab(', 'function StuffTab(', 'function CommunityTab(',
 		'function AchievementsSection(', 'function TradingCardsSection(',
 		"AppDetails_SectionTitle_TradingCards",
-	].every(token => nativeDetailsSource.includes(token));
+	].every(token => nativeDetailsSource.includes(token))
+		&& !nativeDetailsSource.includes('function InfoTab(')
+		&& !nativeDetailsSource.includes('gdl-bp-info-root')
+		&& detailsSource.includes("state.activeTab === 'info'")
+		&& detailsSource.includes('restoreNativePanelChildren(state.panel)');
 	const settingsPrimitives = ['PanelSection', 'PanelSectionRow', 'Field'].some(token => nativeDetailsSource.includes(token));
 	if (!completeNativeSections || settingsPrimitives) {
 		fail(bigPictureNativeDetails,

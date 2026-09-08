@@ -17,12 +17,15 @@ export function installMappingRefresh(host: MappingRefreshHost): () => void {
 	const staleAppIds = new Set<string>();
 	const shortcutAppIds = new Set<string>();
 	let timer: ReturnType<typeof setTimeout> | null = null;
+	let hasMappingChanges = false;
 	const unsubscribe = subscribeMappings(value => {
 		const previous = observed;
 		observed = { ...value };
 		setProtectedCacheAppIds(Object.values(value));
 		for (const key of new Set([...Object.keys(previous), ...Object.keys(value)])) {
-			if (!key.startsWith('shortcut:') || previous[key] === value[key]) continue;
+			if (previous[key] === value[key]) continue;
+			hasMappingChanges = true;
+			if (!key.startsWith('shortcut:')) continue;
 			const shortcutId = key.slice('shortcut:'.length);
 			if (shortcutId) shortcutAppIds.add(shortcutId);
 			for (const appId of [previous[key], value[key]]) {
@@ -30,9 +33,12 @@ export function installMappingRefresh(host: MappingRefreshHost): () => void {
 			}
 			if (/^\d+$/.test(String(previous[key] || ''))) staleAppIds.add(String(previous[key]));
 		}
+		if (!hasMappingChanges) return;
 		if (timer) clearTimeout(timer);
 		timer = setTimeout(() => {
 			timer = null;
+			if (!hasMappingChanges) return;
+			hasMappingChanges = false;
 			const affected = Array.from(affectedAppIds);
 			const stale = Array.from(staleAppIds);
 			const shortcuts = Array.from(shortcutAppIds);

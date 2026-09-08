@@ -18,11 +18,21 @@ export interface NativeCommunityProps {
 let cachedFriendsComponent: ComponentType<NativeFriendsProps> | null | undefined;
 let cachedActivityComponent: ComponentType<NativeActivityFeedProps> | null | undefined;
 let cachedCommunityComponent: ComponentType<NativeCommunityProps> | null | undefined;
+let cachedRuntimeIdentity: object | null = null;
+
+function ensureNativeComponentsRuntime(doc?: Document): void {
+	steamWebpackRuntime.captureRuntime(doc);
+	const identity = steamWebpackRuntime.getRuntimeIdentity(doc);
+	if (identity && cachedRuntimeIdentity === identity) return;
+	clearNativeComponentsCache();
+	cachedRuntimeIdentity = identity;
+}
 
 export function resolveNativeFriendsComponent(doc?: Document): ComponentType<NativeFriendsProps> | null {
+	ensureNativeComponentsRuntime(doc);
 	if (cachedFriendsComponent !== undefined) return cachedFriendsComponent;
 	steamWebpackRuntime.captureRuntime(doc);
-	for (const module of steamWebpackRuntime.getAllModules()) {
+	for (const module of steamWebpackRuntime.getAllModules(doc)) {
 		const exp = module.exports as any;
 		if (exp && typeof exp.w4 === 'function' && typeof exp.gr === 'function' && typeof exp.oG === 'function') {
 			cachedFriendsComponent = exp.w4 as ComponentType<NativeFriendsProps>;
@@ -30,7 +40,7 @@ export function resolveNativeFriendsComponent(doc?: Document): ComponentType<Nat
 			return cachedFriendsComponent;
 		}
 	}
-	const req = steamWebpackRuntime.getRequire();
+	const req = steamWebpackRuntime.getRequire(doc);
 	if (req) {
 		try {
 			const exp = req(2326);
@@ -46,9 +56,10 @@ export function resolveNativeFriendsComponent(doc?: Document): ComponentType<Nat
 }
 
 export function resolveNativeActivityComponent(doc?: Document): ComponentType<NativeActivityFeedProps> | null {
+	ensureNativeComponentsRuntime(doc);
 	if (cachedActivityComponent !== undefined) return cachedActivityComponent;
 	steamWebpackRuntime.captureRuntime(doc);
-	for (const module of steamWebpackRuntime.getAllModules()) {
+	for (const module of steamWebpackRuntime.getAllModules(doc)) {
 		const exp = module.exports as any;
 		if (exp && typeof exp.W === 'function' && typeof exp.M === 'function' && Object.keys(exp).length === 2) {
 			cachedActivityComponent = exp.W as ComponentType<NativeActivityFeedProps>;
@@ -56,7 +67,7 @@ export function resolveNativeActivityComponent(doc?: Document): ComponentType<Na
 			return cachedActivityComponent;
 		}
 	}
-	const req = steamWebpackRuntime.getRequire();
+	const req = steamWebpackRuntime.getRequire(doc);
 	if (req) {
 		try {
 			const exp = req(80478);
@@ -84,9 +95,10 @@ let cachedPostTextEntryComponent: ComponentType<NativePostTextEntryProps> | null
 let cachedFocusableTextarea: ComponentType<any> | null | undefined;
 
 export function resolveNativePostTextEntryComponent(doc?: Document): ComponentType<NativePostTextEntryProps> | null {
+	ensureNativeComponentsRuntime(doc);
 	if (cachedPostTextEntryComponent !== undefined) return cachedPostTextEntryComponent;
 	steamWebpackRuntime.captureRuntime(doc);
-	for (const module of steamWebpackRuntime.getAllModules()) {
+	for (const module of steamWebpackRuntime.getAllModules(doc)) {
 		const exp = module.exports as any;
 		if (exp && typeof exp.K === 'function' && exp.K.prototype?.OnPostClicked && exp.K.prototype?.InsertEmoticon) {
 			cachedPostTextEntryComponent = exp.K as ComponentType<NativePostTextEntryProps>;
@@ -94,7 +106,7 @@ export function resolveNativePostTextEntryComponent(doc?: Document): ComponentTy
 			return cachedPostTextEntryComponent;
 		}
 	}
-	const req = steamWebpackRuntime.getRequire();
+	const req = steamWebpackRuntime.getRequire(doc);
 	if (req) {
 		try {
 			const exp = req(12975);
@@ -121,9 +133,10 @@ export function resolveNativePostTextEntryComponent(doc?: Document): ComponentTy
 }
 
 export function resolveNativeFocusableTextarea(doc?: Document): ComponentType<any> | null {
+	ensureNativeComponentsRuntime(doc);
 	if (cachedFocusableTextarea !== undefined) return cachedFocusableTextarea;
 	steamWebpackRuntime.captureRuntime(doc);
-	for (const module of steamWebpackRuntime.getAllModules()) {
+	for (const module of steamWebpackRuntime.getAllModules(doc)) {
 		const exp = module.exports as any;
 		if (exp && typeof exp.dO === 'function' && typeof exp.BA === 'function') {
 			cachedFocusableTextarea = exp.dO;
@@ -131,7 +144,7 @@ export function resolveNativeFocusableTextarea(doc?: Document): ComponentType<an
 			return cachedFocusableTextarea;
 		}
 	}
-	const req = steamWebpackRuntime.getRequire();
+	const req = steamWebpackRuntime.getRequire(doc);
 	if (req) {
 		try {
 			const exp = req(90242);
@@ -147,9 +160,10 @@ export function resolveNativeFocusableTextarea(doc?: Document): ComponentType<an
 }
 
 export function resolveNativeCommunityComponent(doc?: Document): ComponentType<NativeCommunityProps> | null {
+	ensureNativeComponentsRuntime(doc);
 	if (cachedCommunityComponent !== undefined) return cachedCommunityComponent;
 	steamWebpackRuntime.captureRuntime(doc);
-	for (const module of steamWebpackRuntime.getAllModules()) {
+	for (const module of steamWebpackRuntime.getAllModules(doc)) {
 		const exp = module.exports as any;
 		if (exp && typeof exp.wb === 'function' && typeof exp.kB === 'function' && Object.keys(exp).length === 2) {
 			cachedCommunityComponent = exp.wb as ComponentType<NativeCommunityProps>;
@@ -157,7 +171,7 @@ export function resolveNativeCommunityComponent(doc?: Document): ComponentType<N
 			return cachedCommunityComponent;
 		}
 	}
-	const req = steamWebpackRuntime.getRequire();
+	const req = steamWebpackRuntime.getRequire(doc);
 	if (req) {
 		try {
 			const exp = req(77163);
@@ -205,9 +219,10 @@ export interface NativeTradingCardProps {
 let cachedTradingCardComponent: ComponentType<NativeTradingCardProps> | null | undefined;
 
 export function resolveNativeTradingCardComponent(doc?: Document): ComponentType<NativeTradingCardProps> | null {
+	ensureNativeComponentsRuntime(doc);
 	if (cachedTradingCardComponent !== undefined) return cachedTradingCardComponent;
 	steamWebpackRuntime.captureRuntime(doc);
-	for (const module of steamWebpackRuntime.getAllModules()) {
+	for (const module of steamWebpackRuntime.getAllModules(doc)) {
 		const candidates = [module.exports, module.exports?.default, ...(module.exports && typeof module.exports === 'object' ? Object.values(module.exports) : [])];
 		for (const exp of candidates) {
 			if (exp && typeof exp === 'object' && typeof exp.dI === 'function' && typeof exp.LB === 'function' && typeof exp.on === 'function') {
@@ -217,7 +232,7 @@ export function resolveNativeTradingCardComponent(doc?: Document): ComponentType
 			}
 		}
 	}
-	const req = steamWebpackRuntime.getRequire();
+	const req = steamWebpackRuntime.getRequire(doc);
 	if (req) {
 		try {
 			const exp = req(22165);
@@ -278,9 +293,10 @@ let cachedNotesComponent: ComponentType<NativeNotesProps> | null | undefined;
 let cachedWorkshopComponent: ComponentType<NativeWorkshopProps> | null | undefined;
 
 export function resolveNativeDLCComponent(doc?: Document): ComponentType<NativeDLCProps> | null {
+	ensureNativeComponentsRuntime(doc);
 	if (cachedDLCComponent !== undefined) return cachedDLCComponent;
 	steamWebpackRuntime.captureRuntime(doc);
-	const req = steamWebpackRuntime.getRequire();
+	const req = steamWebpackRuntime.getRequire(doc);
 	if (req) {
 		try {
 			const exp = req(3651);
@@ -295,9 +311,10 @@ export function resolveNativeDLCComponent(doc?: Document): ComponentType<NativeD
 }
 
 export function resolveNativeScreenshotsComponent(doc?: Document): ComponentType<NativeScreenshotsProps> | null {
+	ensureNativeComponentsRuntime(doc);
 	if (cachedScreenshotsComponent !== undefined) return cachedScreenshotsComponent;
 	steamWebpackRuntime.captureRuntime(doc);
-	const req = steamWebpackRuntime.getRequire();
+	const req = steamWebpackRuntime.getRequire(doc);
 	if (req) {
 		try {
 			const exp = req(57150);
@@ -312,9 +329,10 @@ export function resolveNativeScreenshotsComponent(doc?: Document): ComponentType
 }
 
 export function resolveNativeReviewComponent(doc?: Document): ComponentType<NativeReviewProps> | null {
+	ensureNativeComponentsRuntime(doc);
 	if (cachedReviewComponent !== undefined) return cachedReviewComponent;
 	steamWebpackRuntime.captureRuntime(doc);
-	const req = steamWebpackRuntime.getRequire();
+	const req = steamWebpackRuntime.getRequire(doc);
 	if (req) {
 		try {
 			const exp = req(71333);
@@ -329,9 +347,10 @@ export function resolveNativeReviewComponent(doc?: Document): ComponentType<Nati
 }
 
 export function resolveNativeNotesComponent(doc?: Document): ComponentType<NativeNotesProps> | null {
+	ensureNativeComponentsRuntime(doc);
 	if (cachedNotesComponent !== undefined) return cachedNotesComponent;
 	steamWebpackRuntime.captureRuntime(doc);
-	const req = steamWebpackRuntime.getRequire();
+	const req = steamWebpackRuntime.getRequire(doc);
 	if (req) {
 		try {
 			const exp = req(9066);
@@ -346,9 +365,10 @@ export function resolveNativeNotesComponent(doc?: Document): ComponentType<Nativ
 }
 
 export function resolveNativeWorkshopComponent(doc?: Document): ComponentType<NativeWorkshopProps> | null {
+	ensureNativeComponentsRuntime(doc);
 	if (cachedWorkshopComponent !== undefined) return cachedWorkshopComponent;
 	steamWebpackRuntime.captureRuntime(doc);
-	const req = steamWebpackRuntime.getRequire();
+	const req = steamWebpackRuntime.getRequire(doc);
 	if (req) {
 		try {
 			const exp = req(81452);
@@ -365,7 +385,7 @@ export function resolveNativeWorkshopComponent(doc?: Document): ComponentType<Na
 export function resolveNativeAppDetails(doc?: Document, appid?: number): any | null {
 	if (!appid) return null;
 	steamWebpackRuntime.captureRuntime(doc);
-	const req = steamWebpackRuntime.getRequire();
+	const req = steamWebpackRuntime.getRequire(doc);
 	if (req) {
 		try {
 			const exp = req(78057);
@@ -385,7 +405,7 @@ export function openNativeAchievementsScreen(doc: Document, steamAppId: number |
 
 	// 1. Native Webpack WindowStore Navigator
 	try {
-		const req = steamWebpackRuntime.getRequire();
+		const req = steamWebpackRuntime.getRequire(doc);
 		if (req) {
 			const m61236 = req(61236);
 			const windowStore = m61236?.oy?.WindowStore;
@@ -434,10 +454,11 @@ export function openNativeAchievementsScreen(doc: Document, steamAppId: number |
 
 let navContext: any = null;
 export function getNavContext(doc?: Document): any {
+	ensureNativeComponentsRuntime(doc);
 	if (navContext !== null) return navContext;
 	try {
 		steamWebpackRuntime.captureRuntime(doc);
-		const req = steamWebpackRuntime.getRequire();
+		const req = steamWebpackRuntime.getRequire(doc);
 		if (req) {
 			try {
 				const m28869 = req(28869);
@@ -447,7 +468,7 @@ export function getNavContext(doc?: Document): any {
 				}
 			} catch {}
 		}
-		const entry = steamWebpackRuntime.getAllModules().find(m => m.exports && (m.exports.TJ || m.exports.default?.TJ));
+		const entry = steamWebpackRuntime.getAllModules(doc).find(m => m.exports && (m.exports.TJ || m.exports.default?.TJ));
 		const exp = entry?.exports?.TJ ? entry.exports : entry?.exports?.default;
 		if (exp?.TJ) navContext = exp.TJ;
 	} catch {}
@@ -491,54 +512,51 @@ export interface NativeControllerIcons {
 }
 
 let cachedControllerIcons: NativeControllerIcons | null | undefined;
+let cachedControllerIconsMissAt = 0;
 let cachedControllerFeatureComponent: ComponentType<any> | null | undefined;
 
 export function resolveNativeControllerIcons(doc?: Document): NativeControllerIcons | null {
-	if (cachedControllerIcons !== undefined) return cachedControllerIcons;
+	ensureNativeComponentsRuntime(doc);
+	if (cachedControllerIcons && cachedControllerIcons !== null) return cachedControllerIcons;
+	if (cachedControllerIcons === null && Date.now() - cachedControllerIconsMissAt < 1200) return null;
 	steamWebpackRuntime.captureRuntime(doc);
-	for (const module of steamWebpackRuntime.getAllModules()) {
-		const exp = module.exports as any;
-		if (exp && typeof exp.ControllerStatus === 'function' && typeof exp.ControllerType === 'function') {
-			cachedControllerIcons = {
-				ControllerStatus: exp.ControllerStatus,
-				ControllerType: exp.ControllerType,
-				Controller: exp.Controller,
-				XboxOneControllerFrontOutline: exp.XboxOneControllerFrontOutline,
-				PS4ControllerFrontOutline: exp.PS4ControllerFrontOutline,
-				PS5ControllerFrontOutline: exp.PS5ControllerFrontOutline,
-				FrankenController: exp.FrankenController,
-			};
-			backendLog(`[NGL][Gamepad] Resolved native controller icons from module ${module.id}`);
-			return cachedControllerIcons;
-		}
-	}
-	const req = steamWebpackRuntime.getRequire();
+
+	const assign = (exp: any, source: string): NativeControllerIcons | null => {
+		if (!exp || typeof exp.ControllerType !== 'function') return null;
+		cachedControllerIcons = {
+			ControllerStatus: exp.ControllerStatus,
+			ControllerType: exp.ControllerType,
+			Controller: exp.Controller,
+			XboxOneControllerFrontOutline: exp.XboxOneControllerFrontOutline,
+			PS4ControllerFrontOutline: exp.PS4ControllerFrontOutline,
+			PS5ControllerFrontOutline: exp.PS5ControllerFrontOutline,
+			FrankenController: exp.FrankenController,
+		};
+		backendLog(`[NGL][Gamepad] Resolved native controller icons ${source}`);
+		return cachedControllerIcons;
+	};
+
+	const req = steamWebpackRuntime.getRequire(doc);
 	if (req) {
 		try {
-			const exp = req(35488);
-			if (exp && typeof exp.ControllerStatus === 'function' && typeof exp.ControllerType === 'function') {
-				cachedControllerIcons = {
-					ControllerStatus: exp.ControllerStatus,
-					ControllerType: exp.ControllerType,
-					Controller: exp.Controller,
-					XboxOneControllerFrontOutline: exp.XboxOneControllerFrontOutline,
-					PS4ControllerFrontOutline: exp.PS4ControllerFrontOutline,
-					PS5ControllerFrontOutline: exp.PS5ControllerFrontOutline,
-					FrankenController: exp.FrankenController,
-				};
-				backendLog(`[NGL][Gamepad] Resolved native controller icons by requiring module 35488`);
-				return cachedControllerIcons;
-			}
+			const direct = assign(req(35488), 'from module 35488');
+			if (direct) return direct;
 		} catch {}
 	}
+	for (const module of steamWebpackRuntime.getAllModules(doc)) {
+		const resolved = assign(module.exports as any, `from module ${module.id}`);
+		if (resolved) return resolved;
+	}
 	cachedControllerIcons = null;
+	cachedControllerIconsMissAt = Date.now();
 	return null;
 }
 
 export function resolveNativeControllerFeatureComponent(doc?: Document): ComponentType<any> | null {
+	ensureNativeComponentsRuntime(doc);
 	if (cachedControllerFeatureComponent !== undefined) return cachedControllerFeatureComponent;
 	steamWebpackRuntime.captureRuntime(doc);
-	for (const module of steamWebpackRuntime.getAllModules()) {
+	for (const module of steamWebpackRuntime.getAllModules(doc)) {
 		const exp = module.exports as any;
 		if (exp && typeof exp.n$ === 'function' && typeof exp.zX === 'function') {
 			cachedControllerFeatureComponent = exp.n$;
@@ -546,7 +564,7 @@ export function resolveNativeControllerFeatureComponent(doc?: Document): Compone
 			return cachedControllerFeatureComponent;
 		}
 	}
-	const req = steamWebpackRuntime.getRequire();
+	const req = steamWebpackRuntime.getRequire(doc);
 	if (req) {
 		try {
 			const exp = req(28346);
@@ -603,9 +621,10 @@ let cachedAppDetailsStore: any | null | undefined;
 let cachedAchievementStore: any | null | undefined;
 
 export function resolveNativeAchievementsSectionComponent(doc?: Document): ComponentType<NativeAchievementsSectionProps> | null {
+	ensureNativeComponentsRuntime(doc);
 	if (cachedAchievementsSectionComponent) return cachedAchievementsSectionComponent;
 	steamWebpackRuntime.captureRuntime(doc);
-	const req = steamWebpackRuntime.getRequire();
+	const req = steamWebpackRuntime.getRequire(doc);
 	if (req) {
 		try {
 			const exp = req(57665);
@@ -616,7 +635,7 @@ export function resolveNativeAchievementsSectionComponent(doc?: Document): Compo
 			}
 		} catch {}
 	}
-	for (const module of steamWebpackRuntime.getAllModules()) {
+	for (const module of steamWebpackRuntime.getAllModules(doc)) {
 		const exp = module.exports as any;
 		if (exp && exp.Jq && (typeof exp.Jq === 'function' || typeof exp.Jq === 'object') && exp.hs && exp.Tv) {
 			cachedAchievementsSectionComponent = exp.Jq as ComponentType<NativeAchievementsSectionProps>;
@@ -625,15 +644,16 @@ export function resolveNativeAchievementsSectionComponent(doc?: Document): Compo
 		}
 	}
 	if (req && typeof req.e === 'function') {
-		steamWebpackRuntime.ensureChunk(9858).catch(() => {});
+		steamWebpackRuntime.ensureChunk(9858, doc).catch(() => {});
 	}
 	return null;
 }
 
 export function resolveNativeAppDetailsStore(doc?: Document): any | null {
+	ensureNativeComponentsRuntime(doc);
 	if (cachedAppDetailsStore) return cachedAppDetailsStore;
 	steamWebpackRuntime.captureRuntime(doc);
-	const req = steamWebpackRuntime.getRequire();
+	const req = steamWebpackRuntime.getRequire(doc);
 	if (req) {
 		try {
 			const exp = req(78057);
@@ -645,7 +665,7 @@ export function resolveNativeAppDetailsStore(doc?: Document): any | null {
 			}
 		} catch {}
 	}
-	for (const module of steamWebpackRuntime.getAllModules()) {
+	for (const module of steamWebpackRuntime.getAllModules(doc)) {
 		const exp = module.exports as any;
 		if (exp && exp.H && typeof exp.H.GetAppData === 'function' && typeof exp.H.GetAchievements === 'function') {
 			cachedAppDetailsStore = exp.H;
@@ -655,15 +675,16 @@ export function resolveNativeAppDetailsStore(doc?: Document): any | null {
 		}
 	}
 	if (req && typeof req.e === 'function') {
-		steamWebpackRuntime.ensureChunk(9858).catch(() => {});
+		steamWebpackRuntime.ensureChunk(9858, doc).catch(() => {});
 	}
 	return null;
 }
 
 export function resolveNativeAchievementStore(doc?: Document): any | null {
+	ensureNativeComponentsRuntime(doc);
 	if (cachedAchievementStore) return cachedAchievementStore;
 	steamWebpackRuntime.captureRuntime(doc);
-	const req = steamWebpackRuntime.getRequire();
+	const req = steamWebpackRuntime.getRequire(doc);
 	if (req) {
 		try {
 			const exp = req(32179);
@@ -673,7 +694,7 @@ export function resolveNativeAchievementStore(doc?: Document): any | null {
 			}
 		} catch {}
 	}
-	for (const module of steamWebpackRuntime.getAllModules()) {
+	for (const module of steamWebpackRuntime.getAllModules(doc)) {
 		const exp = module.exports as any;
 		if (exp && exp.p6 && typeof exp.p6.GetMyAchievements === 'function') {
 			cachedAchievementStore = exp.p6;
@@ -686,9 +707,10 @@ export function resolveNativeAchievementStore(doc?: Document): any | null {
 let cachedConfigContext: any | null | undefined;
 
 export function resolveNativeConfigContext(doc?: Document): any | null {
+	ensureNativeComponentsRuntime(doc);
 	if (cachedConfigContext !== undefined) return cachedConfigContext;
 	steamWebpackRuntime.captureRuntime(doc);
-	const req = steamWebpackRuntime.getRequire();
+	const req = steamWebpackRuntime.getRequire(doc);
 	if (req) {
 		try {
 			const exp = req(72476);
@@ -698,7 +720,7 @@ export function resolveNativeConfigContext(doc?: Document): any | null {
 			}
 		} catch {}
 	}
-	for (const module of steamWebpackRuntime.getAllModules()) {
+	for (const module of steamWebpackRuntime.getAllModules(doc)) {
 		const exp = module.exports as any;
 		if (exp && exp.QO && exp.ss && exp.Qn) {
 			cachedConfigContext = exp.QO;
@@ -710,6 +732,7 @@ export function resolveNativeConfigContext(doc?: Document): any | null {
 }
 
 export function clearNativeComponentsCache(): void {
+	cachedRuntimeIdentity = null;
 	cachedFriendsComponent = undefined;
 	cachedActivityComponent = undefined;
 	cachedPostTextEntryComponent = undefined;
@@ -722,6 +745,7 @@ export function clearNativeComponentsCache(): void {
 	cachedNotesComponent = undefined;
 	cachedWorkshopComponent = undefined;
 	cachedControllerIcons = undefined;
+	cachedControllerIconsMissAt = 0;
 	cachedControllerFeatureComponent = undefined;
 	cachedAchievementsSectionComponent = undefined;
 	cachedAppDetailsStore = undefined;

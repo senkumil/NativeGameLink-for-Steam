@@ -8,8 +8,8 @@ import { eventTypeLabel, newsExcerpt } from '../library/news';
 import { getCurrentSteamUser, loadLocalActivityPosts, saveLocalActivityPost, type LocalActivityPost } from '../library/social/feed';
 import { getCachedPersona } from '../library/social/personas';
 import { dismissBigPictureFocusRing } from './gamepad-nav';
+import { EXIT_TEXT_EDITOR_EVENT } from './editable-target';
 import { showSteamVirtualKeyboard, hideSteamVirtualKeyboard } from '../../steam/gamepad/virtual-keyboard';
-import { resolveNativePostTextEntryComponent, resolveNativeFocusableTextarea } from '../../steam/gamepad/components/AppDetailsNativeComponents';
 import type { BigPictureDetailData, MappedShortcut } from './types';
 
 const NativeFocusable = Focusable as React.ComponentType<any>;
@@ -163,17 +163,28 @@ function PostTextEntry({
 	const postClasses = classes.PostTextEntry;
 	const eventClasses = classes.ActivityEvent;
 	const document = targetDoc || (typeof window !== 'undefined' ? window.document : undefined);
-
-	const NativePostEntry = resolveNativePostTextEntryComponent(document);
-	void NativePostEntry;
-	const NativeFocusableArea = resolveNativeFocusableTextarea(document);
-	const InputArea = NativeFocusableArea || 'textarea';
-
 	const [active, setActive] = useState(false);
 	const [text, setText] = useState('');
-	const textareaRef = React.useRef<HTMLTextAreaElement | null>(null);
+	const composerRef = React.useRef<HTMLElement | null>(null);
+	const textareaRef = React.useRef<HTMLElement | null>(null);
 	const user = React.useMemo(() => getCurrentSteamUser(document || window.document), [document]);
 	const placeholder = loc('AppActivity_StatusUpdate_Post', 'Diles algo sobre este juego a tus amigos...');
+
+	const resolveKeyboardTarget = React.useCallback((candidate?: unknown): HTMLElement | null => {
+		const direct = candidate && typeof candidate === 'object' && typeof (candidate as any).matches === 'function'
+			? candidate as HTMLElement
+			: textareaRef.current;
+		if (direct?.matches?.('textarea, input, [contenteditable="true"], [role="textbox"]')) return direct;
+		const nested = direct?.querySelector?.<HTMLElement>('textarea, input, [contenteditable="true"], [role="textbox"]');
+		if (nested) return nested;
+		return composerRef.current?.querySelector<HTMLElement>('textarea, input, [contenteditable="true"], [role="textbox"]') || null;
+	}, []);
+
+	const requestKeyboard = React.useCallback(() => {
+		if (!document) return;
+		const target = resolveKeyboardTarget();
+		if (target) showSteamVirtualKeyboard(document, target);
+	}, [document, resolveKeyboardTarget]);
 
 	const handlePublish = () => {
 		const trimmed = text.trim();
@@ -192,107 +203,80 @@ function PostTextEntry({
 		onPostAdded();
 	};
 
-	const activateComposer = () => {
-		setActive(true);
-		showSteamVirtualKeyboard(document, textareaRef.current);
-		setTimeout(() => {
-			if (textareaRef.current) {
-				textareaRef.current.focus();
-				showSteamVirtualKeyboard(document, textareaRef.current);
-			}
-		}, 30);
-	};
+	const activateComposer = () => setActive(true);
+
+	React.useEffect(() => {
+		if (!document || !active) return undefined;
+		const exitEditor = () => {
+			setActive(false);
+			hideSteamVirtualKeyboard(document);
+		};
+		document.addEventListener(EXIT_TEXT_EDITOR_EVENT, exitEditor);
+		return () => document.removeEventListener(EXIT_TEXT_EDITOR_EVENT, exitEditor);
+	}, [active, document]);
+
+	React.useEffect(() => {
+		if (!active || !document) return undefined;
+		const view = document.defaultView;
+		let cancelled = false;
+		const focusAndOpen = () => {
+			if (cancelled) return;
+			const target = resolveKeyboardTarget();
+			if (!target) return;
+			try { target.focus({ preventScroll: true }); } catch { try { target.focus(); } catch {} }
+			requestKeyboard();
+		};
+		if (view?.requestAnimationFrame) {
+			const frame = view.requestAnimationFrame(focusAndOpen);
+			return () => { cancelled = true; view.cancelAnimationFrame(frame); };
+		}
+		const timer = setTimeout(focusAndOpen, 0);
+		return () => { cancelled = true; clearTimeout(timer); };
+	}, [active, document, requestKeyboard, resolveKeyboardTarget]);
+
+	if (!active) {
+		return (
+			<NativeFocusable
+				focusable
+				onActivate={activateComposer}
+				{...clickProps(activateComposer)}
+				data-gdl-suppress-focus-ring="1"
+				className={nativeClasses(eventClasses?.StatusText, 'gdl-bp-native-status-entry-idle')}
+			>
+				<span className="gdl-bp-native-status-placeholder">{placeholder}</span>
+			</NativeFocusable>
+		);
+	}
 
 	return (
-		<NativeFocusable
-			focusable
-			onActivate={activateComposer}
-			{...clickProps(activateComposer)}
-			className={nativeClasses(postClasses?.PostTextEntry, 'gdl-bp-post-entry-bar')}
-			style={{
-				width: '100%',
-				minHeight: '44px',
-				display: 'flex',
-				alignItems: 'center',
-				padding: '6px 14px',
-				borderRadius: '4px',
-				cursor: 'text',
-				boxSizing: 'border-box',
-				marginBottom: '8px',
-				gap: '12px',
-			}}
+		<div
+			ref={composerRef as any}
+			className="gdl-bp-post-entry-active"
 		>
-			{user.avatar ? (
-				<img
-					src={user.avatar}
-					alt=""
-					style={{
-						width: '28px',
-						height: '28px',
-						borderRadius: '50%',
-						flexShrink: 0,
-						objectFit: 'cover',
-					}}
-				/>
-			) : null}
-			{active ? (
-				<InputArea
-					ref={textareaRef}
-					autoFocus
-					rows={1}
-					value={text}
-					onChange={(e: any) => setText(e.target?.value ?? '')}
-					placeholder={placeholder}
-					className={postClasses?.PostTextEntryArea}
-					onFocus={() => showSteamVirtualKeyboard(document, textareaRef.current)}
-					onClick={() => showSteamVirtualKeyboard(document, textareaRef.current)}
-					onBlur={() => {
-						if (!text.trim()) {
-							setActive(false);
-							hideSteamVirtualKeyboard(document);
-						}
-					}}
-					onKeyDown={(e: any) => {
-						if (e.key === 'Enter') {
-							e.preventDefault();
-							handlePublish();
-						} else if (e.key === 'Escape') {
-							setActive(false);
-							hideSteamVirtualKeyboard(document);
-						}
-					}}
-					style={{
-						flex: 1,
-						background: 'transparent',
-						border: 'none',
-						outline: 'none',
-						color: '#ffffff',
-						fontSize: '14px',
-						fontFamily: 'inherit',
-						padding: 0,
-						margin: 0,
-						boxShadow: 'none',
-						resize: 'none',
-					}}
-				/>
-			) : (
-				<div
-					className={nativeClasses(eventClasses?.StatusText, postClasses?.Label)}
-					style={{
-						fontStyle: 'italic',
-						fontSize: '14px',
-						color: 'rgba(148, 161, 166, 0.7)',
-						userSelect: 'none',
-						flex: 1,
-					}}
-				>
-					{placeholder}
-				</div>
-			)}
-		</NativeFocusable>
+			<textarea
+				ref={textareaRef as any}
+				rows={1}
+				value={text}
+				onChange={(e: any) => setText(e.target?.value ?? '')}
+				placeholder={placeholder}
+				className={nativeClasses(postClasses?.PostTextEntryArea, 'gdl-bp-native-status-textarea')}
+				onKeyDown={(e: any) => {
+					if (e.key === 'Enter' && !e.shiftKey) {
+						e.preventDefault();
+						e.stopPropagation();
+						handlePublish();
+					} else if (e.key === 'Escape') {
+						e.preventDefault();
+						e.stopPropagation();
+						setActive(false);
+						hideSteamVirtualKeyboard(document);
+					}
+				}}
+
+			/>
+		</div>
 	);
 }
-
 
 export function FriendsSection(props: {
 	data: BigPictureDetailData;
@@ -310,25 +294,13 @@ export function FriendsSection(props: {
 
 	const renderSubsection = (friends: FriendPlayInfo[], title: string) => (
 		<div
-			className={nativeClasses(native?.Subsection, native?.FriendsPlayingHalfSection)}
-			style={{ flex: 1, minWidth: 0 }}
+			className={nativeClasses(native?.Subsection, native?.FriendsPlayingHalfSection, 'gdl-bp-friends-column-parity')}
 		>
-			<div
-				className={nativeClasses(native?.SubsectionHeader, native?.FriendsSectionSubHeading)}
-				style={{
-					fontSize: '11px',
-					fontWeight: 700,
-					color: '#8f98a0',
-					textTransform: 'uppercase',
-					letterSpacing: '0.5px',
-					marginBottom: '10px',
-				}}
-			>
+			<div className={nativeClasses(native?.SubsectionHeader, native?.FriendsSectionSubHeading, 'gdl-bp-friends-subheading-parity')}>
 				{title}
 			</div>
 			<div
-				className={nativeClasses(native?.FriendsContainer, native?.Friends, native?.FriendsPlayingAvatarGrid)}
-				style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}
+				className={nativeClasses(native?.FriendsContainer, native?.Friends, native?.FriendsPlayingAvatarGrid, 'gdl-bp-friends-list-parity')}
 			>
 				{friends.slice(0, 8).map(friend => {
 					const persona = getCachedPersona(friend.steamid);
@@ -342,46 +314,17 @@ export function FriendsSection(props: {
 							role="button"
 							onActivate={openProfile}
 							{...clickProps(openProfile)}
-							className={nativeClasses(native?.GamepadFriendSectionItem, native?.GamepadFriendSectionItemLong, 'gdl-bp-friend-card')}
-							style={{
-								display: 'flex',
-								alignItems: 'center',
-								height: '52px',
-								padding: '0 8px',
-								background: 'rgba(255, 255, 255, 0.06)',
-								borderRadius: '4px',
-								cursor: 'pointer',
-								boxSizing: 'border-box',
-							}}
+							className={nativeClasses(native?.GamepadFriendSectionItem, native?.GamepadFriendSectionItemLong, 'gdl-bp-friend-card-parity')}
 						>
-							<div
-								className={nativeClasses(native?.AvatarAndLabel)}
-								style={{ display: 'flex', alignItems: 'center', gap: '12px', width: '100%', overflow: 'hidden' }}
-							>
+							<div className={nativeClasses(native?.AvatarAndLabel, 'gdl-bp-friend-card-inner-parity')}>
 								{persona?.avatar ? (
 									<img
 										src={persona.avatar}
 										alt=""
-										style={{
-											width: '40px',
-											height: '40px',
-											borderRadius: '4px',
-											flexShrink: 0,
-											objectFit: 'cover',
-										}}
+										className={nativeClasses(native?.Avatar, 'gdl-bp-friend-avatar-parity')}
 									/>
 								) : null}
-								<div
-									className={nativeClasses(native?.LabelHolder)}
-									style={{
-										fontSize: '14px',
-										fontWeight: 500,
-										color: '#e1e7ec',
-										overflow: 'hidden',
-										textOverflow: 'ellipsis',
-										whiteSpace: 'nowrap',
-									}}
-								>
+								<div className={nativeClasses(native?.LabelHolder, 'gdl-bp-friend-name-parity')}>
 									{persona?.name || friend.steamid}
 								</div>
 							</div>
@@ -393,17 +336,9 @@ export function FriendsSection(props: {
 	);
 
 	return (
-		<Section classes={props.classes} label={loc('AppDetails_Friends_Title', 'Amigos')} className={native?.FriendsSection}>
+		<Section classes={props.classes} label={loc('AppDetails_Friends_Title', 'Amigos')} className={nativeClasses(native?.FriendsSection, 'gdl-bp-friends-section-parity')}>
 			<div
-				className={nativeClasses(native?.FriendsContainer, native?.Friends, native?.FriendsPlaying)}
-				style={{
-					display: 'flex',
-					flexDirection: 'row',
-					gap: '24px',
-					width: '100%',
-					boxSizing: 'border-box',
-					marginBottom: '24px',
-				}}
+				className={nativeClasses(native?.FriendsContainer, native?.Friends, native?.FriendsPlaying, 'gdl-bp-friends-grid-parity')}
 			>
 				{played.length > 0 ? renderSubsection(played, loc('AppDetails_Friends_PlayedPreviously_Header', 'Jugado(s) anteriormente')) : null}
 				{wishlisted.length > 0 ? renderSubsection(wishlisted, loc('AppDetails_Friends_OnWishlist', 'En su lista de deseados')) : null}

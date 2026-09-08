@@ -200,6 +200,9 @@ function M.neutralize_steam_appid_file(request_json)
     if not ok_req or type(req) ~= "table" then req = {} end
     local exe_path = clean_path_input(req.exe_path or req.shortcutExecutable or req.executable or "")
     local start_dir = clean_path_input(req.start_dir or req.trackingStartDir or req.startDir or "")
+    if exe_path == "" and start_dir == "" then
+        return deps.cjson.encode({ ok = true, modified = false, skipped = "missing_target" })
+    end
     local search_dirs = {}
     local seen_dirs = {}
     local function add_dir(d)
@@ -220,38 +223,6 @@ function M.neutralize_steam_appid_file(request_json)
             dir = p
         end
     end
-    pcall(function()
-        local steam_path = deps.millennium.steam_path()
-        local userdata = deps.fs.join(steam_path, "userdata")
-        local ok_list, entries = pcall(deps.fs.list, userdata)
-        if ok_list and type(entries) == "table" then
-            for _, entry in ipairs(entries) do
-                local ep = tostring(entry.path or "")
-                local name = tostring(entry.name or ep:match("([^\\/]+)$") or "")
-                if name:match("^%d+$") then
-                    if ep == "" then ep = deps.fs.join(userdata, name) end
-                    local vdf_path = deps.fs.join(ep, "config", "shortcuts.vdf")
-                    if file_exists(vdf_path) then
-                        local f = io.open(vdf_path, "rb")
-                        if f then
-                            local data = f:read("*a")
-                            f:close()
-                            for exe in data:gmatch("Exe%z([^\r\n%z]+)") do
-                                local clean_exe = clean_path_input(exe)
-                                if clean_exe ~= "" then
-                                    add_dir(clean_path_input(deps.fs.parent_path(clean_exe)))
-                                end
-                            end
-                            for sdir in data:gmatch("StartDir%z([^\r\n%z]+)") do
-                                local clean_sdir = clean_path_input(sdir)
-                                if clean_sdir ~= "" then add_dir(clean_sdir) end
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    end)
     local modified = false
     for _, d in ipairs(search_dirs) do
         local appid_path = d .. "\\steam_appid.txt"

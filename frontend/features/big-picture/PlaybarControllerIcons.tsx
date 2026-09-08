@@ -52,10 +52,10 @@ export const PlaybarControllerIcons: React.FC<PlaybarControllerIconsProps> = ({ 
 
 	// 1. Xbox / Generic controller (Rendered once when supported or as baseline fallback)
 	if (support.xbox || (!support.ps4 && !support.ps5)) {
-		if (XboxOutline) {
-			items.push(<XboxOutline key="xbox" />);
-		} else if (ControllerType) {
+		if (ControllerType) {
 			items.push(<ControllerType key="xbox" controllerType={32} type="xbox" />);
+		} else if (XboxOutline) {
+			items.push(<XboxOutline key="xbox" />);
 		} else if (Controller) {
 			items.push(<Controller key="xbox" type="xbox" />);
 		}
@@ -63,10 +63,10 @@ export const PlaybarControllerIcons: React.FC<PlaybarControllerIconsProps> = ({ 
 
 	// 2. PlayStation 4 controller (DualShock 4)
 	if (support.ps4) {
-		if (Ps4Outline) {
-			items.push(<Ps4Outline key="ps4" />);
-		} else if (ControllerType) {
+		if (ControllerType) {
 			items.push(<ControllerType key="ps4" controllerType={34} type="ps4" />);
+		} else if (Ps4Outline) {
+			items.push(<Ps4Outline key="ps4" />);
 		} else if (Controller) {
 			items.push(<Controller key="ps4" type="ps4" />);
 		}
@@ -74,10 +74,10 @@ export const PlaybarControllerIcons: React.FC<PlaybarControllerIconsProps> = ({ 
 
 	// 3. PlayStation 5 controller (DualSense)
 	if (support.ps5) {
-		if (Ps5Outline) {
-			items.push(<Ps5Outline key="ps5" />);
-		} else if (ControllerType) {
+		if (ControllerType) {
 			items.push(<ControllerType key="ps5" controllerType={45} type="ps5" />);
+		} else if (Ps5Outline) {
+			items.push(<Ps5Outline key="ps5" />);
 		} else if (Controller) {
 			items.push(<Controller key="ps5" type="ps5" />);
 		}

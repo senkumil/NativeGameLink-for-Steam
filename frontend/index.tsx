@@ -1,1 +1,4 @@
-export { default } from './runtime/app';
+import './steam/browser-protection-bootstrap';
+import plugin from './runtime/app';
+
+export default plugin;

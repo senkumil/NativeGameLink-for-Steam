@@ -301,8 +301,8 @@ export function findNativeSteamAppIdByName(title: string): string | null {
 	return null;
 }
 
-export function getShortcutAppById(shortcutAppId: number): any | null {
-	const appStore = getSteamAppStore();
+export function getShortcutAppById(shortcutAppId: number, doc?: Document): any | null {
+	const appStore = getSteamAppStore(doc);
 	if (!appStore) return fallbackShortcutApps.get(shortcutAppId) || null;
 	const signedId = toSignedShortcutAppId(shortcutAppId);
 	if (typeof appStore.GetAppOverviewByAppID === 'function') {
@@ -416,7 +416,7 @@ export function getMappedShortcuts(doc?: Document): Array<{ id: number; title: s
 		if (!key.startsWith('shortcut:') || !/^\d+$/.test(steamAppId)) continue;
 		const shortcutId = Number(key.slice('shortcut:'.length));
 		if (!Number.isFinite(shortcutId) || shortcutId < SHORTCUT_THRESHOLD || seen.has(shortcutId)) continue;
-		const app = getShortcutAppById(shortcutId);
+		const app = getShortcutAppById(shortcutId, doc);
 		const title = String(app?.display_name || app?.m_strDisplayName || app?.name || '').trim();
 		result.push({ id: shortcutId, title: title || `Shortcut ${shortcutId}`, steamAppId });
 		seen.add(shortcutId);

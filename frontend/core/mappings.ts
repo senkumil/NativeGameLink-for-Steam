@@ -5,6 +5,7 @@ import { nglEvents } from './events';
 
 export const MAPPINGS_CACHE_STORAGE_KEY = 'gdl_mappings_snapshot_v1';
 const MAPPINGS_CHANGED_EVENT = 'gdl:mappings-changed';
+let mappingsRevision = 0;
 
 const shortcutToSteamMap = new Map<number, string>();
 const reverseSteamToShortcutMap = new Map<string, Set<number>>();
@@ -58,6 +59,7 @@ function rebuildMappingIndexes(source: Mappings): void {
 }
 
 function notifyMappingsChanged(): void {
+	mappingsRevision += 1;
 	rebuildMappingIndexes(mappings);
 	try { window.dispatchEvent(new CustomEvent<Mappings>(MAPPINGS_CHANGED_EVENT, { detail: { ...mappings } })); } catch {}
 	for (const [key, value] of Object.entries(mappings)) {
@@ -66,6 +68,10 @@ function notifyMappingsChanged(): void {
 			nglEvents.emit('linkedGameChanged', { shortcutAppId, linkedSteamAppId: value });
 		}
 	}
+}
+
+export function getMappingsRevision(): number {
+	return mappingsRevision;
 }
 
 export function subscribeMappings(listener: (value: Mappings) => void): () => void {
@@ -118,6 +124,16 @@ function cleanMappings(value: Record<string, string>): Mappings {
 	return clean;
 }
 
+function mappingsEqual(left: Mappings, right: Mappings): boolean {
+	const leftKeys = Object.keys(left);
+	const rightKeys = Object.keys(right);
+	if (leftKeys.length !== rightKeys.length) return false;
+	for (const key of leftKeys) {
+		if (left[key] !== right[key]) return false;
+	}
+	return true;
+}
+
 interface LocalShortcutSnapshot {
 	ids: Set<number>;
 	accountId: string;
@@ -165,6 +181,7 @@ function filterMappingsForLocalShortcuts(source: Mappings, snapshot: LocalShortc
 }
 
 async function hydrateMappings(): Promise<void> {
+	const previousMappings = cleanMappings({ ...mappings });
 	let lastError: unknown = null;
 	for (let attempt = 0; attempt < 7; attempt += 1) {
 		try {
@@ -206,8 +223,13 @@ async function hydrateMappings(): Promise<void> {
 				mappings = backendMappings;
 			}
 			persistMappingsSnapshot(mappings);
-			notifyMappingsChanged();
-			backendLog('Loaded mapping snapshot (' + Object.keys(mappings).length + ' entries).');
+			if (!mappingsEqual(previousMappings, mappings)) {
+				notifyMappingsChanged();
+				backendLog('Loaded changed mapping snapshot (' + Object.keys(mappings).length + ' entries).');
+			} else {
+				backendLog('Verified unchanged mapping snapshot (' + Object.keys(mappings).length + ' entries).');
+			}
+
 			return;
 		} catch (error) {
 			lastError = error;

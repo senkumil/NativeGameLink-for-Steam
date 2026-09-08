@@ -35,23 +35,29 @@ const bulkLink = read('frontend/features/shortcuts/bulk-link.ts');
 const bulkPolicy = read('frontend/features/shortcuts/bulk-policy.ts');
 const linkManagement = read('frontend/settings/LinkManagementSection.tsx');
 const backendMain = read('backend/main.lua');
+const backendUtil = read('backend/lib/util.lua');
 const playtimeLua = read('backend/lib/playtime.lua');
 const detectionRules = read('backend/lib/shortcut_detection_rules.lua');
 const uiModeService = read('frontend/steam/ui/SteamUIModeService.ts');
 const gamepadNav = read('frontend/features/big-picture/gamepad-nav.ts');
+const spatialNav = read('frontend/features/big-picture/spatial-navigation.ts');
+const editableTarget = read('frontend/features/big-picture/editable-target.ts');
 const playbarVisibility = read('frontend/steam/playbar-visibility.ts');
 const bigPictureDetails = read('frontend/features/big-picture/NativeBigPictureDetails.tsx');
 const bigPictureNativeResolver = read('frontend/steam/gamepad/components/AppDetailsNativeClasses.ts');
 const webpackRuntime = read('frontend/steam/modules/SteamWebpackRuntime.ts');
 const bpTabs = read('frontend/features/big-picture/tabs.ts');
 const bpDetails = read('frontend/features/big-picture/details.ts');
+const bpDetailsStyles = read('frontend/features/big-picture/details-styles.ts');
 const gamepadContext = read('frontend/steam/gamepad/GamepadContext.ts');
 const achievementsPlaybar = read('frontend/features/achievements/playbar.ts');
 const bpPanelMount = read('frontend/features/big-picture/panel-mount.ts');
 const activitySection = read('frontend/features/big-picture/activity-section.tsx');
+const friendsTs = read('frontend/features/library/social/friends.ts');
 const virtualKeyboard = read('frontend/steam/gamepad/virtual-keyboard.ts');
 const bpNativeComponents = read('frontend/steam/gamepad/components/AppDetailsNativeComponents.ts');
 const bpControllerIcons = read('frontend/features/big-picture/PlaybarControllerIcons.tsx');
+const controllerTs = read('frontend/features/library/controller.ts');
 const bpAchievements = read('frontend/features/big-picture/NativeBigPictureAchievements.tsx');
 const communityLua = read('backend/lib/community.lua');
 const navigationTs = read('frontend/steam/navigation.ts');
@@ -59,6 +65,9 @@ const communityViewTs = read('frontend/features/library/community-view.ts');
 const bpRuntime = read('frontend/features/big-picture/runtime.ts');
 const mappingsTs = read('frontend/core/mappings.ts');
 const existingWindows = read('frontend/runtime/existing-windows.ts');
+const frontendEntry = read('frontend/index.tsx');
+const browserProtectionBootstrap = read('frontend/steam/browser-protection-bootstrap.ts');
+const bpNativeInfoBridge = read('frontend/features/big-picture/native-info-bridge.ts');
 
 let passed = 0;
 function assert(condition, message) {
@@ -176,14 +185,15 @@ assert(gameData.includes('MAX_GAME_DATA_CACHE_KEYS = 64'), 'in-memory game-data 
 // desktop scaling levels and hide linked cloud/achievement copy despite room.
 assert(playbarVisibility.includes('classes.HideWhenNarrow') && playbarVisibility.includes('classes.MiniAchievements'), 'linked play-bar preserves cloud and achievement copy across the middle splitter breakpoint');
 assert(playbarVisibility.includes("setProperty('display', 'flex', 'important')") && playbarVisibility.includes('restoreLinkedPlaybarVisibility'), 'linked-only visibility override outranks NarrowRightPanel and restores native display state on route exit');
-assert(bigPictureDetails.includes('docWindow?.SP_REACTDOM') && bigPictureDetails.includes('(window as any)?.SP_REACTDOM'), 'Big Picture mounts native sections through Millennium\'s canonical ReactDOM host');
+assert(bigPictureDetails.includes('docWindow?.SP_REACTDOM') && bigPictureDetails.includes('globalWindow === docWindow') && bigPictureDetails.includes('getAllModules(doc)'), 'Big Picture mounts native sections through the owning CEF realm ReactDOM host');
 assert(webpackRuntime.includes('modules as millenniumWebpackModules') && webpackRuntime.includes('for (const [id, exports] of millenniumWebpackModules)'), 'Big Picture reuses the captured Millennium Webpack registry when its popup hides the chunk global');
 assert(!bigPictureDetails.includes('PanelSection') && !bigPictureDetails.includes('PanelSectionRow') && !bigPictureDetails.includes('Field as NativeComponent'), 'Big Picture no longer renders settings-form rows inside game details');
 assert(bigPictureNativeResolver.includes("ActivityEvent: ['Event'") && bigPictureNativeResolver.includes("Achievement: ['AchievementCarouselItem'") && bigPictureNativeResolver.includes("Community: ['CommunityContentContainer'"), 'Big Picture resolves Steam-owned AppDetails presentation families by semantic class signatures');
 assert(bigPictureDetails.includes('event?.PartnerEventMediumImage_Container') && bigPictureDetails.includes('native?.CommunityItem') && !bigPictureDetails.includes('components.ActivityFeed'), 'activity and community use provider-independent native Steam composition');
 assert(bigPictureNativeResolver.includes('prototype.ScrollToElement') && bigPictureNativeResolver.includes('prototype.UpdateScrollArrows') && bigPictureDetails.includes('resolveNativeSummaryCarousel()') && !bigPictureDetails.includes('import { Carousel,'), 'Big Picture uses Steam AppDetails BoxCarousel instead of the unrelated Millennium carousel');
 assert(bigPictureDetails.includes('event?.AppActivityDay') && bigPictureDetails.includes('event?.AppActivityDate') && bigPictureDetails.includes('event?.PartnerEventTextOnly_Icon'), 'Big Picture activity uses native dated groups and patch-event chrome');
-assert(bigPictureDetails.includes('width="100%"') && bigPictureDetails.includes('<NativeFeature') && bigPictureNativeResolver.includes("Feature: ['Container', 'Icon'"), 'Big Picture game information constrains box art and renders Steam-native feature rows');
+assert(bpDetails.includes("state.activeTab === 'info'") && bpDetails.includes('restoreNativePanelChildren(state.panel)') && bpDetails.includes("state.root.style.setProperty('display', 'none', 'important')"), 'Big Picture Game Information yields the panel to Steam instead of painting a look-alike');
+assert(!bigPictureDetails.includes('function InfoTab(') && !bigPictureDetails.includes('gdl-bp-info-root') && !bpDetailsStyles.includes('gdl-bp-info-root'), 'custom Game Information markup/styles are removed so Steam owns exact DLC, collections, layout and focus behavior');
 
 
 // Removed/delisted artwork must not pay for a long chain of speculative Steam
@@ -263,6 +273,12 @@ assert(browserProtection.includes("code === 80") && browserProtection.includes("
 assert(browserProtection.includes("code === 79") && browserProtection.includes("key === 'o'"), 'browser protection intercepts Ctrl+O open file shortcut');
 assert(browserProtection.includes("event.stopImmediatePropagation()"), 'browser protection cancels event propagation immediately');
 assert(browserProtection.includes("a[download]"), 'browser protection neutralizes unexpected download triggers on loopback routes');
+assert(frontendEntry.indexOf("import './steam/browser-protection-bootstrap'") !== -1 && frontendEntry.indexOf("import './steam/browser-protection-bootstrap'") < frontendEntry.indexOf("import plugin from './runtime/app'"), 'entry evaluates the Save-As bootstrap before the main plugin runtime');
+assert(browserProtectionBootstrap.includes('protectKnownSteamWindows();') && browserProtectionBootstrap.includes('EARLY_SWEEP_DELAYS_MS') && browserProtectionBootstrap.includes('g_PopupManager'), 'hot-enable bootstrap protects the current CEF realm and existing Steam popups before AddWindowCreateHook');
+assert(browserProtectionBootstrap.includes('2000') && browserProtectionBootstrap.includes('GetExistingPopup') && browserProtectionBootstrap.includes('m_mapPopups'), 'hot-enable bootstrap sweeps late popup adoption during the first two seconds');
+assert(browserProtection.includes("Symbol.for('NativeGameLink.browserProtection.windowAcceleratorGuard.v1')") && browserProtection.includes("Symbol.for('NativeGameLink.browserProtection.documentAcceleratorGuard.v1')"), 'sticky accelerator guards survive module re-evaluation without accumulating duplicate Ctrl+S listeners');
+assert(!runtimeApp.includes('neutralizeSteamAppIdFileBackend') && !runtimeApp.includes("request_json: '{}'"), 'plugin hot-enable never runs global steam_appid.txt neutralization during mapping hydration');
+assert(backendUtil.includes('skipped = "missing_target"') && !backendUtil.includes('local userdata = deps.fs.join(steam_path, "userdata")'), 'steam_appid.txt neutralization is target-scoped and empty requests cannot scan every Steam shortcut directory');
 assert(runtimeApp.includes("installBrowserProtection(window, window.document)") && runtimeApp.includes("disposeAllBrowserProtection()"), 'app runtime initializes browser protection on startup and dismounts cleanly');
 assert(runtimeApp.includes("lifecycle.add(installBrowserProtection(popupWin, popupDoc))"), 'app runtime protects all adopted Steam popup windows');
 assert(navTs.includes("installBrowserProtection(doc.defaultView, doc)"), 'navigation layer attaches browser protection to document lifecycle');
@@ -278,10 +294,9 @@ assert(bpDetails.includes('#gdl-playbar-achievements, [data-gdl-playbar-achievem
 // Big Picture Tab navigation and Details parity:
 // Ensure activeTabFromNative includes multi-layer detection (aria, classes, focus, background brightness, content fallback),
 // notice suppression enforces display: none !important, and details styles are installed.
-const bpDetailsStyles = read('frontend/features/big-picture/details-styles.ts');
 assert(bpTabs.includes('isNodeSelectedOrActive') && bpTabs.includes('brightestTab') && bpTabs.includes('hasNativeGameInfo'), 'activeTabFromNative has multi-layer tab selection resilience including native content fallback');
 assert(bpPanelMount.includes("style.setProperty('display', 'none', 'important')") && bpPanelMount.includes('NonSteamGameNotice'), 'hideBigPictureNonSteamNotices suppresses non-steam notices and duplicate collections with important display');
-assert(bpDetails.includes('ensureBigPictureDetailStyles(doc)') && bpDetailsStyles.includes('gdl-bp-community-grid') && bpDetailsStyles.includes('gdl-bp-info-root'), 'Big Picture details injects custom layout styles for community and game info');
+assert(bpDetails.includes('ensureBigPictureDetailStyles(doc)') && bpDetailsStyles.includes('gdl-bp-community-grid') && !bpDetailsStyles.includes('gdl-bp-info-root'), 'Big Picture keeps custom community layout isolated and never restyles Steam native Game Information');
 
 // Big Picture Modal / Focus Ring Dismissal:
 // Modals (trading card preview, screenshot modal, community image modal, news dialog, Steam dialogs)
@@ -298,6 +313,7 @@ assert(bpPanelMount.includes('mountPlaybarControllerIcons(row, doc, support)'), 
 assert(bpPanelMount.includes('playbar.ControllerSupportInfo') && bpPanelMount.includes('playbar.ControllerSupportRow'), 'ensurePlaybarControllerStat applies native Steam ControllerSupportInfo and ControllerSupportRow classes');
 assert(bpControllerIcons.includes('resolveNativeControllerIcons') && bpControllerIcons.includes('IconsModule'), 'PlaybarControllerIcons resolves native Webpack icons from Steam chunk runtime');
 assert(!bpControllerIcons.includes('ControllerStatus') && bpControllerIcons.includes('ControllerType'), 'PlaybarControllerIcons avoids ControllerStatus to prevent QueryClientProvider crash');
+assert(bpControllerIcons.indexOf('if (ControllerType)') < bpControllerIcons.indexOf('else if (XboxOutline)'), 'playbar prefers Steam ControllerType glyphs before outline fallbacks');
 assert(bpControllerIcons.includes('PlaybarErrorBoundary'), 'PlaybarControllerIcons wraps rendering in PlaybarErrorBoundary');
 assert(bpNativeComponents.includes('resolveNativeControllerIcons') && bpNativeComponents.includes('resolveNativeControllerFeatureComponent'), 'native components resolver provides Webpack controller icon and feature resolvers');
 assert(!bpPanelMount.includes("svg.setAttribute('width', '24')"), 'eliminated manual hardcoded 24x20px SVG downsizing in favor of native Steam Webpack sizing');
@@ -308,6 +324,7 @@ assert(!bpPanelMount.includes("svg.setAttribute('width', '24')"), 'eliminated ma
 // and activateBigPicture installs browser protection on Big Picture document and window.
 assert(browserProtection.includes("key === 's' || code === 83"), 'browser-protection blocks Ctrl+S / Cmd+S');
 assert(browserProtection.includes('blockContextMenu') && browserProtection.includes('blockAcceleratorHandler'), 'browser-protection suppresses unhandled contextmenu and keyboard accelerators');
+assert(browserProtection.includes('acceleratorWindows') && browserProtection.includes('acceleratorDocuments') && browserProtection.includes('Accelerator guards remain until realm destruction'), 'Save-As accelerator protection survives plugin hot-disable until the CEF window unloads');
 assert(bpRuntime.includes('installBrowserProtection(doc.defaultView, doc)'), 'activateBigPicture installs browser protection in Big Picture mode');
 
 // Big Picture Anti-Flicker & Launch Stabilization:
@@ -318,10 +335,26 @@ assert(bpRuntime.includes('installBrowserProtection(doc.defaultView, doc)'), 'ac
 // 4. steamUIModeService.isGamepadUI strictly evaluates document surface when doc is supplied
 // 5. refreshBigPictureShortcutDetails preserves existing details when tabs momentarily transition
 assert(bpRuntime.includes('requestBigPictureRerender()') && bpRuntime.includes('now - lastRerenderTime < 1500'), 'runtime throttles forced re-renders to prevent render loops');
-assert(bpRuntime.includes('activeRefreshPromise') && bpRuntime.includes('Date.now() - lastRefreshCompletedAt < 250'), 'runtime coalesces rapid Big Picture refreshes');
+assert(bpRuntime.includes('activeRefreshPromises = new WeakMap<Document, Promise<void>>()') && bpRuntime.includes('lastRefreshCompletedAt = new WeakMap<Document, number>()') && bpRuntime.includes('Date.now() - lastCompletedAt < 250'), 'runtime coalesces rapid Big Picture refreshes per document');
+assert(webpackRuntime.includes('states = new WeakMap<Window, SteamWebpackRuntimeState>()') && webpackRuntime.includes('if (doc?.defaultView) return [doc.defaultView]') && webpackRuntime.includes('invalidateWindow(win)'), 'Steam Webpack runtime is isolated per CEF window and invalidated per realm');
+assert(!bpRuntime.includes('loadMappings().catch') && bpRuntime.includes('sameDocument'), 'Big Picture activation is idempotent and does not reload mappings on every mutation refresh');
+assert(bpRuntime.includes('getBigPictureMappedShortcuts') && bpRuntime.includes('collectMappedShortcutApps'), 'Big Picture reuses a short-lived mapped-shortcut projection and avoids duplicate full-library scans');
 assert(runtimeApp.includes('handleBigPictureExit(): void') && runtimeApp.includes('bpDoc && bpDoc.body?.isConnected'), 'handleBigPictureExit is guarded against destroying active Big Picture documents');
 assert(uiModeService.includes('if (doc) return this.isDocumentGamepadSurface(doc);'), 'steamUIModeService strictly scopes isGamepadUI to document when doc is provided');
 assert(bpDetails.includes('if (isLibraryOrNonDetailsView(doc))') && bpDetails.includes('scheduleDetailRetry(doc);'), 'details preserves mounted details during transient tab transitions');
+assert(bpDetails.includes('preferredDetailTabs') && bpDetails.includes('preferredTab || detectedTab || state?.activeTab'), 'tab clicks remain authoritative while Steam aria/class state catches up during transitions');
+assert(bpDetails.includes('commitNativePanelRoot(state.panel, state.root)') && bpDetails.includes('restoreNativePanelChildren(state.panel)') && bpDetails.includes('preserving Steam panel and retrying'), 'Big Picture panel replacement is transactional and restores native content if React mount is not ready');
+assert(bpPanelMount.includes("!target || target === root || (root && target.contains(root))"), 'non-Steam notice cleanup can never hide an ancestor containing the injected React root');
+assert(bpDetails.includes('detailContextGapSince') && bpDetails.includes('Date.now() - startedAt < 700'), 'mounted linked details survive bounded transient GamepadUI identity gaps instead of flashing native/black content');
+assert(bpPanelMount.includes('cloudScope = parent.parentElement || parent') && bpPanelMount.includes('isRenderedElement(doc, element)') && !bpPanelMount.includes("/steam\s*cloud/i.test(el.textContent"), 'Steam Cloud fallback only yields to a visible nearby native cloud row');
+assert(bpPanelMount.includes('MIN_CLOUD_SCROLL_BEFORE_COLLAPSE = 96') && bpPanelMount.includes('isPlaybarStillVisible(doc)') && bpPanelMount.includes('upwardTravel >= MIN_CLOUD_SCROLL_BEFORE_COLLAPSE') && bpPanelMount.includes("doc.addEventListener('scroll', state.onScroll, { capture: true, passive: true })") && !bpPanelMount.includes('eventOffset) > 16'), 'Steam Cloud fallback waits for real header collapse instead of disappearing on tiny or nested scroll events');
+assert(bpPanelMount.includes("const linkedDetailRoot = doc.getElementById('gdl-bp-detail-root')?.dataset.gdlSteamAppId") && bpPanelMount.includes("context.type !== 'shortcut-linked' && !linkedDetailRoot"), 'Steam Cloud fallback survives transient linked-detail route gaps');
+assert(bpPanelMount.includes('nativeControllerClass') && bpPanelMount.includes('element.classList.contains(nativeControllerClass)') && !bpPanelMount.includes('/control|controller/i.test'), 'controller stat identifies only the exact native ControllerSupportInfo class');
+assert(bpPanelMount.includes('gdlBpNativeControllerHidden') && bpPanelMount.includes('data-gdl-bp-native-controller-hidden'), 'linked shortcuts suppress and later restore stale native controller rows instead of deleting the AppID-backed stat');
+assert(bpPanelMount.includes('playbarControllerStates') && bpPanelMount.includes('bindPlaybarControllerRepair') && bpPanelMount.includes('observer.observe(target, { childList: true, subtree: true })'), 'controller stat is repaired when Steam React replaces the playbar children');
+assert(bpPanelMount.includes('playbarControllerContextGapSince') && bpPanelMount.includes('Date.now() - gapStarted > 1200'), 'controller stat survives bounded GamepadUI identity gaps instead of disappearing between tab/header rebuilds');
+assert(bpNativeComponents.includes('cachedControllerIconsMissAt') && bpNativeComponents.includes("req(35488)") && bpNativeComponents.includes('Date.now() - cachedControllerIconsMissAt < 1200'), 'controller icon resolver retries transient Webpack misses instead of caching null forever');
+assert(controllerTs.includes('setInterval(check, 1000)') && controllerTs.includes('list.find(isSteamControllerConnected)'), 'controller detection uses events plus a low-frequency watchdog and ignores disconnected stale store entries');
 
 // Library Sidebar: Legitimate Steam games must never disappear or leave empty gaps
 // when a non-Steam shortcut maps to the same AppID. cleanupGhostSidebarEntries must
@@ -333,32 +366,56 @@ assert(!sidebarCleanup.includes("row.style.display = 'none'") && !sidebarCleanup
 assert(sidebarCleanup.includes("row.style.removeProperty('display')"), 'cleanupGhostSidebarEntries restores any previously suppressed virtual rows');
 
 // Big Picture Activity Input & Virtual Keyboard:
-// Selecting the activity post entry bar must NOT turn it white (preserves native dark background with white focus ring),
-// and activating/writing in it must invoke Steam's native on-screen virtual keyboard.
-assert(bpDetailsStyles.includes('.gdl-bp-post-entry-bar') && bpDetailsStyles.includes('.gdl-bp-post-entry-bar.gpfocus'), 'details styles style activity post entry bar and focus state');
-assert(bpDetailsStyles.includes('rgba(255, 255, 255, 0.12) !important') && bpDetailsStyles.includes('border-color: #ffffff !important'), 'activity post entry bar retains dark background and white focus ring instead of turning white');
-assert(activitySection.includes('showSteamVirtualKeyboard(document, textareaRef.current)'), 'PostTextEntry invokes virtual keyboard on activation and textarea focus');
-assert(activitySection.includes('hideSteamVirtualKeyboard(document)'), 'PostTextEntry dismisses virtual keyboard on cancel or publish');
-assert(virtualKeyboard.includes('resolveVirtualKeyboardHandle') && virtualKeyboard.includes('VirtualKeyboardMessage'), 'virtual keyboard service supports Webpack and PostMessage protocols');
-assert(bpNativeComponents.includes('resolveNativePostTextEntryComponent') && bpNativeComponents.includes('resolveNativeFocusableTextarea'), 'native components resolver provides Webpack PostTextEntry and FocusableTextarea');
-assert(activitySection.includes('resolveNativePostTextEntryComponent(document)') && activitySection.includes('resolveNativeFocusableTextarea(document)'), 'activity section uses Webpack native PostTextEntry and FocusableTextarea');
+// The collapsed composer must remain lightweight, must not inject a profile avatar,
+// and now intentionally keeps the hovered Steam-like text box appearance even before
+// activation so the surface no longer visually pops on hover/focus.
+assert(activitySection.includes('gdl-bp-native-status-entry-idle') && !activitySection.includes("nativeClasses(postClasses?.PostTextEntry, 'gdl-bp-post-entry-bar')"), "activity composer keeps the custom collapsed entry and does not reintroduce Steam's heavier PostTextEntry wrapper");
+assert(activitySection.includes('<textarea') && activitySection.includes("nativeClasses(postClasses?.PostTextEntryArea, 'gdl-bp-native-status-textarea')") && !activitySection.includes('resolveNativeFocusableTextarea(document)'), 'activity editor remains a lightweight textarea with native Steam input class only while active');
+assert(!activitySection.includes("minHeight: '44px'") && !activitySection.includes("padding: '6px 14px'"), 'activity composer does not override Steam PostTextEntry geometry with custom box styling');
+assert(activitySection.includes('requestKeyboard();') && !activitySection.includes('onFocus={(e: any) => requestKeyboard') && !activitySection.includes('onClick={(e: any) => requestKeyboard'), 'activity composer requests the native keyboard once after activation instead of on every focus/click');
+assert(activitySection.includes('hideSteamVirtualKeyboard(document)') && activitySection.includes('EXIT_TEXT_EDITOR_EVENT'), 'PostTextEntry dismisses the virtual keyboard on publish/cancel/controller exit');
+assert(virtualKeyboard.includes('SHOW_DEBOUNCE_MS = 350') && virtualKeyboard.includes('VirtualKeyboardMessage'), 'virtual keyboard requests are debounced and retain the GamepadUI parent-message fallback');
+assert(!virtualKeyboard.includes('dispatchEvent(new Event(\'focus\'') && !virtualKeyboard.includes('dispatchEvent(new MouseEvent(\'click\'') && !virtualKeyboard.includes('targetInput.focus()'), 'virtual keyboard service never synthesizes focus/click events that recurse through textarea handlers');
+assert(!virtualKeyboard.includes('m_KeyboardOwners') && !virtualKeyboard.includes('m_bIsInlineVirtualKeyboardOpen') && !virtualKeyboard.includes('UpdateIsShowingVirtualKeyboard'), 'virtual keyboard integration no longer mutates Steam private manager state');
+assert(virtualKeyboard.includes('getRequire(doc)') && virtualKeyboard.includes('getAllModules(doc)') && virtualKeyboard.includes('cachedHandles = new WeakMap<Window'), 'virtual keyboard handle is resolved and cached per owning CEF realm');
+assert(bpNativeComponents.includes('resolveNativePostTextEntryComponent') && bpNativeComponents.includes('resolveNativeFocusableTextarea'), 'native component resolvers remain available for other Steam surfaces without forcing them into the activity composer');
+assert(!activitySection.includes('onBlur={() =>') && activitySection.includes('gdl-bp-post-entry-active'), 'activity composer remains mounted when the native keyboard temporarily moves focus away');
 assert(!activitySection.includes('<div className={postClasses?.PostTextEntryArea}>') && !activitySection.includes("resize: 'vertical'"), 'activity section eliminates nested PostTextEntryArea boxes and vertical resize grip');
-assert(bpDetailsStyles.includes('resize: none !important') && bpDetailsStyles.includes('.gdl-bp-post-entry-active'), 'details styles enforce resize none and clean active post container');
+assert(bpDetailsStyles.includes('resize: none !important') && bpDetailsStyles.includes('.gdl-bp-post-entry-active') && bpDetailsStyles.includes('background: rgba(255,255,255,0.09) !important'), 'active activity editor cannot fall back to Chromium white textarea styling when Steam input classes are unavailable');
+assert(!bpDetailsStyles.includes('.gdl-controller-stat svg path') && !bpDetailsStyles.includes('.gdl-controller-support-row svg path') && !/gdl-controller-stat svg[\s\S]{0,160}fill:\s*#ffffff\s*!important/.test(bpDetailsStyles), 'controller SVG internals keep Steam native multi-path fills instead of collapsing into white silhouettes');
+assert(bpDetailsStyles.includes('min-height: 30px !important') && bpDetailsStyles.includes('line-height: 0 !important') && bpDetailsStyles.includes('height: 28px !important') && bpDetailsStyles.includes('overflow: visible !important'), 'native controller glyph boxes stay vertically visible so lower grips are not clipped by the playbar row');
+assert(editableTarget.includes("tag === 'textarea'") && gamepadNav.includes('doc.dispatchEvent(new CustomEvent(EXIT_TEXT_EDITOR_EVENT))') && gamepadNav.includes('setTimeout(pollGamepads, 100)'), 'text editing yields directional ownership to GamepadUI while controller B can always escape the editor');
 
 // Big Picture Gamepad Navigation Parity & Non-Skipping:
-// Vertical up/down navigation must NEVER skip adjacent elements. Strict 10px row window,
-// vertical immediacy score weighting, deduplicated keydown/gamepad poller state, and
-// full interactive navigation across Stuff, Community, Info, and Activity sections.
-assert(gamepadNav.includes('v <= minVert + 10'), 'gamepad nav enforces strict immediate-row 10px window avoiding skipping adjacent rows');
-assert(gamepadNav.includes('score = v * 20 + horiz'), 'gamepad nav prioritizes vertical immediacy score over horizontal alignment');
-assert(gamepadNav.includes('lastDirTime.set(dir, now)') && gamepadNav.includes('dirHoldTime.set(dir, now)'), 'gamepad nav onGlobalKeyDown synchronizes poller hold state to eliminate double-stepping');
-assert(gamepadNav.includes('.gdl-bp-trading-card') && gamepadNav.includes('.gdl-bp-badge-action'), 'gamepad nav selector includes trading cards and badge actions');
-assert(gamepadNav.includes('.gdl-bp-info-feature') && gamepadNav.includes('.gdl-bp-info-description'), 'gamepad nav selector includes game info description and features');
+// Navigation uses one geometry snapshot per move and arbitrates Steam key events
+// against navigator.getGamepads() so one physical press cannot double-step.
+assert(spatialNav.includes('collectFocusableLayout') && spatialNav.includes('chooseSpatialTarget') && spatialNav.includes('primaryGap * 12'), 'spatial navigation ranks adjacent targets from one cached geometry snapshot');
+assert(spatialNav.includes('aligned ? crossDelta * 0.55') && spatialNav.includes('candidate.centerX') && spatialNav.includes('candidate.centerY'), 'spatial navigation preserves row/column alignment without hard dead-end windows');
+assert(spatialNav.includes('sameAxisThreshold') && spatialNav.includes('const pool = aligned.length ? aligned : directional'), 'spatial navigation cannot interpret tiny same-row offsets as vertical moves and prefers aligned neighbors before diagonals');
+assert(gamepadNav.includes('pollNavigationSuppressedUntil = Date.now() + 500') && gamepadNav.includes('keyboardOwnsNavigation'), 'gamepad polling is suppressed after Steam emits navigation keys, preventing double-stepping');
+assert(gamepadNav.includes('active !== doc.body && currentScope.contains(active)') && gamepadNav.includes('ownedMarker || nativeMarker'), 'spatial navigation trusts live DOM focus before stale gpfocus markers');
+assert(!gamepadNav.includes("dispatchEvent(new CustomEvent('activate'") && gamepadNav.includes('current.click();'), 'selection invokes each control once instead of click plus synthetic activate');
+assert(!gamepadNav.includes('performance.now() - start < 500') && gamepadNav.includes('isEditableTextTarget(target)'), 'custom focus ring does not run a 500ms layout loop and is disabled for text editors');
+assert(spatialNav.includes('.gdl-bp-trading-card') && spatialNav.includes('.gdl-bp-badge-action'), 'spatial navigation selector includes trading cards and badge actions');
+assert(!spatialNav.includes('.gdl-bp-info-feature') && !spatialNav.includes('.gdl-bp-info-description'), 'custom spatial navigation never claims Steam native Game Information controls');
 assert(bigPictureDetails.includes('gdl-bp-trading-card') && bigPictureDetails.includes('gdl-bp-badge-action'), 'NativeBigPictureDetails ensures trading cards and badges are focusable and navigable');
-assert(bigPictureDetails.includes('gdl-bp-info-description') && bigPictureDetails.includes('gdl-bp-info-feature'), 'NativeBigPictureDetails ensures game description and feature tags are focusable');
+assert(!bigPictureDetails.includes('gdl-bp-info-description') && !bigPictureDetails.includes('gdl-bp-info-feature'), 'NativeBigPictureDetails does not duplicate Steam Game Information focus targets');
+assert(bpDetails.includes('activateNativeGameInfoBridge(doc, state.shortcut, state.data.game)') && bpDetails.includes('deactivateNativeGameInfoBridge(doc)'), 'native Game Information bridge is scoped strictly to the Steam info tab and restored elsewhere');
+assert(bpNativeInfoBridge.includes('originalGetAppData.call(this, linkedId)') && bpNativeInfoBridge.includes('if (linked?.details) return linked;'), 'native Game Information reuses Steam AppDetailsStore data for the linked AppID when available');
+assert(bpNativeInfoBridge.includes('buildSyntheticDetails') && bpNativeInfoBridge.includes('strDeveloper') && bpNativeInfoBridge.includes('vecStoreCategories'), 'native Game Information can hydrate Steam detail metadata from linked Store data without drawing a custom panel');
+assert(bpNativeInfoBridge.includes("setTemporaryValue(app, 'app_type', 1)") && bpNativeInfoBridge.includes("setTemporaryValue(app, 'BIsShortcut'") && bpNativeInfoBridge.includes('restoreActiveShortcutClassification'), 'native Game Information temporarily classifies only the active shortcut as a Steam app and restores its exact shortcut identity afterward');
+assert(!bpNativeInfoBridge.includes('steam://run/') && !bpNativeInfoBridge.includes('OpenSteamURL'), 'native Game Information bridge cannot redirect the Play action to the linked Store AppID');
 assert(bigPictureDetails.includes('gdl-bp-community-empty') && bigPictureDetails.includes('AppDetails_Community_Hub'), 'NativeBigPictureDetails provides focusable community hub button when empty');
 assert(bpAchievements.includes('gdl-bp-view-all-achievements') && bpAchievements.includes('AppDetails_Achievements_ViewAll'), 'NativeBigPictureAchievements provides focusable view-all achievements trigger');
-assert(activitySection.includes('profiles/${friend.steamid}') && activitySection.includes('gdl-bp-friend-card'), 'activity section friends cards support focus and activate friend profiles');
+assert(activitySection.includes('profiles/${friend.steamid}') && activitySection.includes('native?.GamepadFriendSectionItem'), 'activity section friend cards retain Steam focus classes and activate friend profiles');
+assert(activitySection.includes('native?.FriendsContainer') && activitySection.includes('native?.FriendsPlayingHalfSection') && activitySection.includes('native?.AvatarAndLabel'), 'Big Picture friends retain Steam native visual class families');
+assert(activitySection.includes('gdl-bp-friends-grid-parity') && bpDetailsStyles.includes('grid-template-columns: repeat(2, minmax(0, 1fr)) !important') && bpDetailsStyles.includes('column-gap: 42px !important') && bpDetailsStyles.includes('margin-inline: 27px !important'), 'friends preserve the two-column GamepadUI composition with the tightened card width/inset requested for Big Picture parity');
+assert(bpDetailsStyles.includes('height: 68px !important') && bpDetailsStyles.includes('background: rgba(255, 255, 255, 0.07) !important') && bpDetailsStyles.includes('width: 52px !important') && bpDetailsStyles.includes('gap: 24px !important'), 'friend cards preserve the tightened Steam-parity geometry, background, avatar size, and label spacing');
+assert(bigPictureDetails.includes('gdl-bp-activity-tab-content') && bpDetailsStyles.includes('padding-top: 18px !important'), 'activity content keeps native breathing room below the sticky tab header so Friends never collides with it');
+assert(friendsTs.includes("encode('wishlist'") && friendsTs.includes("retained?.wishlisted?.length") && friendsTs.includes('transiently empty during client hydration'), 'friend hydration preserves a previously confirmed wishlist column across transient empty Steam responses');
+assert(activitySection.includes('gdl-bp-native-status-entry-idle') && activitySection.includes('data-gdl-suppress-focus-ring="1"') && !activitySection.includes('gdl-bp-status-avatar'), 'collapsed Activity composer is text-only, has no current-user avatar, and suppresses the plugin-owned rectangular focus ring');
+assert(gamepadNav.includes("target.dataset.gdlSuppressFocusRing === '1'"), 'custom Gamepad focus ring honors per-target suppression for native-like composer surfaces');
+assert(bpDetailsStyles.includes('.gdl-bp-native-status-placeholder') && bpDetailsStyles.includes('.gdl-bp-native-status-entry-idle') && bpDetailsStyles.includes('background: rgba(255,255,255,0.09) !important') && !bpDetailsStyles.includes('.gdl-bp-status-avatar'), 'Activity composer keeps the always-visible hovered text box styling without an injected profile image');
 
 // Community Videos Direct Playback:
 // 1. community.lua fetches videos with subsection 3 and artwork with subsection 4

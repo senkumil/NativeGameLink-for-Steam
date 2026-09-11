@@ -6,6 +6,7 @@ import { findActiveShortcutAppId, findShortcutAppIdByName, getShortcutAppById, r
 import { applyOfficialShortcutIcon, getModernLibraryAssets, invalidateLibraryAssetCaches, refreshModernLibraryAssets, resolveShortcutIdAfterRename, spoofArtwork, type ArtworkApplyResult } from '../library/artwork';
 import { clearShortcutArtworkForAppIdChange } from '../library/artwork-relink-cleanup';
 import { isLegacyGame } from '../library/legacy-games';
+import { getNews } from '../library/news';
 import { invalidateLinkedGameResourceCaches } from '../library/resource-cache';
 import { shortcutRuntimeHost } from './host';
 import { isShortcutDismissed } from './dismissed';
@@ -446,6 +447,7 @@ async function linkShortcutToSteamUnlocked(options: ShortcutLinkOptions): Promis
 			: (appIdChanged ? refreshModernLibraryAssets(steamAppId) : getModernLibraryAssets(steamAppId));
 		void assetWarmup.catch(error =>
 			backendLog(`Library asset prefetch failed for ${steamAppId}: ${String(error)}`));
+		void getNews(steamAppId).catch((): null => null);
 
 		return await LinkOrchestrator.execute({
 			...options,

@@ -4,7 +4,6 @@ import {
 	stopPlaytimeSessionBackend,
 	backendLog,
 } from '../../api/backend';
-import { getPreferences } from '../../core/preferences';
 import { escapeHtml } from '../../core/text';
 import { PLAYBAR_CLASSES } from '../../steam/css';
 import { loc } from '../../steam/localization';
@@ -20,6 +19,7 @@ import { clearPlaytimeStatsCache, fetchPlaytimeStats, getInstantPlaytimeStats, t
 import { formatLastPlayedDate, formatPlaytimeMinutes } from './format';
 import { isDesktopLibraryPlaytimeHydrated, setDesktopPlaytimeField } from './library-home';
 import { findShortcutIdForMappedSteamAppId } from '../../core/mappings';
+import { isShortcutPlaytimeTrackingEnabled } from './playtime-settings';
 
 export { fetchPlaytimeStats } from './service';
 
@@ -260,7 +260,7 @@ export async function injectPlaytimeFallbackStats(
 	isCurrent: () => boolean = () => true,
 ): Promise<void> {
 	if (!isCurrent()) return;
-	if (!getPreferences().trackNonSteamPlaytime) {
+	if (!isShortcutPlaytimeTrackingEnabled(shortcutAppId)) {
 		removePlaytimeFallbackStats(doc);
 		return;
 	}
@@ -284,7 +284,6 @@ export function removePlaytimeFallbackStats(doc: Document): void {
 }
 
 async function pollRunningApps(): Promise<void> {
-	if (!getPreferences().trackNonSteamPlaytime) return;
 	// Keep an active external-game session alive while Steam is hidden, but do
 	// not wake the Steam store every interval when the client is merely idle.
 	if (document.hidden && activeSessions.size === 0) return;
@@ -348,6 +347,7 @@ async function pollRunningApps(): Promise<void> {
 
 	// 4. Start or ping active sessions for all observed running apps
 	for (const [trackedId, observed] of observedRunningApps) {
+		if (!isShortcutPlaytimeTrackingEnabled(trackedId)) continue;
 		currentRunningIds.add(trackedId);
 		const existing = activeSessions.get(trackedId);
 

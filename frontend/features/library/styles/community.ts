@@ -19,6 +19,7 @@ export function ensureCommunityStyles(doc: Document): void {
 		.gdl-community-play-button { position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:68px;height:44px;background:rgba(0,0,0,.74);border-radius:4px;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 10px rgba(0,0,0,.5);transition:background .18s ease,transform .18s ease;pointer-events:none; }
 		.gdl-community-card-video:hover .gdl-community-play-button { background:rgba(26,159,255,.9) !important;transform:translate(-50%,-50%) scale(1.08) !important; }
 		.gdl-community-card img { display:block;max-width:100%; }
+		.gdl-community-card > img { width:100%;aspect-ratio:16/9;object-fit:cover; }
 		.gdl-community-card[hidden] { display:none !important; }
 		.gdl-community-card-title,.gdl-community-card-description,.gdl-community-author { white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere;word-break:normal; }
 		.gdl-community-sentinel { height:2px;width:100%;grid-column:1/-1; }

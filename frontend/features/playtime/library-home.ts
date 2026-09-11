@@ -1,6 +1,7 @@
 import { getMappedShortcuts, getShortcutAppById, getShortcutPlaytimeMinutes } from '../../steam/shortcuts';
 import { fetchPlaytimeStatsBatch, type PlaytimeStats, setInstantPlaytimeStats } from './service';
 import { formatPlaytimeMinutes } from './format';
+import { isShortcutPlaytimeTrackingEnabled } from './playtime-settings';
 import {
 	patchDesktopLibraryHomePlaytimeCards,
 	type DesktopPlaytimeDomSnapshot,
@@ -112,6 +113,7 @@ async function refreshDesktopShortcutPlaytime(
 	shortcut: { id: number; title: string; steamAppId: string },
 	fallback: PlaytimeStats | null,
 ): Promise<DesktopPlaytimeRefreshResult> {
+	if (!isShortcutPlaytimeTrackingEnabled(shortcut.id)) fallback = null;
 	const existing = desktopPlaytimeRefreshes.get(shortcut.id);
 	if (existing) return existing;
 

@@ -35,7 +35,6 @@ export function ensureNativeGameInfoStyles(doc: Document): void {
 			white-space: nowrap !important;
 			overflow: visible !important;
 		}
-
 	`);
 	ensureInfoPanelStyles(doc);
 	ensurePrimaryLinksStyles(doc);

@@ -14,6 +14,7 @@ import {
 	prepareShortcutArtworkForAppIdChange,
 } from '../library/artwork-relink-cleanup';
 import { isLegacyGame } from '../library/legacy-games';
+import { getNews } from '../library/news';
 import { invalidateLinkedGameResourceCaches } from '../library/resource-cache';
 import { clearLinkedGameNote } from './linked-notes';
 import { isShortcutDismissed, undismissShortcut } from './dismissed';
@@ -402,6 +403,7 @@ export class LinkOrchestrator {
 			// Step 2: Validate candidate
 			const { data, canonicalName } = await this.validateCandidate(tx, options);
 			if (!tx.isCurrent()) throw new Error('transaction_aborted');
+			void getNews(steamAppId, undefined, data).catch((): null => null);
 
 			// Step 1: Resolve identity
 			await this.resolveIdentity(tx, options, canonicalName);

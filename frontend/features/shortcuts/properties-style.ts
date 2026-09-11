@@ -1,4 +1,4 @@
-﻿export const SHORTCUT_PROPERTIES_STYLE = `<style class="gdl-properties-layout-style">
+export const SHORTCUT_PROPERTIES_STYLE = `<style class="gdl-properties-layout-style">
 	.gdl-properties-injected, .gdl-properties-injected * { box-sizing: border-box; }
 	.gdl-properties-injected {
 		--gdl-text: #dfe3e6;
@@ -70,11 +70,8 @@
 		min-width: 0;
 	}
 	.gdl-properties-injected .gdl-link-actions {
-		position: sticky;
-		bottom: 0;
-		z-index: 2;
+		position: relative;
 		margin-top: 12px;
-		background: #19232e;
 		grid-template-columns: minmax(0, 1fr);
 	}
 	.gdl-properties-injected .gdl-link-actions .gdl-native-controls {
@@ -233,6 +230,9 @@
 		font-size: 12px;
 		line-height: 1.45;
 		cursor: pointer;
+	}
+	.gdl-properties-injected .gdl-playtime-tracking {
+		display: flex;
 	}
 	.gdl-properties-injected .gdl-native-option input {
 		margin-top: 2px;

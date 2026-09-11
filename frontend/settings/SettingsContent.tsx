@@ -279,66 +279,39 @@ export const SettingsContent = ({ clearAchievementCache, showAchievementToast }:
 			{/* ── Gestión de vinculaciones (Experimental) ──────────────── */}
 			<LinkManagementSection preferences={preferences} onChange={updatePreferences} Toggle={SettingsToggle} />
 
+			{/* ── Modo Big Picture (Experimental) ────────────────────────── */}
+			<div style={{ marginTop: '12px', paddingTop: '10px', borderTop: '1px solid rgba(255,255,255,.08)' }}>
+				<div style={{ padding: '11px 12px', background: 'rgba(229,173,55,.07)', border: '1px solid rgba(229,173,55,.28)', borderRadius: '4px' }}>
+					<div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+						<div style={{ fontWeight: 600, color: '#e5c07b', fontSize: '13px' }}>
+							{gdlText('big_picture_settings_title', 'Big Picture Mode')}
+						</div>
+						<span style={{ padding: '1px 6px', fontSize: '10px', fontWeight: 700, borderRadius: '3px', background: 'rgba(229,173,55,0.2)', color: '#e5c07b', letterSpacing: '0.5px' }}>
+							{gdlText('experimental_badge', 'EXPERIMENTAL')}
+						</span>
+					</div>
+					<div style={{ color: '#9da4ab', fontSize: '11.3px', lineHeight: 1.45, marginBottom: '8px' }}>
+						{gdlText('big_picture_settings_description', 'Configure NativeGameLink behavior in Steam Big Picture mode.')}
+					</div>
+					<div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '4px' }}>
+						<SettingsToggle
+							checked={!preferences.defaultBigPictureMode}
+							onChange={checked => updatePreferences({ defaultBigPictureMode: !checked })}
+							label={gdlText('enable_big_picture_toggle', 'Enable enhanced Big Picture interface')}
+						/>
+						<span style={{ fontSize: '12px', color: '#dcdedf' }}>
+							{gdlText('enable_big_picture_toggle', 'Enable enhanced Big Picture interface')}
+						</span>
+					</div>
+					<div style={{ color: '#8f98a0', fontSize: '11px', marginTop: '2px', marginLeft: '50px' }}>
+						{gdlText('enable_big_picture_description', 'Displays achievements, trading cards, badges, and community hub in Big Picture. Disabled by default to preserve native stability.')}
+					</div>
+				</div>
+			</div>
+
 			{/* ── SteamGridDB Settings ─────────────────────────────────── */}
 			<div style={{ marginTop: '12px', paddingTop: '10px', borderTop: '1px solid rgba(255,255,255,.08)' }}>
 				<SteamGridDbSettings preferences={preferences} onChange={updatePreferences} Toggle={SettingsToggle} />
-			</div>
-
-			{/* ── Seguimiento de tiempo de juego (Fallback) ───────────── */}
-			<div style={{ marginTop: '12px', paddingTop: '10px', borderTop: '1px solid rgba(255,255,255,.08)' }}>
-				<div style={{ marginBottom: '3px', fontWeight: 600, color: '#dcdedf', fontSize: '13px' }}>
-					{gdlText('playtime_tracking_title', 'Playtime tracking (Fallback)')}
-				</div>
-				<div style={{ marginBottom: '6px', color: '#8f98a0', fontSize: '11.5px' }}>
-					{gdlText('playtime_tracking_description', 'Tracks and displays hours played for non-Steam games if your Steam client does not include native tracking.')}
-				</div>
-				<div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '4px' }}>
-					<SettingsToggle checked={preferences.trackNonSteamPlaytime} onChange={checked => updatePreferences({ trackNonSteamPlaytime: checked })} label={gdlText('playtime_tracking_toggle', 'Enable playtime tracking and statistics for external games')} />
-					<span style={{ fontSize: '12px' }}>{gdlText('playtime_tracking_toggle', 'Enable playtime tracking and statistics for external games')}</span>
-				</div>
-			</div>
-
-			{/* ── Política global de logros simulados ─────────────────────── */}
-			<div style={{ marginTop: '12px', paddingTop: '10px', borderTop: '1px solid rgba(255,255,255,.08)' }}>
-				<div style={{ marginBottom: '3px', fontWeight: 600, color: '#dcdedf', fontSize: '13px' }}>
-					{gdlText('simulated_achievements_title', 'Simulated achievements')}
-				</div>
-				<div style={{ marginBottom: '6px', color: '#8f98a0', fontSize: '11.5px' }}>
-					{gdlText('simulated_achievements_description', 'Global defaults for linked games. Per-game settings can override these values.')}
-				</div>
-				<div style={{ display: 'grid', gap: '8px' }}>
-					<div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-						<SettingsToggle checked={preferences.simulateAchievements} onChange={checked => updatePreferences({ simulateAchievements: checked })} label={gdlText('simulate_achievements', 'Enable simulated achievements when no local progress file exists')} />
-						<span style={{ fontSize: '12px' }}>{gdlText('simulate_achievements', 'Enable simulated achievements when no local progress file exists')}</span>
-					</div>
-					<div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-						<SettingsToggle checked={preferences.unlockOnlineAchievements} onChange={checked => updatePreferences({ unlockOnlineAchievements: checked })} label={gdlText('unlock_online_achievements_toggle', 'Unlock only achievements identified as online or multiplayer')} />
-						<span style={{ fontSize: '12px' }}>{gdlText('unlock_online_achievements_toggle', 'Unlock only achievements identified as online or multiplayer')}</span>
-					</div>
-				</div>
-			</div>
-
-			{/* ── Modo Big Picture ───────────────────────────────────────── */}
-			<div style={{ marginTop: '12px', paddingTop: '10px', borderTop: '1px solid rgba(255,255,255,.08)' }}>
-				<div style={{ marginBottom: '3px', fontWeight: 600, color: '#dcdedf', fontSize: '13px' }}>
-					{gdlText('big_picture_settings_title', 'Big Picture Mode')}
-				</div>
-				<div style={{ marginBottom: '6px', color: '#8f98a0', fontSize: '11.5px' }}>
-					{gdlText('big_picture_settings_description', 'Configure NativeGameLink behavior in Steam Big Picture mode.')}
-				</div>
-				<div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '4px' }}>
-					<SettingsToggle
-						checked={preferences.defaultBigPictureMode}
-						onChange={checked => updatePreferences({ defaultBigPictureMode: checked })}
-						label={gdlText('default_big_picture_toggle', 'Keep Big Picture default (only artworks, playtime, last session, and controller)')}
-					/>
-					<span style={{ fontSize: '12px' }}>
-						{gdlText('default_big_picture_toggle', 'Keep Big Picture default (only artworks, playtime, last session, and controller)')}
-					</span>
-				</div>
-				<div style={{ color: '#8f98a0', fontSize: '11px', marginTop: '2px', marginLeft: '50px' }}>
-					{gdlText('default_big_picture_description', "Maintains Steam's original Big Picture interface for non-Steam games, preserving only artworks, last played session, playtime, and the connected controller indicator in the playbar.")}
-				</div>
 			</div>
 
 			<FactoryResetSection onResetComplete={() => window.dispatchEvent(new Event('gdl:shortcuts-changed'))} />

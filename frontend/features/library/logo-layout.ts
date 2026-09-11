@@ -16,11 +16,15 @@ export async function readLogoLayout(shortcutAppId: number): Promise<{ logo: str
 	return { logo, hero, key: layoutFingerprint(logo, hero) };
 }
 
-/** Height sets the preferred size; the whole valid region is the safety width cap.
- * Fractional width caps shrink square logos when only the sidebar moves. */
+/**
+ * Height and width caps prevent the logo from encroaching onto character
+ * artwork on the right side of the Steam library header while scaling fluidly.
+ */
 export function automaticLogoBox(width: number, height: number): { nWidthPct: number; nHeightPct: number } {
 	const ratio = width / Math.max(1, height);
-	return { nWidthPct: 100, nHeightPct: ratio >= 2.5 ? 45 : 65 };
+	if (ratio >= 2.5) return { nWidthPct: 52, nHeightPct: 45 };
+	if (ratio >= 1.4) return { nWidthPct: 48, nHeightPct: 52 };
+	return { nWidthPct: 40, nHeightPct: 58 };
 }
 
 export async function prepareAutomaticLogo(dataUrl: string): Promise<{ logo: string; nWidthPct: number; nHeightPct: number }> {

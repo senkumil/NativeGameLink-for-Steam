@@ -48,6 +48,7 @@ local LAZY_MODULES = {
     shortcut_detection_tracking = "shortcut_detection_tracking",
     shortcut_detection_pe = "shortcut_detection_pe",
     shortcut_detection_local = "shortcut_detection_local",
+    shortcut_detection_catalog = "shortcut_detection_catalog",
     mappings = "mappings",
     store = "store",
     shortcut_detection = "shortcut_detection",
@@ -139,6 +140,7 @@ function clear_artwork_except_icon(shortcut_app_id) return module("artwork").cle
 function clear_artwork_slots(request_json) return module("artwork").clear_artwork_slots(request_json) end
 function clear_all_linked_artworks() return module("artwork").clear_all_linked_artworks() end
 function read_custom_logo_position(request_json) return module("artwork").read_custom_logo_position(request_json) end
+function save_custom_logo_position(request_json) return module("artwork").save_custom_logo_position(request_json) end
 function read_logo_layout_images(request) return module("artwork").read_logo_layout_images(request) end
 function get_achievement_base_path() return module("achievements").get_achievement_base_path() end
 function set_achievement_base_path(path) return module("achievements").set_achievement_base_path(path) end

@@ -14,7 +14,7 @@ local PARTNER_UNAVAILABLE_CACHE_LIMIT = 64
 
 local function fetch_news_json(appid, lang)
     local url = "https://api.steampowered.com/ISteamNews/GetNewsForApp/v2/?appid="
-        .. appid .. "&count=50&maxlength=900&format=json&feeds=steam_community_announcements"
+        .. appid .. "&count=50&maxlength=900&format=json&feeds=steam_community_announcements,steam_release"
     if lang ~= "" then url = url .. "&l=" .. lang end
     local ok_http, res = pcall(http.get, url, {
         headers = { ["Accept"] = "application/json", ["User-Agent"] = USER_AGENT },
@@ -41,6 +41,7 @@ local function fetch_news_json(appid, lang)
         local feedname = tostring(it.feedname or "")
         local is_steam = feedname == "steam_community_announcements"
             or feedname == "steam_store_release_metadata"
+            or feedname == "steam_release"
             or feedname == ""
         if official_url and is_steam then
             table.insert(filtered, it)
@@ -99,14 +100,14 @@ function M.fetch_news(steam_app_id, language)
     local source = "steam_news_web_api"
 
     local is_available = #news > 0
-    return cjson.encode({
+    return cjson.encode(util.sanitize_utf8_tree({
         items = news,
         available = is_available,
         unavailable = not is_available and not transient_error,
         transient_error = transient_error and not is_available,
         source = source,
         historical_enrichment = false,
-    })
+    }))
 end
 
 -- ── Partner events (the native news source: cover images, event types,
@@ -153,17 +154,20 @@ local function scrape_partner_events(appid, lang, max)
     local marker = 'data-initialEvents="'
     local a = res.body:find(marker, 1, true) or res.body:find('data-initialevents="', 1, true)
     if not a then
-        return {}, false, true
+        mark_unavailable()
+        return {}, true, false
     end
     local vstart = a + #marker
     local vend = res.body:find('"', vstart, true)
     if not vend then
-        return {}, false, true
+        mark_unavailable()
+        return {}, true, false
     end
 
     local ok2, body = pcall(cjson.decode, html_unescape(res.body:sub(vstart, vend - 1)))
     if not ok2 or type(body) ~= "table" or type(body.events) ~= "table" then
-        return {}, false, true
+        mark_unavailable()
+        return {}, true, false
     end
 
     local items = {}
@@ -184,13 +188,13 @@ function M.fetch_partner_events(steam_app_id, language)
     local lang = safe_language:gsub("[^%w_]", "")
     if lang == "" then lang = "english" end
     local items, unavailable, transient_error = scrape_partner_events(appid, lang, 50)
-    return cjson.encode({
+    return cjson.encode(util.sanitize_utf8_tree({
         items = items,
         available = #items > 0,
         unavailable = unavailable == true,
         transient_error = transient_error == true,
         source = "steam_store_partner_events",
-    })
+    }))
 end
 return M
 end

@@ -294,6 +294,7 @@ function readProjectFile(relPath) {
 		{ path: 'backend/lib/shortcut_detection_text.lua', max: 900 },
 		{ path: 'backend/lib/shortcut_detection_pe.lua', max: 900 },
 		{ path: 'backend/lib/shortcut_detection_tracking.lua', max: 900 },
+		{ path: 'backend/lib/shortcut_detection_catalog.lua', max: 900 },
 		{ path: 'backend/main.lua', max: 250 },
 	];
 	for (const { path: relPath, max } of backendFiles) {

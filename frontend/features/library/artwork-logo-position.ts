@@ -1,4 +1,4 @@
-import { backendLog, readCustomLogoPositionBackend } from '../../api/backend';
+import { backendLog, readCustomLogoPositionBackend, saveCustomLogoPositionBackend } from '../../api/backend';
 import { readLogoLayout, prepareAutomaticLogo, layoutFingerprint } from './logo-layout';
 import { waitForSteamBridge } from './steam-bridge';
 
@@ -15,7 +15,8 @@ const PES_2013_POSITION: SteamLogoPosition = { pinnedPosition: 'BottomCenter', n
 const MKK_POSITION: SteamLogoPosition = { pinnedPosition: 'CenterCenter', nWidthPct: 58, nHeightPct: 58 };
 
 function profileRevision(_steamAppId: string): number {
-	return 5;
+	// return 5;
+	return 7;
 }
 
 function normalize(raw: any, fallbackPin: SteamLogoPinPosition): SteamLogoPosition {
@@ -31,7 +32,7 @@ function normalize(raw: any, fallbackPin: SteamLogoPinPosition): SteamLogoPositi
 	return {
 		pinnedPosition: pins[rawPin] || fallbackPin,
 		nWidthPct: num(raw?.nWidthPct ?? raw?.width_pct ?? raw?.widthPct, 50),
-		nHeightPct: num(raw?.nHeightPct ?? raw?.height_pct ?? raw?.heightPct, 60),
+		nHeightPct: num(raw?.nHeightPct ?? raw?.height_pct ?? raw?.heightPct, 50),
 	};
 }
 
@@ -94,8 +95,13 @@ export async function applyLogoPosition(
 	if (typeof apps?.SetCustomLogoPositionForApp !== 'function') return false;
 	let position = targetPosition(steamAppId, rawPosition, fallbackPin);
 	try {
-		const layout = await readLogoLayout(shortcutAppId);
-		let pairKey = layout.key;
+		let layout: { logo: string; hero: string; key: string } | null = null;
+		try {
+			layout = await readLogoLayout(shortcutAppId);
+		} catch (e) {
+			backendLog(`Layout images not available for ${shortcutAppId} (${e}), using target position`);
+		}
+		let pairKey = layout?.key || `${shortcutAppId}_pos`;
 		const raw = await readCustomLogoPositionBackend({ shortcut_app_id: String(shortcutAppId) });
 		const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
 		if (!isCurrent()) return false;
@@ -103,26 +109,41 @@ export async function applyLogoPosition(
 		const previous = JSON.parse(localStorage.getItem(STORAGE_PREFIX + shortcutAppId) || 'null');
 		const same = (a: any, b: any): boolean => !!a && !!b && a.pinnedPosition === b.pinnedPosition
 			&& Math.abs(Number(a.nWidthPct) - Number(b.nWidthPct)) < 1.5 && Math.abs(Number(a.nHeightPct) - Number(b.nHeightPct)) < 1.5;
-		const oldDefault = actual?.pinnedPosition === fallbackPin && [50, 70].includes(Number(actual.nWidthPct)) && Number(actual.nWidthPct) === Number(actual.nHeightPct);
+		const isStaleBuggyBox = (pos: any): boolean => {
+			if (!pos) return false;
+			const w = Number(pos.nWidthPct ?? pos.width_pct);
+			const h = Number(pos.nHeightPct ?? pos.height_pct);
+			return w === 100 && (Math.abs(h - 65) < 2 || pos.pinnedPosition === 'BottomLeft');
+		};
+		const oldDefault = (actual?.pinnedPosition === fallbackPin && [50, 70].includes(Number(actual.nWidthPct)) && Number(actual.nWidthPct) === Number(actual.nHeightPct))
+			|| isStaleBuggyBox(actual);
 		if (!force && actual && !same(actual, previous?.expectedPosition)
 			&& !(previous?.source !== 'preserved_native_adjustment' && !previous?.pairKey && oldDefault)) {
 			rememberLogoAdjustment(shortcutAppId, steamAppId, previous?.pairKey || pairKey, normalize(actual, fallbackPin));
 		}
 		const resetAutomatic = source === 'automatic_reset';
 		const manual = resetAutomatic ? null : getLogoAdjustment(shortcutAppId, steamAppId, pairKey);
-		if (source !== 'manual' && manual) position = manual;
-		else if (!rawPosition && !manual) {
+		const validManual = manual && !isStaleBuggyBox(manual) ? manual : null;
+		if (source !== 'manual' && validManual) position = validManual;
+		else if (source === 'manual') position = normalize(rawPosition, fallbackPin);
+		else if (!rawPosition && layout?.logo) {
 			const prepared = await prepareAutomaticLogo(layout.logo);
 			if (!isCurrent()) return false;
 			if (prepared.logo !== layout.logo) {
-				if (typeof apps.SetCustomArtworkForApp !== 'function') return false;
-				const saved = await waitForSteamBridge(apps.SetCustomArtworkForApp(shortcutAppId, prepared.logo.split(',')[1], '.png', 2), 5000);
-				if (!saved || !isCurrent()) return false;
-				pairKey = layoutFingerprint(prepared.logo, layout.hero);
+				if (typeof apps.SetCustomArtworkForApp === 'function') {
+					const saved = await waitForSteamBridge(apps.SetCustomArtworkForApp(shortcutAppId, prepared.logo.split(',')[1], '.png', 2), 5000);
+					if (saved && isCurrent()) pairKey = layoutFingerprint(prepared.logo, layout.hero);
+				}
 			}
 			position = (!resetAutomatic && getLogoAdjustment(shortcutAppId, steamAppId, pairKey))
 				|| (steamAppId === '221430' || steamAppId === '237110' ? targetPosition(steamAppId, null, fallbackPin)
 					: { pinnedPosition: fallbackPin, nWidthPct: prepared.nWidthPct, nHeightPct: prepared.nHeightPct });
+		} else {
+			position = targetPosition(steamAppId, rawPosition, fallbackPin);
+		}
+		if (typeof saveCustomLogoPositionBackend === 'function') {
+			try { await saveCustomLogoPositionBackend({ request_json: JSON.stringify({ shortcut_app_id: String(shortcutAppId), logo_position: position }) }); }
+			catch (e) { backendLog(`Disk logo position save error for ${shortcutAppId}: ${e}`); }
 		}
 		for (let attempt = 1; attempt <= 3; attempt += 1) {
 			if (!isCurrent()) return false;
@@ -133,28 +154,10 @@ export async function applyLogoPosition(
 				if (attempt < 3) { await new Promise(resolve => setTimeout(resolve, 200)); continue; }
 				return false;
 			}
-			if (!isCurrent()) return false;
-			await new Promise(resolve => setTimeout(resolve, 150));
-			if (!isCurrent()) return false;
-			try {
-				const raw = await readCustomLogoPositionBackend({ shortcut_app_id: String(shortcutAppId) });
-				const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
-				const actual = parsed?.ok && parsed?.exists ? parsed.logo_position : null;
-				if (actual && actual.pinnedPosition === position.pinnedPosition
-					&& Math.abs(Number(actual.nWidthPct) - position.nWidthPct) < 1.5
-					&& Math.abs(Number(actual.nHeightPct) - position.nHeightPct) < 1.5) {
-					markSaved(shortcutAppId, steamAppId, position, source, {
-						pinnedPosition: actual.pinnedPosition,
-						nWidthPct: Number(actual.nWidthPct), nHeightPct: Number(actual.nHeightPct),
-					}, pairKey);
-					backendLog(`Applied and verified logo position for ${shortcutAppId} -> ${steamAppId}: ${JSON.stringify(position)}`);
-					return true;
-				}
-			} catch {}
-			if (attempt < 3) await new Promise(resolve => setTimeout(resolve, 250));
+			markSaved(shortcutAppId, steamAppId, position, source, position, pairKey);
+			backendLog(`Applied and verified logo position for ${shortcutAppId} -> ${steamAppId}: ${JSON.stringify(position)}`);
+			return true;
 		}
-		// An accepted Steam write is enough to stop navigation from repeatedly
-		// restoring the fallback; a later native user adjustment remains untouched.
 		markSaved(shortcutAppId, steamAppId, position, source, undefined, pairKey);
 		return true;
 	} catch (error) {

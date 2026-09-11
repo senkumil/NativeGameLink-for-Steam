@@ -35,7 +35,7 @@ export const DEFAULT_PREFERENCES: GdlPreferences = {
 	trackNonSteamPlaytime: true,
 	autoCommunityArtwork: true,
 	steamGridDbApiKey: DEFAULT_STEAMGRIDDB_API_KEY,
-	defaultBigPictureMode: false,
+	defaultBigPictureMode: true,
 };
 
 function sanitizePreferences(value: unknown): GdlPreferences {
@@ -51,7 +51,7 @@ function sanitizePreferences(value: unknown): GdlPreferences {
 		// Stored locally only. It is never logged or included in diagnostics.
 		steamGridDbApiKey: typeof record.steamGridDbApiKey === 'string' && record.steamGridDbApiKey.trim()
 			? record.steamGridDbApiKey.trim().slice(0, 160) : DEFAULT_STEAMGRIDDB_API_KEY,
-		defaultBigPictureMode: record.defaultBigPictureMode === true,
+		defaultBigPictureMode: record.defaultBigPictureMode !== false,
 	};
 }
 

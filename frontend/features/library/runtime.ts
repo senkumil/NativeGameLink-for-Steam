@@ -367,12 +367,13 @@ export async function tryInjectLibraryData(doc: Document): Promise<void> {
 		if (nativeInfo?.key === steamAppId) ensureNativeGameChrome(doc, nativeInfo);
 		if (!doc.getElementById('gdl-playbar-achievements')) {
 			const language = steamLanguageSync() || 'english';
-			finalizeAchievements(doc, steamAppId,
-				gameDataCache[gameDataLanguageKey(steamAppId, language)]?.achievements?.total || 0, generation);
+			finalizeAchievements(doc, steamAppId, gameDataCache[gameDataLanguageKey(steamAppId, language)]?.achievements?.total || 0, generation);
 		}
 		const numId = Number(resolvedShortcutAppId || 0);
-		if (numId >= 2147483648) void injectPlaytimeFallbackStats(doc, numId, gameTitle, steamAppId,
-			() => isCurrentRender(doc, steamAppId, generation));
+		if (numId >= 2147483648) void injectPlaytimeFallbackStats(doc, numId, gameTitle, steamAppId, () => isCurrentRender(doc, steamAppId, generation));
+		const language = String(steamLanguageSync() || 'english').toLowerCase();
+		const cachedData = getCachedGameData(steamAppId, language)?.data || null;
+		if (cachedData) hydrateLinkedRouteResources(doc, steamAppId, resolvedShortcutAppId, language, () => isCurrentRender(doc, steamAppId, generation), cachedData);
 		return;
 	}
 

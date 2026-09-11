@@ -379,9 +379,12 @@ export async function populateActivityFeed(
 	guard?: ActivityHydrationGuard,
 ): Promise<void> {
 	if (!doc || !steamAppId) return;
-	const isCurrent = (): boolean => guard
-		? guard.isCurrent()
-		: socialRuntimeHost().getCurrentInjectedAppId() === steamAppId;
+	const isCurrent = (): boolean => {
+		if (guard?.isCurrent()) return true;
+		const currentAppId = socialRuntimeHost().getCurrentInjectedAppId();
+		const docAppId = doc.getElementById('gdl-library-injected')?.dataset?.gdlSteamAppId;
+		return (currentAppId === steamAppId || docAppId === steamAppId);
+	};
 	const shortcutAppId = guard?.shortcutAppId ?? socialRuntimeHost().getCurrentInjectedShortcutAppId();
 	const numericAppId = Number.parseInt(steamAppId, 10);
 	if (!Number.isFinite(numericAppId) || numericAppId <= 0) return;

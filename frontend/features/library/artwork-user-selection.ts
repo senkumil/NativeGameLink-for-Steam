@@ -1,4 +1,5 @@
-import { applyLogoPosition } from './artwork-logo-position';
+import { applyLogoPosition, type SteamLogoPinPosition } from './artwork-logo-position';
+import { getModernLibraryAssets } from './library-assets';
 import { backendLog, saveShortcutArtworkBackend, saveShortcutIconBackend } from '../../api/backend';
 import {
 	imageUrlToBase64,
@@ -134,7 +135,11 @@ export async function applyCommunityArtworkSelection(
 	if (complete) {
 		saveCommunityArtworkSelection(targetAppId, steamAppId, selection);
 		recordUserArtworkApplication(targetAppId, steamAppId, successfulSlots, selection);
-		if (targetAppId >= 2147483648 && (selection.logo || selection.hero)) await applyLogoPosition(targetAppId, steamAppId, null, false, 'BottomLeft', 'community', () => true);
+		if (targetAppId >= 2147483648 && (selection.logo || selection.hero)) {
+			const modern = await getModernLibraryAssets(steamAppId).catch((): null => null);
+			const officialPin = ((modern?.logo_position as any)?.pinned_position || (modern?.logo_position as any)?.pinnedPosition || 'BottomLeft') as SteamLogoPinPosition;
+			await applyLogoPosition(targetAppId, steamAppId, modern?.logo_position || null, false, officialPin, 'community', () => true);
+		}
 		try { window.dispatchEvent(new CustomEvent('gdl:artwork-changed', { detail: { shortcutAppId: targetAppId, steamAppId, user_action: true } })); } catch {}
 	}
 	return { complete, slots: successfulSlots, missing: missingSlots, communitySlots: complete ? [...chosenSlots] : [] };

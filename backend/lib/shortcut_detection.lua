@@ -763,17 +763,10 @@ function M.detect_game_candidates(request_json)
                 end
             end
             local comp = detection_text.compare_title_identities(request.title, candidate.name)
-            if comp.year_match and not (candidate._reason_set and candidate._reason_set["year_match"]) then
-                candidate.score = candidate.score + 18; detection_add_reason(candidate, "year_match")
-            elseif comp.year_mismatch and not (candidate._reason_set and candidate._reason_set["year_mismatch"]) then
-                candidate.score = candidate.score - 25; detection_add_reason(candidate, "year_mismatch")
-            end
-            if comp.sequel_mismatch and not (candidate._reason_set and candidate._reason_set["sequel_mismatch"]) then
-                candidate.score = candidate.score - 35; detection_add_reason(candidate, "sequel_mismatch")
-            end
-            if comp.remake_mismatch and not (candidate._reason_set and candidate._reason_set["remake_mismatch"]) then
-                candidate.score = candidate.score - 30; detection_add_reason(candidate, "remake_mismatch")
-            end
+            if comp.year_match and not (candidate._reason_set and candidate._reason_set["year_match"]) then candidate.score = candidate.score + 18; detection_add_reason(candidate, "year_match")
+            elseif comp.year_mismatch and not (candidate._reason_set and candidate._reason_set["year_mismatch"]) then candidate.score = candidate.score - 25; detection_add_reason(candidate, "year_mismatch") end
+            if comp.sequel_mismatch and not (candidate._reason_set and candidate._reason_set["sequel_mismatch"]) then candidate.score = candidate.score - 35; detection_add_reason(candidate, "sequel_mismatch") end
+            if comp.remake_mismatch and not (candidate._reason_set and candidate._reason_set["remake_mismatch"]) then candidate.score = candidate.score - 30; detection_add_reason(candidate, "remake_mismatch") end
             if comp.is_collision then candidate.identity_collision = true; detection_add_reason(candidate, "identity_collision") end
         end
         if (candidate.image == "" or candidate.image:find("header.jpg")) and common.header_image then
@@ -879,6 +872,13 @@ function M.detect_game_candidates(request_json)
                 end
             end
         end
+    end
+    if #output == 0 and deps.shortcut_detection_catalog and deps.shortcut_detection_catalog.resolve_catalog_candidates then
+        local cat_cands = deps.shortcut_detection_catalog.resolve_catalog_candidates(request, {
+            title = title_cleaned, pe_product = clean_pe_product, pe_desc = clean_pe_desc,
+            exe_stem = exe_stem, language = language, launcher = launcher, generic_launcher = generic_launcher,
+        }, { direct_result = detection_direct_result, fetch_appdetails = detection_fetch_appdetails, fetch_appinfo = detection_fetch_appinfo })
+        for _, cc in ipairs(cat_cands or {}) do table.insert(output, cc) end
     end
     local result = {
         candidates = output, launcher_detected = launcher, generic_launcher = generic_launcher,

@@ -141,10 +141,20 @@ export function isNewsItemLanguageCompatible(item: Partial<NewsItem>, preferredL
 	const isRussian = normLang === 'russian' || normLang === 'ru';
 	const isCjk = normLang === 'schinese' || normLang === 'tchinese' || normLang === 'zh' || normLang === 'japanese' || normLang === 'ja' || normLang === 'koreana' || normLang === 'korean' || normLang === 'ko';
 	const isArabic = normLang === 'arabic' || normLang === 'ar';
-	const sample = `${String(item.title || '')} ${String(item.contents || '')}`;
-	if (!isRussian && /[\u0400-\u04FF\u0500-\u052F\u2DE0-\u2DFF\uA640-\uA69F]/.test(sample)) return false;
-	if (!isCjk && /[\u4E00-\u9FFF\u3040-\u30FF\uAC00-\uD7AF]/.test(sample)) return false;
-	if (!isArabic && /[\u0600-\u06FF]/.test(sample)) return false;
+	const title = String(item.title || '');
+	const sample = `${title} ${String(item.contents || '')}`;
+	if (!isRussian) {
+		const cyrillic = sample.match(/[\u0400-\u04FF\u0500-\u052F\u2DE0-\u2DFF\uA640-\uA69F]/g);
+		if (cyrillic && (cyrillic.length > 8 || /[\u0400-\u04FF\u0500-\u052F\u2DE0-\u2DFF\uA640-\uA69F]{4,}/.test(title))) return false;
+	}
+	if (!isCjk) {
+		const cjk = sample.match(/[\u4E00-\u9FFF\u3040-\u30FF\uAC00-\uD7AF]/g);
+		if (cjk && (cjk.length > 8 || /[\u4E00-\u9FFF\u3040-\u30FF\uAC00-\uD7AF]{4,}/.test(title))) return false;
+	}
+	if (!isArabic) {
+		const arabic = sample.match(/[\u0600-\u06FF]/g);
+		if (arabic && (arabic.length > 8 || /[\u0600-\u06FF]{4,}/.test(title))) return false;
+	}
 	return true;
 }
 
@@ -275,7 +285,7 @@ export async function getNews(steamAppId: string, requestedLanguage?: string, me
 			...(Array.isArray(englishAnnouncements.items) ? englishAnnouncements.items : []),
 		].filter(item => {
 			const feedname = String(item?.feedname || '').toLowerCase();
-			if (feedname && feedname !== 'steam_community_announcements' && feedname !== 'steam_store_release_metadata') {
+			if (feedname && feedname !== 'steam_community_announcements' && feedname !== 'steam_store_release_metadata' && feedname !== 'steam_release') {
 				return false;
 			}
 			try {
@@ -299,7 +309,9 @@ export async function getNews(steamAppId: string, requestedLanguage?: string, me
 				})),
 				...officialAnnouncements.map((item: any) => {
 					const feedLabel = String(item.feedlabel || '');
+					const feedName = String(item.feedname || '').toLowerCase();
 					const historicalCommunity = Boolean(item.historical_community) || /^Steam Community(?:\s|·|$)/i.test(feedLabel);
+					const isReleaseFeed = feedName === 'steam_release' || feedName === 'steam_store_release_metadata';
 					return {
 						...item,
 						gid: String(item.gid || ''),
@@ -308,7 +320,7 @@ export async function getNews(steamAppId: string, requestedLanguage?: string, me
 						date: Number(item.date || 0),
 						event_type: historicalCommunity
 							? 0
-							: (Number(item.event_type || 0) || inferAnnouncementEventType(item.title || '', item.contents || '')),
+							: (isReleaseFeed ? 10 : (Number(item.event_type || 0) || inferAnnouncementEventType(item.title || '', item.contents || ''))),
 						image: item.image || newsImageFromContents(item.contents || ''),
 					};
 				}),

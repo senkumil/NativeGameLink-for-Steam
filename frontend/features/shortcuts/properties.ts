@@ -13,6 +13,7 @@ import { unlinkShortcutFromSteam } from './unlinking';
 import { undismissShortcut } from './dismissed';
 import { rememberedShortcutSteamAppId } from './link-history';
 import { bindShortcutAchievementSettings, shortcutAchievementSettingsHtml } from './achievement-properties';
+import { bindShortcutPlaytimeProperties, shortcutPlaytimePropertiesHtml } from './playtime-properties';
 import { tryInjectNativePropertiesField } from './native-properties';
 import { tryInjectCustomizationArtwork } from './customization-artwork';
 import { cancelPendingLinkJobs, enqueueLinkJob, hasPendingLinkJob, stageLinkJobForRecovery } from './link-job-queue';
@@ -244,6 +245,7 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 				</div>
 			</div>
 			<div class="gdl-status gdl-native-status" aria-live="polite"></div>
+			${shortcutPlaytimePropertiesHtml()}
 			<label class="gdl-skip-launcher gdl-native-option">
 				<input class="gdl-skip-launcher-input" type="checkbox" />
 				<span><strong>${escapeHtml(gdlText('skip_launcher', 'Try to skip the launcher'))}</strong><br />${escapeHtml(gdlText('skip_launcher_help', 'Adds -nolauncher while preserving your current launch options. Enable it only if this game supports that argument.'))}</span>
@@ -272,26 +274,14 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 	const trackingExecutableCopy = section.querySelector('.gdl-tracking-executable-copy') as HTMLElement;
 	let detectionContext: ShortcutDetectionContext | null = null;
 	let achievementBinding: { sync: (appId?: string) => void } | null = null;
+	let playtimeBinding: { sync: (shortcutAppId?: string | number) => void } | null = null;
 	let currentCandidates: ShortcutDetectionCandidate[] = [];
-	let linkedPreviewCandidate: ShortcutDetectionCandidate | null = initialAppId ? {
-		name: initialGameName,
-		appid: initialAppId,
-		image: initialHeaderUrl,
-		score: 100,
-		confidence: 'exact',
-	} : null;
+	let linkedPreviewCandidate: ShortcutDetectionCandidate | null = initialAppId ? { name: initialGameName, appid: initialAppId, image: initialHeaderUrl, score: 100, confidence: 'exact' } : null;
 	let suggestionUserInteracted = false;
 	let targetInputUserEdited = false;
 	let propertyActionBusy: 'link' | 'unlink' | null = null;
-	// A properties window stays open while several asynchronous operations finish.
-	// Keep a revision for the requested target so a late status from a previous
-	// AppID can never describe the AppID the user has just entered.
 	let targetRevision = 0;
-	const clearTargetStatus = (): void => {
-		targetRevision += 1;
-		statusEl.textContent = '';
-		statusEl.style.color = '#8f98a0';
-	};
+	const clearTargetStatus = (): void => { targetRevision += 1; statusEl.textContent = ''; statusEl.style.color = '#8f98a0'; };
 
 	const candidateForPreview = (candidates: ShortcutDetectionCandidate[], selectedAppId: string): ShortcutDetectionCandidate | null => {
 		const exact = candidates.find(candidate => candidate.appid === selectedAppId);
@@ -542,6 +532,7 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 		currentLinked = (mapped && /^\d+$/.test(mapped)) ? mapped : '';
 		updateButtonStates();
 		achievementBinding?.sync();
+		playtimeBinding?.sync(shortcutId);
 		if (currentLinked) {
 			const isPending = hasPendingLinkJob(shortcutId, gameTitle);
 			if (isPending) {
@@ -579,6 +570,10 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 		shortcutAppId: () => managedShortcutId ? String(managedShortcutId) : '',
 		steamAppId: () => /^\d+$/.test(input.value.trim()) ? input.value.trim() : currentLinked,
 		gameTitle: () => gameTitle || '',
+	});
+	playtimeBinding = bindShortcutPlaytimeProperties({
+		section,
+		getShortcutAppId: () => managedShortcutId || Number(findActiveShortcutAppId(doc, gameTitle) || 0) || findShortcutAppIdByName(gameTitle),
 	});
 	if (managedShortcutId && input && autoSelect && autoTitle) {
 		if (!initialAppId) {

@@ -6,6 +6,7 @@ import { gdlText, loc, steamLanguageSync } from '../../steam/localization';
 import { ensureControllerStyles } from './styles/controller';
 import { buildNativeSidebarSection, type NativeLibraryLayout } from './layout';
 import { getSteamStore } from '../../steam/modules/SteamModuleResolver';
+import { steamWebpackRuntime } from '../../steam/modules/SteamWebpackRuntime';
 import {
 	NATIVE_SVG_XBOX,
 	NATIVE_SVG_XBOX_PARTIAL,
@@ -63,6 +64,14 @@ function getSteamControllerStore(doc?: Document): any {
 			if (w?.ControllerStore) return w.ControllerStore;
 			if (w?.controllerStore) return w.controllerStore;
 		}
+		const mods = steamWebpackRuntime.getAllModules();
+		for (const m of mods) {
+			const exp = m?.exports;
+			if (!exp) continue;
+			if (typeof exp.GetControllers === 'function') return exp;
+			if (typeof exp.sY?.GetControllers === 'function') return exp.sY;
+			if (typeof exp.default?.GetControllers === 'function') return exp.default;
+		}
 	} catch {}
 	return null;
 }
@@ -106,8 +115,9 @@ function getConnectedControllers(doc?: Document): Array<{ name: string; type: Co
 	try {
 		const store = getSteamControllerStore(doc);
 		if (store) {
-			const list = typeof store.GetControllers === 'function' ? store.GetControllers() : store.m_controllerList;
-			if (Array.isArray(list)) {
+			const rawList = typeof store.GetControllers === 'function' ? store.GetControllers() : store.m_controllerList;
+			if (rawList !== null && rawList !== undefined) {
+				const list = Array.isArray(rawList) ? rawList : [];
 				const candidate = list.find(isSteamControllerConnected);
 				if (candidate) {
 					// ensure candidate is referenced
@@ -121,6 +131,7 @@ function getConnectedControllers(doc?: Document): Array<{ name: string; type: Co
 						result.push({ name: ctrl?.strName || 'Controller', type });
 					}
 				}
+				return result;
 			}
 		}
 	} catch {}
@@ -130,12 +141,13 @@ function getConnectedControllers(doc?: Document): Array<{ name: string; type: Co
 		const win = doc?.defaultView || (typeof window !== 'undefined' ? window : null);
 		const steamInput = (win as any)?.SteamClient?.Input || (typeof window !== 'undefined' ? (window as any).SteamClient?.Input : null);
 		if (steamInput) {
-			const list = (typeof steamInput.GetControllers === 'function' ? steamInput.GetControllers() : null)
+			const rawList = (typeof steamInput.GetControllers === 'function' ? steamInput.GetControllers() : null)
 				|| (typeof steamInput.GetConnectedControllers === 'function' ? steamInput.GetConnectedControllers() : null)
 				|| steamInput.m_rgControllers
 				|| steamInput.m_controllerList
 				|| steamInput.m_controllers;
-			if (Array.isArray(list)) {
+			if (rawList !== null && rawList !== undefined) {
+				const list = Array.isArray(rawList) ? rawList : [];
 				for (const ctrl of list) {
 					if (!isSteamControllerConnected(ctrl)) continue;
 					const eType = Number(ctrl?.eControllerType || 0);
@@ -145,11 +157,12 @@ function getConnectedControllers(doc?: Document): Array<{ name: string; type: Co
 						result.push({ name: ctrl?.strName || 'Controller', type });
 					}
 				}
+				return result;
 			}
 		}
 	} catch {}
 
-	// 3. Web Gamepad API (direct Chromium / hardware detection)
+	// 3. Web Gamepad API (direct Chromium fallback only when Steam services are unavailable)
 	try {
 		const win = doc?.defaultView || (typeof window !== 'undefined' ? window : null);
 		const navList = [
@@ -164,6 +177,11 @@ function getConnectedControllers(doc?: Document): Array<{ name: string; type: Co
 			for (let i = 0; i < gamepads.length; i++) {
 				const gp = gamepads[i];
 				if (!gp || gp.connected !== true) continue;
+				// Filter out phantom/ghost Bluetooth gamepads in Chromium (inactive cached handles)
+				const hasActivity = (typeof gp.timestamp === 'number' && gp.timestamp > 0)
+					|| gp.buttons?.some((b: any) => b?.pressed || b?.value > 0)
+					|| gp.axes?.some((a: any) => Math.abs(a) > 0.1);
+				if (!hasActivity) continue;
 				const type = classifyGamepadId(gp.id || '');
 				if (!seenTypes.has(type)) {
 					seenTypes.add(type);

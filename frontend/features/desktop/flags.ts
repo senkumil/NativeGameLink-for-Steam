@@ -3,8 +3,10 @@ export const desktopFeatureFlags = {
 	desktopNativeUIEnabled: true,
 	/** Use native Steam Desktop Achievement React component */
 	desktopNativeAchievements: true,
-	/** Use native Steam Desktop Playbar components (future phase) */
+	/** Use native Steam Desktop Playbar components */
 	desktopNativePlaybar: false,
+	/** Use native Steam Desktop Links Bar components */
+	desktopNativeLinks: false,
 	/** Use native Steam Desktop Hero component (future phase) */
 	desktopNativeHero: false,
 	/** Use native Steam Desktop Activity feed (future phase) */

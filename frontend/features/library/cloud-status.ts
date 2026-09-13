@@ -58,6 +58,7 @@ export function ensureCloudStatus(doc: Document): void {
 		}
 		let reference = elementsWithCssModuleClass(stats, classes.LastPlayed).find(element => !element.closest('[data-gdl-cloud-status]'))
 			|| elementsWithCssModuleClass(stats, classes.Playtime).find(element => !element.closest('[data-gdl-cloud-status]'))
+			|| stats.querySelector<HTMLElement>('[data-gdl-playtime="1"]')
 			|| stats.querySelector<HTMLElement>('[class*="LastPlayed"]:not([data-gdl-cloud-status]), [class*="lastPlayed"]:not([data-gdl-cloud-status])')
 			|| stats.querySelector<HTMLElement>('[class*="Playtime"]:not([data-gdl-cloud-status]), [class*="playtime"]:not([data-gdl-cloud-status])')
 			|| null;

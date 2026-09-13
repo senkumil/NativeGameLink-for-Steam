@@ -4,6 +4,8 @@ import { PLAYBAR_CLASSES } from '../../steam/css';
 import { closestWithCssModuleClass, elementsWithCssModuleClass, isRenderedElement } from '../../steam/native-dom';
 import type { NativeLibraryLayout } from './layout';
 import { ensurePrimaryLinksStyles } from './styles/primary-links';
+import { desktopFeatureFlags } from '../desktop/flags';
+import { mountNativeDesktopLinksBar } from '../desktop/links/NativeDesktopLinksBar';
 
 export interface PrimaryLinksOptions {
 	steamAppId: string;
@@ -123,6 +125,19 @@ export function createPrimaryLinksBar(
 		const overflowLinks = links.map(([label, url], index) =>
 			`<a class="gdl-primary-overflow-link" data-gdl-primary-index="${index}" href="${url}" data-gdl-open-url="${url}">${label}</a>`,
 		).join('');
+		if (desktopFeatureFlags.desktopNativeLinks && desktopFeatureFlags.desktopNativeUIEnabled) {
+			const fallbackNode = doc.createElement('div');
+			fallbackNode.className = 'gdl-link-bar-fallback';
+			fallbackNode.innerHTML = `${primaryLinks}<details class="gdl-primary-more"><summary aria-label="${gdlText('more_links', 'More links')}">•••</summary><div class="gdl-primary-more-menu">${overflowLinks}</div></details>`;
+			installPrimaryLinksResponsiveLayout(fallbackNode);
+			mountNativeDesktopLinksBar(existingBar, {
+				steamAppId: options.steamAppId,
+				isDelisted: options.isDelisted,
+				hasWorkshop: options.hasWorkshop,
+				hasDlc: options.hasDlc,
+			}, fallbackNode);
+			return existingBar;
+		}
 		existingBar.innerHTML = `${primaryLinks}<details class="gdl-primary-more"><summary aria-label="${gdlText('more_links', 'More links')}">•••</summary><div class="gdl-primary-more-menu">${overflowLinks}</div></details>`;
 		installPrimaryLinksResponsiveLayout(existingBar);
 		return existingBar;
@@ -143,6 +158,19 @@ export function createPrimaryLinksBar(
 	const overflowLinks = links.map(([label, url], index) =>
 		`<a class="gdl-primary-overflow-link" data-gdl-primary-index="${index}" href="${url}" data-gdl-open-url="${url}">${label}</a>`,
 	).join('');
+	if (desktopFeatureFlags.desktopNativeLinks && desktopFeatureFlags.desktopNativeUIEnabled) {
+		const fallbackNode = doc.createElement('div');
+		fallbackNode.className = 'gdl-link-bar-fallback';
+		fallbackNode.innerHTML = `${primaryLinks}<details class="gdl-primary-more"><summary aria-label="${gdlText('more_links', 'More links')}">•••</summary><div class="gdl-primary-more-menu">${overflowLinks}</div></details>`;
+		installPrimaryLinksResponsiveLayout(fallbackNode);
+		mountNativeDesktopLinksBar(linkBar, {
+			steamAppId: options.steamAppId,
+			isDelisted: options.isDelisted,
+			hasWorkshop: options.hasWorkshop,
+			hasDlc: options.hasDlc,
+		}, fallbackNode);
+		return linkBar;
+	}
 	linkBar.innerHTML = `${primaryLinks}<details class="gdl-primary-more"><summary aria-label="${gdlText('more_links', 'More links')}">•••</summary><div class="gdl-primary-more-menu">${overflowLinks}</div></details>`;
 	installPrimaryLinksResponsiveLayout(linkBar);
 	return linkBar;
@@ -377,8 +405,9 @@ export function insertPrimaryLinksBar(
 		&& Boolean(currentAppId)
 		&& isBarProperlyPositionedBelowPlaybar(doc, bar);
 
-	// DO NOT reveal synchronously on frame 0: frame 0 layout is transitional when switching games.
-	if (!alreadySettled) {
+	if (alreadySettled || isBarProperlyPositionedBelowPlaybar(doc, bar)) {
+		revealBar(bar);
+	} else {
 		bar.style.setProperty('visibility', 'hidden', 'important');
 		bar.style.setProperty('opacity', '0', 'important');
 		bar.style.setProperty('pointer-events', 'none', 'important');
@@ -494,8 +523,7 @@ export function insertPrimaryLinksBar(
 					if (stableFrames >= 2) {
 						revealBar(bar);
 					}
-					// Continue validating layout stability through full React hydration / hero load
-					if (stableFrames >= 45) {
+					if (stableFrames >= 10) {
 						return;
 					}
 				} else {
@@ -517,12 +545,12 @@ export function insertPrimaryLinksBar(
 			stableFrames = 0;
 		}
 
-		if (attempts >= 45 && bar.isConnected && bar.dataset.gdlLinksSettled !== '1') {
+		if (attempts >= 10 && bar.isConnected && bar.dataset.gdlLinksSettled !== '1') {
 			revealBar(bar);
 			return;
 		}
 
-		if (attempts < 180) {
+		if (attempts < 60) {
 			win.requestAnimationFrame(checkSettled);
 		} else if (bar.isConnected && bar.dataset.gdlLinksSettled !== '1') {
 			revealBar(bar);

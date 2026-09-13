@@ -15,6 +15,8 @@ import {
 } from '../../steam/native-dom';
 import { preserveLinkedPlaybarVisibility } from '../../steam/playbar-visibility';
 import { ensureCloudStatus } from '../library/cloud-status';
+import { isPublicSteamLibraryRoute, routedSteamAppId } from '../library/native-route';
+import { findMappingForShortcut, isShortcutDismissed } from '../shortcuts/runtime';
 import { getMappedShortcuts, getShortcutAppById } from '../../steam/shortcuts';
 import { clearPlaytimeStatsCache, fetchPlaytimeStats, getInstantPlaytimeStats, type PlaytimeStats } from './service';
 import { formatLastPlayedDate, formatPlaytimeMinutes } from './format';
@@ -141,7 +143,10 @@ function applyPlaytimeStatsToDom(
 	isCurrent: () => boolean,
 ): boolean {
 	if (!isCurrent()) return false;
-	if (!statsData || (statsData.minutesForever <= 0 && !statsData.lastPlayedAt)) {
+	const hasRecordedPlaytime = (statsData?.minutesForever ?? 0) > 0
+		|| ((statsData?.totalSeconds ?? 0) > 0)
+		|| Boolean(statsData?.lastPlayedAt);
+	if (!statsData || !hasRecordedPlaytime) {
 		return false;
 	}
 
@@ -162,7 +167,21 @@ function applyPlaytimeStatsToDom(
 	}
 
 	const classes = PLAYBAR_CLASSES();
-	const statsSections = elementsWithCssModuleClass(doc, classes.GameStatsSection).filter(s => s.isConnected);
+	let statsSections = elementsWithCssModuleClass(doc, classes.GameStatsSection).filter(s => s.isConnected);
+	if (statsSections.length === 0) {
+		const cloud = doc.querySelector<HTMLElement>('[data-gdl-cloud-status="1"]');
+		if (cloud?.parentElement?.isConnected) statsSections.push(cloud.parentElement);
+		else {
+			const ach = doc.querySelector<HTMLElement>('[data-gdl-playbar-achievements="1"], #gdl-playbar-achievements');
+			if (ach?.parentElement?.isConnected) statsSections.push(ach.parentElement);
+			else {
+				const fallback = doc.querySelector<HTMLElement>(
+					'[class*="GameStatsSection"], [class*="gameStatsSection"], [class*="PlayBarStats"], [class*="playBarStats"]'
+				);
+				if (fallback?.isConnected) statsSections.push(fallback);
+			}
+		}
+	}
 	if (!statsSections.length) return false;
 
 	const nativePlaytimes = findNativePlaytimeElements(doc);
@@ -171,7 +190,7 @@ function applyPlaytimeStatsToDom(
 	let hasNativePlaytime = false;
 	let hasNativeLastPlayed = false;
 
-	if (nativePlaytimes.length > 0 && minutesForever > 0) {
+	if (nativePlaytimes.length > 0 && hasRecordedPlaytime) {
 		for (const nativePlaytime of nativePlaytimes) {
 			const detail = elementsWithCssModuleClass(nativePlaytime, classes.PlayBarDetailLabel)[0];
 			if (detail) {
@@ -214,31 +233,39 @@ function applyPlaytimeStatsToDom(
 
 		if (lastPlayedFormatted && !hasNativeLastPlayed) {
 			const native = buildNativePlaybarStatBlueprint(doc, 'lastPlayed', loc('AppDetails_SectionTitle_LastPlayed', 'ÚLTIMA VEZ JUGADO'), lastPlayedFormatted);
-			if (native) { native.dataset.gdlStat = 'last-played'; native.dataset.gdlNativePlaybar = '1'; nativeStats.push(native); }
-			else nativeStats.push(...htmlToElements(doc, `
-				<div class="${classes.GameStat || ''} ${classes.LastPlayed || ''} ${classes.Visible || ''}" data-gdl-stat="last-played" data-gdl-native-blueprint="0">
-					<div class="${classes.GameStatRight || ''} ${classes.LastPlayedRight || ''}">
-						<div class="${classes.PlayBarLabel || ''} ${classes.LastPlayedLabel || ''}">${escapeHtml(loc('AppDetails_SectionTitle_LastPlayed', 'ÚLTIMA VEZ JUGADO'))}</div>
-						<div class="${classes.PlayBarDetailLabel || ''} ${classes.LastPlayedInfo || ''}">${escapeHtml(lastPlayedFormatted)}</div>
-					</div>
-				</div>`));
+			if (native) {
+				native.dataset.gdlStat = 'last-played';
+				native.dataset.gdlNativePlaybar = '1';
+				if (classes.Visible) native.classList.add(classes.Visible);
+				nativeStats.push(native);
+			} else {
+				nativeStats.push(...htmlToElements(doc, `
+					<div class="${classes.GameStat || ''} ${classes.LastPlayed || ''} ${classes.Visible || ''}" data-gdl-stat="last-played" data-gdl-native-blueprint="0">
+						<div class="${classes.GameStatRight || ''} ${classes.LastPlayedRight || ''}">
+							<div class="${classes.PlayBarLabel || ''} ${classes.LastPlayedLabel || ''}">${escapeHtml(loc('AppDetails_SectionTitle_LastPlayed', 'ÚLTIMA VEZ JUGADO'))}</div>
+							<div class="${classes.PlayBarDetailLabel || ''} ${classes.LastPlayedInfo || ''}">${escapeHtml(lastPlayedFormatted)}</div>
+						</div>
+					</div>`));
+			}
 		}
-		if (minutesForever > 0 && !hasNativePlaytime) {
+		if (hasRecordedPlaytime && !hasNativePlaytime) {
 			const native = buildNativePlaybarStatBlueprint(doc, 'playtime', loc('AppDetails_SectionTitle_PlayTime', 'TIEMPO DE JUEGO'), playtimeFormatted);
 			if (native) {
 				native.dataset.gdlStat = 'playtime';
 				native.dataset.gdlNativePlaybar = '1';
+				if (classes.Visible) native.classList.add(classes.Visible);
 				elementsWithCssModuleClass(native, classes.PlayBarDetailLabel)[0]?.setAttribute('data-gdl-playtime-value', '1');
 				nativeStats.push(native);
+			} else {
+				nativeStats.push(...htmlToElements(doc, `
+					<div class="${classes.GameStat || ''} ${classes.Playtime || ''} ${classes.Visible || ''}" data-gdl-stat="playtime" data-gdl-native-blueprint="0">
+						<div class="${classes.GameStatIconForced || ''} ${classes.PlaytimeIconForced || ''}">${playtimeClockSvg()}</div>
+						<div class="${classes.GameStatRight || ''}">
+							<div class="${classes.PlayBarLabel || ''}">${escapeHtml(loc('AppDetails_SectionTitle_PlayTime', 'TIEMPO DE JUEGO'))}</div>
+							<div class="${classes.PlayBarDetailLabel || ''}" data-gdl-playtime-value="1">${escapeHtml(playtimeFormatted)}</div>
+						</div>
+					</div>`));
 			}
-			else nativeStats.push(...htmlToElements(doc, `
-				<div class="${classes.GameStat || ''} ${classes.Playtime || ''} ${classes.Visible || ''}" data-gdl-stat="playtime" data-gdl-native-blueprint="0">
-					<div class="${classes.GameStatIconForced || ''} ${classes.PlaytimeIconForced || ''}">${playtimeClockSvg()}</div>
-					<div class="${classes.GameStatRight || ''}">
-						<div class="${classes.PlayBarLabel || ''}">${escapeHtml(loc('AppDetails_SectionTitle_PlayTime', 'TIEMPO DE JUEGO'))}</div>
-						<div class="${classes.PlayBarDetailLabel || ''}" data-gdl-playtime-value="1">${escapeHtml(playtimeFormatted)}</div>
-					</div>
-				</div>`));
 		}
 
 		for (const stat of nativeStats) {
@@ -288,11 +315,26 @@ export async function injectPlaytimeFallbackStats(
 
 	const statsData = await fetchPlaytimeStats(shortcutAppId, title, steamAppId);
 	if (!isCurrent()) return;
-	if (!statsData || (statsData.minutesForever <= 0 && !statsData.lastPlayedAt)) {
+	const hasRecorded = (statsData?.minutesForever ?? 0) > 0
+		|| ((statsData?.totalSeconds ?? 0) > 0)
+		|| Boolean(statsData?.lastPlayedAt);
+	if (!statsData || !hasRecorded) {
 		return;
 	}
 
 	applyPlaytimeStatsToDom(doc, shortcutAppId, statsData, isCurrent);
+}
+
+export function syncEarlyLinkedPlaytime(doc: Document): void {
+	if (isPublicSteamLibraryRoute(doc)) return;
+	const routeId = routedSteamAppId(doc);
+	if (!routeId || routeId < 2147483648 || isShortcutDismissed(routeId)) return;
+	const numId = Number(routeId);
+	if (!isShortcutPlaytimeTrackingEnabled(numId)) return;
+	const app = getShortcutAppById(numId);
+	const title = String(app?.display_name || app?.m_strDisplayName || '').trim();
+	const steamAppId = findMappingForShortcut(String(routeId), title) || undefined;
+	void injectPlaytimeFallbackStats(doc, numId, title, steamAppId);
 }
 
 export function removePlaytimeFallbackStats(doc: Document): void {

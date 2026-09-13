@@ -3,6 +3,7 @@ import { findTopPlaybarCandidates } from './signatures/playbar';
 import { findTopGameInfoCandidates } from './signatures/gameInfo';
 import { findTopActivityCandidates } from './signatures/activity';
 import { findTopNewsCandidates } from './signatures/news';
+import { findTopLinksCandidates } from './signatures/links';
 
 export type KnownSteamComponent =
 	| 'DesktopAchievementItem'
@@ -10,7 +11,8 @@ export type KnownSteamComponent =
 	| 'DesktopPlayButton'
 	| 'DesktopGameInfo'
 	| 'DesktopActivityCard'
-	| 'DesktopNews';
+	| 'DesktopNews'
+	| 'DesktopLinksBar';
 
 class SteamComponentResolver {
 	private cache = new Map<KnownSteamComponent, any>();
@@ -50,6 +52,11 @@ class SteamComponentResolver {
 				resolved = best?.component || null;
 				break;
 			}
+			case 'DesktopLinksBar': {
+				const best = findTopLinksCandidates(1)[0];
+				resolved = best?.component || null;
+				break;
+			}
 		}
 
 		if (resolved) {
@@ -66,6 +73,7 @@ class SteamComponentResolver {
 			'DesktopGameInfo',
 			'DesktopActivityCard',
 			'DesktopNews',
+			'DesktopLinksBar',
 		];
 		const schedule = typeof requestIdleCallback === 'function'
 			? requestIdleCallback

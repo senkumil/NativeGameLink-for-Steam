@@ -1,7 +1,7 @@
 import { backendLog } from '../../../api/backend';
 import { steamWebpackRuntime } from '../SteamWebpackRuntime';
 
-export interface PlaybarCandidate {
+export interface LinksCandidate {
 	moduleId: string | number;
 	exportKey: string;
 	component: any;
@@ -9,9 +9,9 @@ export interface PlaybarCandidate {
 	matchedSignatures: string[];
 }
 
-export function findTopPlaybarCandidates(maxResults = 3): PlaybarCandidate[] {
+export function findTopLinksCandidates(maxResults = 3): LinksCandidate[] {
 	const modules = steamWebpackRuntime.getAllModules();
-	const candidates: PlaybarCandidate[] = [];
+	const candidates: LinksCandidate[] = [];
 
 	for (const mod of modules) {
 		const exp = mod.exports;
@@ -27,7 +27,7 @@ export function findTopPlaybarCandidates(maxResults = 3): PlaybarCandidate[] {
 		for (const [key, item] of exportEntries) {
 			if (!item || (typeof item !== 'function' && typeof item !== 'object')) continue;
 
-			const match = scorePlaybarCandidate(mod.id, key, item);
+			const match = scoreLinksCandidate(mod.id, key, item);
 			if (match && match.score >= 8) {
 				candidates.push(match);
 			}
@@ -38,20 +38,20 @@ export function findTopPlaybarCandidates(maxResults = 3): PlaybarCandidate[] {
 	const top = candidates.slice(0, maxResults);
 
 	if (top.length > 0) {
-		backendLog(`[NGL][SteamResolver] Found ${candidates.length} playbar candidates. Top ${top.length}:`);
+		backendLog(`[NGL][SteamResolver] Found ${candidates.length} LinksBar candidates. Top ${top.length}:`);
 		top.forEach((c, idx) => {
-			backendLog(`[NGL][SteamResolver] Playbar Candidate #${idx + 1} -> moduleId: ${c.moduleId}, exportKey: "${c.exportKey}", score: ${c.score}`);
+			backendLog(`[NGL][SteamResolver] LinksBar Candidate #${idx + 1} -> moduleId: ${c.moduleId}, exportKey: "${c.exportKey}", score: ${c.score}`);
 		});
 	}
 
 	return top;
 }
 
-function scorePlaybarCandidate(
+function scoreLinksCandidate(
 	moduleId: string | number,
 	exportKey: string,
 	target: any,
-): PlaybarCandidate | null {
+): LinksCandidate | null {
 	let score = 0;
 	const matchedSignatures: string[] = [];
 
@@ -61,22 +61,26 @@ function scorePlaybarCandidate(
 	const str = Function.prototype.toString.call(fn);
 	const displayName = String(target.displayName || fn.name || target.name || '');
 
-	if (/PlayBar|PlayButton|LaunchButton|AppActionButtons|ActionButtons|AppDetailsPlayBar/i.test(displayName)) {
+	if (/PrimaryLinks|LinksSection|AppDetailsLinks|GameDetailsSubNav|AppDetailsSubNav|GameLinks/i.test(displayName)) {
 		score += 8;
 		matchedSignatures.push(`displayName(${displayName})`);
 	}
 
-	if (str.includes('bIsRunning') || str.includes('bIsLaunching') || str.includes('bIsUpdating') || str.includes('isRunning')) {
-		score += 5;
-		matchedSignatures.push('prop:runningState');
-	}
-	if (str.includes('onPlay') || str.includes('onLaunch') || str.includes('LaunchApp') || str.includes('RunGame')) {
+	if (str.includes('store.steampowered.com') || str.includes('StorePage') || str.includes('store_page')) {
 		score += 4;
-		matchedSignatures.push('prop:launchAction');
+		matchedSignatures.push('prop:storePage');
 	}
-	if (str.includes('playtime') || str.includes('nPlaytime') || str.includes('strPlaytime') || str.includes('PlayTime')) {
+	if (str.includes('steamcommunity.com') || str.includes('CommunityHub') || str.includes('community_hub')) {
+		score += 4;
+		matchedSignatures.push('prop:communityHub');
+	}
+	if (str.includes('discussions') || str.includes('guides') || str.includes('workshop')) {
 		score += 3;
-		matchedSignatures.push('prop:playtime');
+		matchedSignatures.push('prop:gameFeatures');
+	}
+	if (str.includes('overflow') || str.includes('Overflow') || str.includes('DotDotDot') || str.includes('MenuButton')) {
+		score += 3;
+		matchedSignatures.push('feature:overflow');
 	}
 
 	if (target.$$typeof || str.includes('createElement') || str.includes('jsx') || str.includes('.jsxs') || str.includes('.jsx')) {

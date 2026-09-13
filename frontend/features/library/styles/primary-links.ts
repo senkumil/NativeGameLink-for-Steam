@@ -44,6 +44,10 @@ export function ensurePrimaryLinksStyles(doc: Document): void {
 		#gdl-link-bar::-webkit-scrollbar {
 			display: none !important;
 		}
+		#gdl-link-bar .gdl-link-bar-fallback,
+		#gdl-link-bar > div:not(.gdl-primary-more):not(.gdl-primary-more-menu) {
+			display: contents !important;
+		}
 		#gdl-link-bar .gdl-primary-link {
 			display: inline-flex !important;
 			align-items: center !important;

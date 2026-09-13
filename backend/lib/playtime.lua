@@ -453,6 +453,8 @@ local function calculate_playtime(req)
 
     return {
         ok = true,
+        seconds_forever = seconds_forever,
+        seconds_last_two_weeks = seconds_last_two_weeks,
         minutes_forever = math.floor((seconds_forever / 60) + 0.5),
         minutes_last_two_weeks = math.floor((seconds_last_two_weeks / 60) + 0.5),
         last_played_at = last_played_at > 0 and last_played_at or nil,

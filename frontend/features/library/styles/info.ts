@@ -11,6 +11,8 @@ export function ensureInfoPanelStyles(doc: Document): void {
 		[data-gdl-game-info-button="1"].gdl-info-button-fallback:hover,
 		[data-gdl-game-info-button="1"].gdl-info-button-fallback.gdl-info-active { background:rgba(78,91,108,.88);color:#fff;box-shadow:inset 0 1px 0 rgba(255,255,255,.12); }
 		[data-gdl-game-info-button="1"].gdl-info-button-fallback svg { width:24px;height:24px;display:block; }
+		[data-gdl-game-info-button="1"] svg.SVGIcon_Arrow,
+		[data-gdl-game-info-button="1"] .gdl-scroll-top-icon { width: 16px; height: 16px; }
 
 		#gdl-game-info-panel {
 			transition: height 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.28s ease-in-out, transform 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
@@ -92,10 +94,32 @@ export function ensureInfoPanelStyles(doc: Document): void {
 			line-height: 16px !important;
 		}
 		#gdl-game-info-panel .gdl-info-feature {
-			display:flex;align-items:center;gap:9px;min-width:0;
+			display: flex;
+			flex-flow: row;
+			height: 24px;
+			align-items: center;
+			width: 100%;
 		}
-		#gdl-game-info-panel .gdl-info-feature svg {
-			width:20px;height:20px;min-width:20px;flex:0 0 20px;color:currentColor;
+		#gdl-game-info-panel .gdl-info-feature svg,
+		#gdl-game-info-panel .gdl-info-feature img,
+		#gdl-game-info-panel .gdl-info-feature .gdl-feature-icon {
+			box-sizing: border-box;
+			width: 32px;
+			height: 32px;
+			padding: 6px 0px;
+			opacity: .5;
+			color: #fff;
+			flex: 0 0 32px;
+			object-fit: contain;
+		}
+		#gdl-game-info-panel .gdl-info-feature span {
+			color: #919191;
+			font-size: 13px;
+			margin-inline-start: 5px;
+			line-height: 24px;
+			white-space: nowrap;
+			text-overflow: ellipsis;
+			overflow: hidden;
 		}
 
 		/* Safe fallback for a Steam build where the private game-info modules can

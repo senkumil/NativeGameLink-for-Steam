@@ -2,7 +2,7 @@ import React, { Component, ErrorInfo, ReactNode } from 'react';
 import { backendLog } from '../../../api/backend';
 import { steamComponents } from '../../../steam/modules/SteamComponentResolver';
 import { desktopFeatureFlags } from '../flags';
-import { toSteamDesktopPlaybar } from '../../../steam/desktop/adapters/SteamDesktopPlaybarAdapter';
+import { toSteamDesktopLinks, PrimaryLinksAdapterOptions } from '../../../steam/desktop/adapters/SteamDesktopLinksAdapter';
 
 interface ErrorBoundaryProps {
 	children: ReactNode;
@@ -14,15 +14,15 @@ interface ErrorBoundaryState {
 	error: string;
 }
 
-export class NativeGameLinkPlaybarErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+export class NativeGameLinkLinksErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
 	state: ErrorBoundaryState = { hasError: false, error: '' };
 
 	static getDerivedStateFromError(error: Error): ErrorBoundaryState {
-		return { hasError: true, error: error?.message || 'Error in Desktop Native Playbar' };
+		return { hasError: true, error: error?.message || 'Error in Desktop Native Links Bar' };
 	}
 
 	componentDidCatch(error: Error, info: ErrorInfo): void {
-		backendLog(`[NGL][Desktop][Playbar] Error in native playbar: ${error} stack: ${info.componentStack}`);
+		backendLog(`[NGL][Desktop][Links] Error in native links bar: ${error} stack: ${info.componentStack}`);
 	}
 
 	render(): ReactNode {
@@ -33,48 +33,41 @@ export class NativeGameLinkPlaybarErrorBoundary extends Component<ErrorBoundaryP
 	}
 }
 
-interface NativeDesktopPlaybarProps {
-	shortcutAppId: number | string;
-	gameName: string;
-	playtimeMinutes: number;
+interface NativeDesktopLinksBarProps extends PrimaryLinksAdapterOptions {
 	fallback?: ReactNode;
 }
 
-export const NativeDesktopPlaybar: React.FC<NativeDesktopPlaybarProps> = ({
-	shortcutAppId,
-	gameName,
-	playtimeMinutes,
+export const NativeDesktopLinksBar: React.FC<NativeDesktopLinksBarProps> = ({
 	fallback,
+	...options
 }) => {
-	if (!desktopFeatureFlags.desktopNativePlaybar || !desktopFeatureFlags.desktopNativeUIEnabled) {
+	if (!desktopFeatureFlags.desktopNativeLinks || !desktopFeatureFlags.desktopNativeUIEnabled) {
 		return fallback ? <>{fallback}</> : null;
 	}
 
-	const NativePlayButton = steamComponents.resolve('DesktopPlayButton');
-	if (!NativePlayButton) {
+	const NativeLinksComponent = steamComponents.resolve('DesktopLinksBar');
+	if (!NativeLinksComponent) {
 		return fallback ? <>{fallback}</> : null;
 	}
 
-	const props = toSteamDesktopPlaybar(shortcutAppId, gameName, playtimeMinutes);
+	const props = toSteamDesktopLinks(options);
 
 	return (
-		<NativeGameLinkPlaybarErrorBoundary fallback={fallback}>
-			<NativePlayButton {...props} />
-		</NativeGameLinkPlaybarErrorBoundary>
+		<NativeGameLinkLinksErrorBoundary fallback={fallback}>
+			<NativeLinksComponent {...props} />
+		</NativeGameLinkLinksErrorBoundary>
 	);
 };
 
-export function mountNativeDesktopPlaybar(
+export function mountNativeDesktopLinksBar(
 	container: HTMLElement,
-	shortcutAppId: number | string,
-	gameName: string,
-	playtimeMinutes: number,
+	options: PrimaryLinksAdapterOptions,
 	fallbackNode?: HTMLElement | null,
 ): () => void {
 	const win = container.ownerDocument.defaultView as any;
 	const reactDom = win?.ReactDOM || (typeof window !== 'undefined' ? (window as any).ReactDOM : null);
 	if (!reactDom) {
-		if (fallbackNode && !container.contains(fallbackNode)) container.appendChild(fallbackNode);
+		if (fallbackNode) container.appendChild(fallbackNode);
 		return () => {};
 	}
 
@@ -82,10 +75,8 @@ export function mountNativeDesktopPlaybar(
 		if (typeof reactDom.createRoot === 'function') {
 			const root = reactDom.createRoot(container);
 			root.render(
-				<NativeDesktopPlaybar
-					shortcutAppId={shortcutAppId}
-					gameName={gameName}
-					playtimeMinutes={playtimeMinutes}
+				<NativeDesktopLinksBar
+					{...options}
 					fallback={fallbackNode ? <div ref={node => { if (node && fallbackNode && !node.hasChildNodes()) node.appendChild(fallbackNode); }} /> : null}
 				/>
 			);
@@ -95,10 +86,8 @@ export function mountNativeDesktopPlaybar(
 		}
 		if (typeof reactDom.render === 'function') {
 			reactDom.render(
-				<NativeDesktopPlaybar
-					shortcutAppId={shortcutAppId}
-					gameName={gameName}
-					playtimeMinutes={playtimeMinutes}
+				<NativeDesktopLinksBar
+					{...options}
 					fallback={fallbackNode ? <div ref={node => { if (node && fallbackNode && !node.hasChildNodes()) node.appendChild(fallbackNode); }} /> : null}
 				/>,
 				container
@@ -108,8 +97,9 @@ export function mountNativeDesktopPlaybar(
 			};
 		}
 	} catch (e) {
-		backendLog(`[NGL][Desktop][Playbar] Mount error: ${e}`);
-		if (fallbackNode && !container.contains(fallbackNode)) container.appendChild(fallbackNode);
+		backendLog(`[NGL][Desktop][Links] React mount error: ${e}`);
+		if (fallbackNode) container.appendChild(fallbackNode);
 	}
+
 	return () => {};
 }

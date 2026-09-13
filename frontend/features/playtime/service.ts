@@ -3,6 +3,7 @@ import { backendLog, getAllPlaytimeDataBackend, getPlaytimeDataBackend } from '.
 export interface PlaytimeStats {
 	minutesForever: number;
 	minutesLastTwoWeeks: number;
+	totalSeconds?: number;
 	lastPlayedAt: number | null;
 }
 
@@ -28,7 +29,9 @@ function requestKey(shortcutAppId: number, title: string, steamAppId?: string): 
 
 function parsePlaytimeStats(parsed: any): PlaytimeStats | null {
 	if (!parsed || typeof parsed !== 'object' || !parsed.ok) return null;
+	const secondsForever = Math.max(0, Number(parsed.seconds_forever || parsed.total_seconds || 0));
 	return {
+		totalSeconds: secondsForever,
 		minutesForever: Math.max(0, Number(parsed.minutes_forever || 0)),
 		minutesLastTwoWeeks: Math.max(0, Number(parsed.minutes_last_two_weeks || 0)),
 		lastPlayedAt: parsed.last_played_at ? Number(parsed.last_played_at) : null,

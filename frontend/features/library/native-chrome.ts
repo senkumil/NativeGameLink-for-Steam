@@ -46,6 +46,7 @@ export function ensureNativeGameChrome(doc: Document, model: NativeGameInfo): vo
 
 	try { ensureNativeInfoButton(doc, model); }
 	catch (error) { backendLog('Game info button injection error: ' + error); }
+
 }
 
 export function removeNativeGameChrome(doc: Document, clearModel = false, preserveCloudStatus = false): void {

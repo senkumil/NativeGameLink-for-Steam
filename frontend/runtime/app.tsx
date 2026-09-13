@@ -26,7 +26,7 @@ import {
 	unregisterNativeAchievementToastWindow, showAchievementToast, startFirstLaunchAchievementWatcher,
 	stopFirstLaunchAchievementWatcher,
 } from '../features/achievements/runtime';
-import { startPlaytimeTracker, stopPlaytimeTracker } from '../features/playtime/tracker';
+import { startPlaytimeTracker, stopPlaytimeTracker, syncEarlyLinkedPlaytime } from '../features/playtime/tracker';
 import { patchDesktopLibraryHomePlaytime, syncDesktopLibraryHomePlaytimeDom } from '../features/playtime/library-home';
 import { mutationMayContainDesktopPlaytime } from '../features/playtime/library-home-dom';
 import { processPendingLinkJobs } from '../features/shortcuts/link-job-queue';
@@ -171,6 +171,7 @@ function windowCreated(context: any): void {
 		mainWindowDoc = popupDoc;
 		syncDesktopLibraryHomePlaytimeDom(popupDoc);
 		syncEarlyLinkedCloudStatus(popupDoc);
+		syncEarlyLinkedPlaytime(popupDoc);
 		void processPendingLinkJobs(mainWindowDoc);
 		installLocalAchievementUI(popupDoc);
 		scheduleCopiedFeedbackCleanup(popupDoc);
@@ -276,6 +277,7 @@ function windowCreated(context: any): void {
 			if (isMainWindow) {
 				handleLibraryNavigation(popupDoc);
 				syncEarlyLinkedCloudStatus(popupDoc);
+				syncEarlyLinkedPlaytime(popupDoc);
 			}
 			runInjection('navigation');
 			return;
@@ -286,11 +288,12 @@ function windowCreated(context: any): void {
 			runInjection('mutation');
 			return;
 		}
-		// Synchronously mount Cloud Status at 0ms as soon as Steam renders
+		// Synchronously mount Cloud Status and Playtime at 0ms as soon as Steam renders
 		// GameStatsSection with LastPlayed/Playtime for a linked shortcut,
 		// eliminating late pop-in and layout shift on the first frame.
 		if (isMainWindow) {
 			syncEarlyLinkedCloudStatus(popupDoc);
+			syncEarlyLinkedPlaytime(popupDoc);
 			const playtimeRoots = records.flatMap(record => [record.target, ...Array.from(record.addedNodes)]);
 			if (mutationMayContainDesktopPlaytime(playtimeRoots)) syncDesktopLibraryHomePlaytimeDom(popupDoc);
 			const roots = records.flatMap(record => Array.from(record.addedNodes));
@@ -450,6 +453,7 @@ export default definePlugin(() => {
 	const onPlaytimeChanged = (): void => {
 		const doc = resolveMainWindowDocument();
 		if (doc) {
+			syncEarlyLinkedPlaytime(doc);
 			void patchDesktopLibraryHomePlaytime(doc).catch(() => {});
 			void tryInjectLibraryData(doc).catch(() => {});
 		}

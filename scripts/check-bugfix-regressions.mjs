@@ -73,6 +73,10 @@ const primaryLinksTs = read('frontend/features/library/primary-links.ts');
 const primaryLinksStylesTs = read('frontend/features/library/styles/primary-links.ts');
 const artworkSync = read('frontend/features/library/artwork-sync.ts');
 const preferencesTs = read('frontend/core/preferences.ts');
+const playtimeTrackerTs = read('frontend/features/playtime/tracker.ts');
+const playtimeServiceTs = read('frontend/features/playtime/service.ts');
+const infoPanelTs = read('frontend/features/library/info-panel.ts');
+const featureIconsTs = read('frontend/features/library/feature-icons.ts');
 
 let passed = 0;
 function assert(condition, message) {
@@ -495,7 +499,28 @@ assert(bpRuntime.includes('hasRerenderedLibraryShims'), 'Big Picture runtime gua
 assert(bpNativeInfoBridge.includes('isNativeInfoSurfaceActive') && bpNativeInfoBridge.includes('isNativeInfoSurfaceActive(doc)'), 'native info bridge avoids full GamepadUI rerenders during normal game browsing');
 assert(artworkSync.includes('artworkAlreadySaved(shortcutId, steamAppId)') && artworkSync.includes('applyOfficialLogoPosition'), 'artwork sync avoids disk rewriting and texture reload loops when artworks are already saved');
 
+// Playtime Preservation & Playbar Instant Synchronization:
+// 1. Backend calculate_playtime preserves exact session seconds alongside minute rounding
+assert(playtimeLua.includes('seconds_forever = seconds_forever') && playtimeLua.includes('seconds_last_two_weeks = seconds_last_two_weeks'), 'backend calculate_playtime returns seconds_forever and seconds_last_two_weeks');
+// 2. Playtime service parses totalSeconds from backend response
+assert(playtimeServiceTs.includes('totalSeconds?: number') && playtimeServiceTs.includes("secondsForever = Math.max(0, Number(parsed.seconds_forever"), 'playtime service captures totalSeconds for sub-minute sessions');
+// 3. Playbar playtime injection evaluates hasRecordedPlaytime including sub-minute sessions and lastPlayedAt
+assert(playtimeTrackerTs.includes('hasRecordedPlaytime') && playtimeTrackerTs.includes('export function syncEarlyLinkedPlaytime(doc: Document)'), 'playtime tracker exports syncEarlyLinkedPlaytime and detects recorded playtime even if sub-minute');
+// 4. Playtime tracker has resilient statsSection discovery matching cloud-status
+assert(playtimeTrackerTs.includes('[data-gdl-cloud-status="1"]') && playtimeTrackerTs.includes('[data-gdl-playbar-achievements="1"]'), 'playtime tracker falls back to existing playbar siblings to locate statsSection');
+// 5. Main application runtime syncs playtime early across window adoption, navigation, and mutation observer ticks
+assert(runtimeApp.includes('syncEarlyLinkedPlaytime(popupDoc)') && runtimeApp.includes('syncEarlyLinkedPlaytime(doc)'), 'app runtime synchronizes linked playtime across navigation, mutations, and playtime change events');
+
+// Game Info Native Icons & Scroll-to-Top:
+// 1. Native feature icons use exact Steam bundle base64 assets and SVGs matching Steam module 35488 / 28346
+assert(featureIconsTs.includes('STEAM_ICON_ACHIEVEMENTS') && featureIconsTs.includes('STEAM_ICON_CLOUD') && featureIconsTs.includes('STEAM_ICON_SINGLE_PLAYER') && featureIconsTs.includes('export function nativeFeatureVisual'), 'feature-icons exports nativeFeatureVisual with exact Steam bundle assets');
+// 2. Info panel uses nativeFeatureVisual and removes non-native custom SVG paths
+assert(infoPanelTs.includes('nativeFeatureVisual(feature)') && !infoPanelTs.includes('function nativeFeatureSvg'), 'info panel uses nativeFeatureVisual and removes obsolete custom SVGs');
+// 3. Info panel scroll to top uses native 36x36 arrow and reaches scrollTop 0 without conflicting scrollIntoView
+assert(infoPanelTs.includes('nativeArrowSvg()') && !infoPanelTs.includes('topAnchor?.scrollIntoView') && infoPanelTs.includes('target.scrollTop = 0'), 'scroll-to-top uses native arrow and scrolls completely to top 0');
+// 4. Scroll-to-top arrow uses Steam's native SVGIcon_Arrow thin polyline glyph
+assert(featureIconsTs.includes('SVGIcon_Arrow') && featureIconsTs.includes('stroke-width="10"') && featureIconsTs.includes('points="128,247.688'), 'scroll-to-top arrow uses Steam native thin polyline glyph');
+// 5. Dynamic Controller Sidebar Card mounts when connected and tears down when disconnected
+assert(controllerTs.includes('buildNativeSidebarSection') && controllerTs.includes('!controllerInfo.connected') && controllerTs.includes('section.remove()') && controllerTs.includes('setupControllerSidebarWatcher'), 'dynamic controller card mounts when connected and tears down when disconnected');
+
 console.log(`All ${passed} user-reported bug regression checks passed.`);
-
-
-

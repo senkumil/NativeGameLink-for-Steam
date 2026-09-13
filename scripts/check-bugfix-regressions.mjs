@@ -576,6 +576,16 @@ assert(achievementsPlaybar.includes('insertAchievementInNativeOrder'), 'playbar 
 // 3. Cloud status is ordered as first stat item
 assert(cloudStatusTs.includes('statsSection.prepend(stat)') || cloudStatusTs.includes('data-gdl-cloud-status'), 'cloud status precedes secondary stat items in playbar');
 
+// Achievements Sidebar Layout & Grid Isolation:
+// 1. Sidebar summary container excludes HighlightDiv to prevent Steam BasicUI flex-direction: row override
+assert(!achSidebarTs.includes('ACH_CLASSES().HighlightDiv') && !achSidebarTs.includes('_2xTb6N-jUUQ-mIkMB6OVMm'), 'sidebar summary container does not use HighlightDiv which triggers BasicUI horizontal flex row');
+// 2. Sidebar summary explicitly enforces vertical flexbox with !important
+assert(achSidebarStylesTs.includes('.gdl-la-summary') && achSidebarStylesTs.includes('flex-direction: column !important'), 'sidebar summary enforces flex-direction: column !important');
+// 3. Sidebar achievement icon frames explicitly enforce 48px width and height to override Steam BasicUI 64px rules
+assert(achSidebarStylesTs.includes('.BasicUI .gdl-la-icon-frame') && achSidebarStylesTs.includes('width: 48px !important') && achSidebarStylesTs.includes('height: 48px !important'), 'sidebar achievement icon frame forces 48x48px with !important over Steam BasicUI 64px');
+// 4. Sidebar header and body enforce vertical flex layout and full width
+assert(achSidebarStylesTs.includes('.BasicUI .gdl-la-header') && achSidebarStylesTs.includes('.BasicUI .gdl-la-body'), 'sidebar header and body include BasicUI overrides');
+
 console.log(`All ${passed} user-reported bug regression checks passed.`);
 
 

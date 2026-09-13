@@ -2,7 +2,6 @@ import type { LocalAchievementData, LocalAchievementItem } from '../../domain/ty
 import { backendLog } from '../../api/backend';
 import { escapeHtml } from '../../core/text';
 import { gdlText, loc } from '../../steam/localization';
-import { ACH_CLASSES } from '../../steam/css';
 import { cacheLocalAchievements, localAchievementDataSignature } from './cache';
 import { localAchievementPercent } from './format';
 import { ensureLocalPlaybarStat } from './playbar';
@@ -105,7 +104,7 @@ export function renderLocalAchievementSidebarHtml(data: LocalAchievementData, co
 
 	if (isAllUnlocked) {
 		return `
-		<div class="${ACH_CLASSES().HighlightDiv} gdl-la-summary is-complete" data-gdl-local-ach="1" data-gdl-achievement-signature="${escapeHtml(signature)}">
+		<div class="gdl-la-summary is-complete" data-gdl-local-ach="1" data-gdl-achievement-signature="${escapeHtml(signature)}">
 			<div class="gdl-la-ribbon-badge">${COMPLETION_RIBBON_IMAGE}</div>
 			<div class="gdl-la-header is-complete">
 				<div class="gdl-la-unlocked">${escapeHtml(gdlText('all_achievements_unlocked', 'You\'ve unlocked all {total} achievements! {unlocked}/{total}', { unlocked: data.unlocked, total: data.total }))}</div>
@@ -122,7 +121,7 @@ export function renderLocalAchievementSidebarHtml(data: LocalAchievementData, co
 	}
 
 	return `
-	<div class="${ACH_CLASSES().HighlightDiv} gdl-la-summary" data-gdl-local-ach="1" data-gdl-achievement-signature="${escapeHtml(signature)}">
+	<div class="gdl-la-summary" data-gdl-local-ach="1" data-gdl-achievement-signature="${escapeHtml(signature)}">
 		<div class="gdl-la-header">
 			<div class="gdl-la-unlocked">${escapeHtml(gdlText('achievements_unlocked', '{unlocked} of {total} achievements unlocked', { unlocked: data.unlocked, total: data.total }))} <span class="pct">(${pct}%)</span></div>
 			<div class="gdl-la-progress-track"><div class="gdl-la-progress-fill" style="width:${pct}%"></div></div>

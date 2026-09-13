@@ -34,261 +34,359 @@ ${steamRareAchievementStyles()}
 
 		/* Native Steam translucent panel matching official client */
 		#gdl-achievements-section, #gdl-achievements-section *, .gdl-la-summary {
-			box-sizing: border-box;
+			box-sizing: border-box !important;
 		}
-		.gdl-la-summary {
-			width: 100%;
-			min-width: 0;
-			max-width: 100%;
+		.gdl-la-summary,
+		.BasicUI .gdl-la-summary {
+			display: flex !important;
+			flex-direction: column !important;
+			width: 100% !important;
+			min-width: 0 !important;
+			max-width: 100% !important;
+			box-sizing: border-box !important;
 			background: var(--gdl-native-panel-bg, rgba(29, 36, 45, .65)) !important;
-			border: 1px solid var(--gdl-native-panel-border, rgba(255, 255, 255, .04));
-			border-radius: 0;
-			padding: 0;
-			font-family: "Motiva Sans", Arial, Helvetica, sans-serif;
-			color: #d6d7d8;
-			cursor: pointer;
+			border: 1px solid var(--gdl-native-panel-border, rgba(255, 255, 255, .04)) !important;
+			border-radius: 0 !important;
+			padding: 0 !important;
+			font-family: "Motiva Sans", Arial, Helvetica, sans-serif !important;
+			color: #d6d7d8 !important;
+			cursor: pointer !important;
 			overflow: visible !important;
-			position: relative;
-			box-shadow: none;
-			transition: border-color .12s ease, background-color .12s ease;
+			position: relative !important;
+			box-shadow: none !important;
+			transition: border-color .12s ease, background-color .12s ease !important;
 		}
-		.gdl-la-summary:hover {
-			border-color: rgba(255, 255, 255, .08);
+		.gdl-la-summary:hover,
+		.BasicUI .gdl-la-summary:hover {
+			border-color: rgba(255, 255, 255, .08) !important;
 		}
 
 		/* 100% Rosette Medal overlapping top-left corner */
-		.gdl-la-ribbon-badge {
-			position: absolute;
-			left: -11px;
-			top: 1px;
-			width: 70px;
-			height: 76px;
-			display: flex;
-			align-items: center;
-			justify-content: center;
-			z-index: 3;
-			pointer-events: none;
+		.gdl-la-ribbon-badge,
+		.BasicUI .gdl-la-ribbon-badge {
+			position: absolute !important;
+			left: -11px !important;
+			top: 1px !important;
+			width: 70px !important;
+			height: 76px !important;
+			display: flex !important;
+			align-items: center !important;
+			justify-content: center !important;
+			z-index: 3 !important;
+			pointer-events: none !important;
 		}
-		.gdl-la-ribbon-art {
-			width: 70px;
-			height: 76px;
-			display: block;
-			object-fit: contain;
-			image-rendering: auto;
-			filter: drop-shadow(0 2px 2px rgba(0,0,0,.55));
+		.gdl-la-ribbon-art,
+		.BasicUI .gdl-la-ribbon-art {
+			width: 70px !important;
+			height: 76px !important;
+			display: block !important;
+			object-fit: contain !important;
+			image-rendering: auto !important;
+			filter: drop-shadow(0 2px 2px rgba(0,0,0,.55)) !important;
 		}
 
-		.gdl-la-header {
-			position: relative;
+		.gdl-la-header,
+		.BasicUI .gdl-la-header {
+			position: relative !important;
 			background: rgba(56, 66, 78, .55) !important;
-			padding: 11px 10px 14px 10px;
+			padding: 11px 10px 14px 10px !important;
 			border-bottom: 1px solid rgba(0, 0, 0, .3) !important;
+			display: flex !important;
+			flex-direction: column !important;
+			width: 100% !important;
+			box-sizing: border-box !important;
+			flex-shrink: 0 !important;
+			visibility: visible !important;
+			opacity: 1 !important;
 		}
-		.gdl-la-header.is-complete {
-			padding: 7px 10px 7px 52px;
-			min-height: 70px;
-			display: flex;
-			flex-direction: column;
-			justify-content: center;
-			position: relative;
+		.gdl-la-header.is-complete,
+		.BasicUI .gdl-la-header.is-complete {
+			padding: 7px 10px 7px 52px !important;
+			min-height: 70px !important;
+			display: flex !important;
+			flex-direction: column !important;
+			justify-content: center !important;
+			position: relative !important;
+			width: 100% !important;
+			box-sizing: border-box !important;
+			flex-shrink: 0 !important;
 		}
 
-		.gdl-la-unlocked {
-			font-size: 13px;
-			font-weight: 600;
-			line-height: 17px;
-			margin: 0;
-			color: #ebebeb;
+		.gdl-la-unlocked,
+		.BasicUI .gdl-la-unlocked {
+			display: block !important;
+			font-size: 13px !important;
+			font-weight: 600 !important;
+			line-height: 17px !important;
+			margin: 0 !important;
+			color: #ebebeb !important;
+			white-space: normal !important;
+			visibility: visible !important;
+			opacity: 1 !important;
 		}
 		.gdl-la-unlocked .pct {
-			color: #8f98a0;
-			font-weight: 400;
+			color: #8f98a0 !important;
+			font-weight: 400 !important;
 		}
-		.gdl-la-unlocked-sub {
-			font-size: 12px;
-			color: #8f98a0;
-			line-height: 15px;
-			margin: 1px 0 0;
-			font-weight: 400;
+		.gdl-la-unlocked-sub,
+		.BasicUI .gdl-la-unlocked-sub {
+			display: block !important;
+			font-size: 12px !important;
+			color: #8f98a0 !important;
+			line-height: 15px !important;
+			margin: 1px 0 0 !important;
+			font-weight: 400 !important;
+			visibility: visible !important;
+			opacity: 1 !important;
 		}
 		.gdl-la-header.is-complete .gdl-la-unlocked {
-			white-space: nowrap;
-			overflow: hidden;
-			text-overflow: ellipsis;
+			white-space: nowrap !important;
+			overflow: hidden !important;
+			text-overflow: ellipsis !important;
 		}
 
-		.gdl-la-progress-track {
-			height: 8px;
-			background: rgba(0, 0, 0, .72);
-			border-radius: 2px;
-			overflow: hidden;
-			margin: 8px 0 0 0;
-			box-shadow: inset 0 1px 2px rgba(0, 0, 0, .8);
-			width: 100%;
+		.gdl-la-progress-track,
+		.BasicUI .gdl-la-progress-track {
+			height: 8px !important;
+			background: rgba(0, 0, 0, .72) !important;
+			border-radius: 2px !important;
+			overflow: hidden !important;
+			margin: 8px 0 0 0 !important;
+			box-shadow: inset 0 1px 2px rgba(0, 0, 0, .8) !important;
+			width: 100% !important;
+			display: block !important;
+			visibility: visible !important;
+			flex-shrink: 0 !important;
 		}
-		.gdl-la-header.is-complete .gdl-la-progress-track {
-			margin-top: 4px;
-			margin-left: 0;
-			background: rgba(0, 0, 0, .5);
-			position: relative;
-			z-index: 1;
+		.gdl-la-header.is-complete .gdl-la-progress-track,
+		.BasicUI .gdl-la-header.is-complete .gdl-la-progress-track {
+			margin-top: 4px !important;
+			margin-left: 0 !important;
+			background: rgba(0, 0, 0, .5) !important;
+			position: relative !important;
+			z-index: 1 !important;
 		}
-		.gdl-la-progress-fill {
-			height: 100%;
-			background: #2b78ff;
-			border-radius: 2px;
-			min-width: 0;
-			transition: width .3s ease;
+		.gdl-la-progress-fill,
+		.BasicUI .gdl-la-progress-fill {
+			height: 100% !important;
+			background: #2b78ff !important;
+			border-radius: 2px !important;
+			min-width: 0 !important;
+			transition: width .3s ease !important;
+			display: block !important;
 		}
 
-		.gdl-la-body {
-			padding: 16px 10px 10px 10px;
+		.gdl-la-body,
+		.BasicUI .gdl-la-body {
+			display: flex !important;
+			flex-direction: column !important;
+			width: 100% !important;
+			box-sizing: border-box !important;
+			padding: 16px 10px 10px 10px !important;
 			background: linear-gradient(180deg, rgba(24, 30, 39, .24) 0%, rgba(16, 22, 30, .16) 100%) !important;
 			backdrop-filter: blur(8px) saturate(112%) !important;
 			-webkit-backdrop-filter: blur(8px) saturate(112%) !important;
-			min-width: 0;
-			overflow: visible;
+			min-width: 0 !important;
+			overflow: visible !important;
+			flex-shrink: 0 !important;
+			visibility: visible !important;
+			opacity: 1 !important;
 		}
 
-		.gdl-la-feature {
-			display: flex;
-			gap: 8px;
-			align-items: center;
-			margin: 0 0 7px;
-			min-width: 0;
+		.gdl-la-feature,
+		.BasicUI .gdl-la-feature {
+			display: flex !important;
+			flex-direction: row !important;
+			gap: 8px !important;
+			align-items: center !important;
+			margin: 0 0 7px !important;
+			min-width: 0 !important;
+			width: 100% !important;
 		}
 		.gdl-la-feature .gdl-la-icon-frame {
-			flex: 0 0 48px;
-			width: 48px;
-			height: 48px;
-			max-width: 48px;
-			aspect-ratio: 1;
+			flex: 0 0 48px !important;
+			width: 48px !important;
+			height: 48px !important;
+			min-width: 48px !important;
+			max-width: 48px !important;
+			min-height: 48px !important;
+			max-height: 48px !important;
+			aspect-ratio: 1 !important;
 		}
-		.gdl-la-feature-copy {
-			min-width: 0;
-			flex: 1;
-			padding-top: 1px;
+		.gdl-la-feature-copy,
+		.BasicUI .gdl-la-feature-copy,
+		.gdl-la-feature .gdl-la-feature-copy {
+			min-width: 0 !important;
+			flex: 1 1 auto !important;
+			display: flex !important;
+			flex-direction: column !important;
+			padding-top: 1px !important;
+			visibility: visible !important;
+			opacity: 1 !important;
 		}
-		.gdl-la-feature-title {
-			font-size: 13px;
-			font-weight: 600;
-			color: #d6d7d8;
-			white-space: nowrap;
-			overflow: hidden;
-			text-overflow: ellipsis;
-			line-height: 16px;
+		.gdl-la-feature-title,
+		.BasicUI .gdl-la-feature-title {
+			display: block !important;
+			font-size: 13px !important;
+			font-weight: 600 !important;
+			color: #d6d7d8 !important;
+			white-space: nowrap !important;
+			overflow: hidden !important;
+			text-overflow: ellipsis !important;
+			line-height: 16px !important;
+			visibility: visible !important;
 		}
-		.gdl-la-feature-desc {
-			font-size: 12px;
-			font-weight: 400;
-			color: #8f98a0;
-			line-height: 15px;
-			display: -webkit-box;
-			-webkit-line-clamp: 2;
-			-webkit-box-orient: vertical;
-			overflow: hidden;
-			text-overflow: ellipsis;
-			margin-top: 2px;
+		.gdl-la-feature-desc,
+		.BasicUI .gdl-la-feature-desc {
+			display: -webkit-box !important;
+			-webkit-line-clamp: 2 !important;
+			-webkit-box-orient: vertical !important;
+			overflow: hidden !important;
+			text-overflow: ellipsis !important;
+			font-size: 12px !important;
+			font-weight: 400 !important;
+			color: #8f98a0 !important;
+			line-height: 15px !important;
+			margin-top: 2px !important;
+			visibility: visible !important;
+		}
+		.gdl-la-feature-stat,
+		.BasicUI .gdl-la-feature-stat {
+			display: block !important;
+			font-size: 12px !important;
+			color: #717070 !important;
+			margin-top: 2px !important;
+			visibility: visible !important;
 		}
 
-		.gdl-la-icon-row {
-			display: grid;
-			grid-template-columns: repeat(var(--gdl-achievement-columns, 5), 48px);
-			grid-auto-rows: 48px;
-			gap: 8px;
-			align-items: center;
-			justify-content: start;
-			width: 100%;
-			min-width: 0;
-			max-width: 100%;
+		.gdl-la-earned-row-wrap,
+		.gdl-la-locked-row-wrap,
+		.BasicUI .gdl-la-earned-row-wrap,
+		.BasicUI .gdl-la-locked-row-wrap {
+			width: 100% !important;
+			min-width: 0 !important;
+			display: block !important;
+			box-sizing: border-box !important;
+		}
+
+		.gdl-la-icon-row,
+		.BasicUI .gdl-la-icon-row {
+			display: grid !important;
+			grid-template-columns: repeat(var(--gdl-achievement-columns, 5), 48px) !important;
+			grid-auto-rows: 48px !important;
+			gap: 8px !important;
+			align-items: center !important;
+			justify-content: start !important;
+			width: 100% !important;
+			min-width: 0 !important;
+			max-width: 100% !important;
 		}
 
 		/* Official Steam 1:1 achievement icon frame */
-		.gdl-la-icon-frame {
-			position: relative;
-			width: 48px;
-			height: 48px;
-			min-width: 48px;
-			max-width: 48px;
-			aspect-ratio: 1;
-			display: inline-block;
-			background: linear-gradient(180deg, #0f1720 0%, #101820 100%);
-			border: 1px solid rgba(0, 0, 0, .46);
-			box-sizing: border-box;
-			overflow: visible;
+		.gdl-la-icon-frame,
+		.BasicUI .gdl-la-icon-frame {
+			position: relative !important;
+			width: 48px !important;
+			height: 48px !important;
+			min-width: 48px !important;
+			max-width: 48px !important;
+			min-height: 48px !important;
+			max-height: 48px !important;
+			aspect-ratio: 1 !important;
+			display: inline-block !important;
+			background: linear-gradient(180deg, #0f1720 0%, #101820 100%) !important;
+			border: 1px solid rgba(0, 0, 0, .46) !important;
+			box-sizing: border-box !important;
+			overflow: visible !important;
 		}
-		.gdl-la-icon-frame.is-rare {
-			border-color: transparent;
-			background: transparent;
+		.gdl-la-icon-frame.is-rare,
+		.BasicUI .gdl-la-icon-frame.is-rare {
+			border-color: transparent !important;
+			background: transparent !important;
 		}
-		.gdl-la-icon-frame .gdl-la-icon {
-			position: relative;
-			z-index: 2;
-			width: 100%;
-			height: 100%;
-			object-fit: cover;
-			display: block;
+		.gdl-la-icon-frame .gdl-la-icon,
+		.BasicUI .gdl-la-icon-frame .gdl-la-icon {
+			position: relative !important;
+			z-index: 2 !important;
+			width: 100% !important;
+			height: 100% !important;
+			object-fit: cover !important;
+			display: block !important;
 			border: none !important;
-			box-shadow: 0 0 3px rgba(0, 0, 0, .333);
-			cursor: pointer;
+			box-shadow: 0 0 3px rgba(0, 0, 0, .333) !important;
+			cursor: pointer !important;
 		}
-		.gdl-la-icon.is-locked {
+		.gdl-la-icon.is-locked,
+		.BasicUI .gdl-la-icon.is-locked {
+			filter: grayscale(1) brightness(.36) !important;
+			opacity: .82 !important;
+		}
+		.gdl-la-icon-fallback,
+		.BasicUI .gdl-la-icon-fallback {
+			display: flex !important;
+			align-items: center !important;
+			justify-content: center !important;
+			font-size: 18px !important;
+			background: #131b25 !important;
+			color: #78818d !important;
+		}
+		.gdl-la-icon-fallback.is-locked,
+		.BasicUI .gdl-la-icon-fallback.is-locked { color: #49515b !important; }
 
-			filter: grayscale(1) brightness(.36);
-			opacity: .82;
+		.gdl-la-divider,
+		.BasicUI .gdl-la-divider {
+			height: 1px !important;
+			background: rgba(255, 255, 255, 0.08) !important;
+			margin: 14px 0 10px !important;
+			display: block !important;
+			visibility: visible !important;
 		}
-		.gdl-la-icon-fallback {
-			display: flex;
-			align-items: center;
-			justify-content: center;
-			font-size: 18px;
-			background: #131b25;
-			color: #78818d;
+		.gdl-la-locked-label,
+		.BasicUI .gdl-la-locked-label {
+			font-size: 12px !important;
+			color: #8f98a0 !important;
+			line-height: 16px !important;
+			margin-bottom: 8px !important;
+			font-weight: 400 !important;
+			display: block !important;
+			visibility: visible !important;
 		}
-		.gdl-la-icon-fallback.is-locked { color: #49515b; }
-
-		.gdl-la-divider {
-			height: 1px;
-			background: rgba(255, 255, 255, 0.08);
-			margin: 14px 0 10px;
+		.gdl-la-more,
+		.BasicUI .gdl-la-more {
+			width: 48px !important;
+			height: 48px !important;
+			min-width: 48px !important;
+			max-width: 48px !important;
+			min-height: 48px !important;
+			max-height: 48px !important;
+			aspect-ratio: 1 !important;
+			display: flex !important;
+			align-items: center !important;
+			justify-content: center !important;
+			background: rgba(32, 42, 54, .9) !important;
+			color: #ebebeb !important;
+			font-size: 13px !important;
+			font-weight: 600 !important;
+			border: 1px solid rgba(255, 255, 255, .04) !important;
+			box-sizing: border-box !important;
 		}
-		.gdl-la-locked-label {
-			font-size: 12px;
-			color: #8f98a0;
-			line-height: 16px;
-			margin-bottom: 8px;
-			font-weight: 400;
+		.gdl-la-view,
+		.BasicUI .gdl-la-view {
+			margin: 18px 0 0 auto !important;
+			padding: 6px 12px !important;
+			width: max-content !important;
+			max-width: 100% !important;
+			text-align: right !important;
+			color: #8f98a0 !important;
+			font-size: 12px !important;
+			line-height: 16px !important;
+			cursor: pointer !important;
+			transition: color .12s ease, background-color .12s ease !important;
+			display: block !important;
+			visibility: visible !important;
 		}
-		.gdl-la-more {
-			width: 48px;
-			height: 48px;
-			min-width: 48px;
-			max-width: 48px;
-			aspect-ratio: 1;
-			display: flex;
-			align-items: center;
-			justify-content: center;
-			background: rgba(32, 42, 54, .9);
-			color: #ebebeb;
-			font-size: 13px;
-			font-weight: 600;
-			border: 1px solid rgba(255, 255, 255, .04);
-			box-sizing: border-box;
-		}
-		.gdl-la-view {
-			margin: 18px 0 0 auto;
-			padding: 6px 12px;
-			width: max-content;
-			max-width: 100%;
-			text-align: right;
-			color: #8f98a0;
-			font-size: 12px;
-			line-height: 16px;
-			cursor: pointer;
-			transition: color .12s ease, background-color .12s ease;
-			display: block;
-		}
-		.gdl-la-view:hover { color: #ffffff; background: rgba(115, 116, 136, .42); text-decoration: none; }
+		.gdl-la-view:hover,
+		.BasicUI .gdl-la-view:hover { color: #ffffff !important; background: rgba(115, 116, 136, .42) !important; text-decoration: none !important; }
 
 		/* One translucency level for every NativeGameLink box in Steam's right sidebar.
 		   Solid inner headers (achievements/trading cards) keep their own explicit

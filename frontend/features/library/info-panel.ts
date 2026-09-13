@@ -228,6 +228,15 @@ function shouldShowScrollTopButton(doc: Document, knownTargets?: Iterable<HTMLEl
 	return top > SCROLL_TOP_BUTTON_THRESHOLD || isStickyPlaybarVisible(doc) || isMainContentVisuallyScrolled(doc);
 }
 
+export function resetMainScrollToTop(doc: Document): void {
+	try {
+		for (const target of collectMainScrollTargets(doc)) target.scrollTop = 0;
+		const scrolling = doc.scrollingElement;
+		if (scrolling instanceof HTMLElement) scrolling.scrollTop = 0;
+		doc.defaultView?.scrollTo(0, 0);
+	} catch {}
+}
+
 function scrollMainContentToTop(doc: Document, knownTargets?: Iterable<HTMLElement>): void {
 	const learnedTargets = knownTargets || infoKnownScrollTargets.get(doc);
 	const view = doc.defaultView;

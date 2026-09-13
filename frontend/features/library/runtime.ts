@@ -32,6 +32,7 @@ import { hydrateLinkedRouteResources } from './hydration';
 import { reprioritizeLinkedGame } from './prefetch';
 import { prioritizeShortcutLinkingAndArtwork } from './artwork-sync';
 import { tryRedirectUnownedMappedGame } from './sidebar-cleanup';
+import { resetMainScrollToTop } from './info-panel';
 export { findNonSteamNotice, hideNoticeQuick } from './notice';
 export interface LibraryRuntimeHost {
 	getMainWindowDoc: () => Document | null;
@@ -126,6 +127,7 @@ function retireLinkedRouteFromNativePage(doc: Document, generation: number): voi
 	cleanupOwnedLibraryChromeAfterRouteExit(doc);
 }
 export function handleLibraryNavigation(doc: Document): void {
+	resetMainScrollToTop(doc);
 	const generation = navigationController.advance(doc);
 	linkedRenderRetryState.delete(doc);
 	const hadCurrentInjection = currentInjectedDocument === doc, hadOwnedChrome = hasOwnedLibraryChrome(doc);
@@ -236,6 +238,7 @@ export async function tryInjectLibraryData(doc: Document): Promise<void> {
 	}
 	installSteamNavigation(doc);
 	navigationController.cancelCleanup(doc);
+	resetMainScrollToTop(doc);
 	const notice = noticeInfo.element;
 	const gameTitle = noticeInfo.title;
 	if (!isMappingSnapshotVerified()) {

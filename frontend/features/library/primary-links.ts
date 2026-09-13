@@ -517,8 +517,15 @@ export function insertPrimaryLinksBar(
 			stableFrames = 0;
 		}
 
+		if (attempts >= 45 && bar.isConnected && bar.dataset.gdlLinksSettled !== '1') {
+			revealBar(bar);
+			return;
+		}
+
 		if (attempts < 180) {
 			win.requestAnimationFrame(checkSettled);
+		} else if (bar.isConnected && bar.dataset.gdlLinksSettled !== '1') {
+			revealBar(bar);
 		}
 	};
 	win.requestAnimationFrame(checkSettled);

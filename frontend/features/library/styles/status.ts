@@ -5,7 +5,6 @@ export function ensureStatusComposerStyles(doc: Document): void {
 	const post = POST_CLASSES();
 	injectLibraryStyle(doc, 'gdl-status-composer-styles', `
 		.gdl-status-box-container { display:block !important;margin:0 0 2px 0 !important;min-height:0 !important;height:auto !important;position:relative !important;z-index:50 !important;overflow:visible !important; }
-		#gdl-game-data .${post.PostTextEntryArea},
 		.gdl-status-box-container textarea,
 		#gdl-status-text {
 			width: 100% !important;
@@ -32,14 +31,12 @@ export function ensureStatusComposerStyles(doc: Document): void {
 			-ms-overflow-style: none !important;
 			transition: min-height 0.2s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.15s ease, background 0.15s ease !important;
 		}
-		#gdl-game-data .${post.PostTextEntryArea}::-webkit-scrollbar,
 		.gdl-status-box-container textarea::-webkit-scrollbar,
 		#gdl-status-text::-webkit-scrollbar {
 			display: none !important;
 			width: 0 !important;
 			height: 0 !important;
 		}
-		#gdl-game-data .${post.PostTextEntryArea}::placeholder,
 		.gdl-status-box-container textarea::placeholder,
 		#gdl-status-text::placeholder {
 			font-style: italic !important;
@@ -47,7 +44,6 @@ export function ensureStatusComposerStyles(doc: Document): void {
 			font-size: 13.5px !important;
 			font-family: "Motiva Sans", Arial, sans-serif !important;
 		}
-		#gdl-game-data .${post.PostTextEntryArea}:focus,
 		.gdl-status-box-container textarea:focus,
 		.gdl-status-box-container.gdl-composer-active textarea,
 		#gdl-status-text:focus {
@@ -56,7 +52,6 @@ export function ensureStatusComposerStyles(doc: Document): void {
 			background: rgba(0, 0, 0, 0.35) !important;
 			border-color: rgba(255, 255, 255, 0.12) !important;
 		}
-		#gdl-game-data .${post.Controls},
 		.gdl-status-box-container .${post.Controls} {
 			display: flex !important;
 			align-items: center !important;
@@ -72,7 +67,6 @@ export function ensureStatusComposerStyles(doc: Document): void {
 			z-index: 51 !important;
 			transition: max-height 0.24s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.2s ease, transform 0.24s ease, margin-top 0.24s ease !important;
 		}
-		#gdl-game-data .${post.Controls}.${post.Active},
 		.gdl-status-box-container .${post.Controls}.${post.Active},
 		.gdl-status-box-container.gdl-composer-active .${post.Controls} {
 			max-height: 42px !important;
@@ -82,7 +76,6 @@ export function ensureStatusComposerStyles(doc: Document): void {
 			pointer-events: auto !important;
 			margin-top: 6px !important;
 		}
-		#gdl-game-data .${post.EmoticonButton},
 		.gdl-status-box-container .${post.EmoticonButton},
 		.gdl-emoticon-btn {
 			background: #1d2227 !important;
@@ -101,13 +94,11 @@ export function ensureStatusComposerStyles(doc: Document): void {
 			box-shadow: none !important;
 			transition: background .15s,color .15s !important;
 		}
-		#gdl-game-data .${post.EmoticonButton}:hover,
 		.gdl-status-box-container .${post.EmoticonButton}:hover,
 		.gdl-emoticon-btn:hover {
 			background: #353e49 !important;
 			color: #ffffff !important;
 		}
-		#gdl-game-data .${post.PostButton},
 		.gdl-status-box-container .${post.PostButton},
 		#gdl-status-post {
 			background: #1d2227 !important;
@@ -131,7 +122,6 @@ export function ensureStatusComposerStyles(doc: Document): void {
 		}
 		#gdl-status-post .${post.Label},
 		#gdl-status-post > div { pointer-events:none; }
-		#gdl-game-data .${post.PostButton}.${post.Enabled},
 		.gdl-status-box-container .${post.PostButton}.${post.Enabled},
 		#gdl-status-post.is-enabled {
 			background: linear-gradient(90deg, #47a8f8 0%, #2f7eea 100%) !important;
@@ -141,7 +131,6 @@ export function ensureStatusComposerStyles(doc: Document): void {
 			cursor: pointer !important;
 			box-shadow: inset 0 1px 0 rgba(255,255,255,.18) !important;
 		}
-		#gdl-game-data .${post.PostButton}.${post.Enabled}:hover,
 		.gdl-status-box-container .${post.PostButton}.${post.Enabled}:hover,
 		#gdl-status-post.is-enabled:hover { background:linear-gradient(90deg, #56b5ff 0%, #3b8df5 100%) !important;border-color:rgba(108, 194, 255, .9) !important; }
 		.gdl-latest-news-row { display:flex;justify-content:flex-end;align-items:center;margin:2px 0 8px !important;min-height:0 !important;padding:0 !important; }

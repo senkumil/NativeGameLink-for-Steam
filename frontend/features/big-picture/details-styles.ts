@@ -459,7 +459,6 @@ export function ensureBigPictureDetailStyles(doc: Document): void {
 }
 
 /* Big Picture Achievements Carousel - Parity with Steam native BoxCarousel & no compression */
-[class*="AchievementCarouselItem"],
 .gdl-bp-achievement-item {
 	flex-shrink: 0 !important;
 }

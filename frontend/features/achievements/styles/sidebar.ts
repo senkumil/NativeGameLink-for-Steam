@@ -128,21 +128,9 @@ export function ensureAchievementSidebarStyles(doc: Document): void {
 			font-weight: 400;
 		}
 		.gdl-la-header.is-complete .gdl-la-unlocked {
-			font-size: 13px;
-			font-weight: 600;
-			line-height: 17px;
-			margin: 0;
-			color: #ebebeb;
 			white-space: nowrap;
 			overflow: hidden;
 			text-overflow: ellipsis;
-		}
-		.gdl-la-header.is-complete .gdl-la-unlocked-sub {
-			font-size: 12px;
-			color: #8f98a0;
-			line-height: 15px;
-			margin: 1px 0 0;
-			font-weight: 400;
 		}
 
 		.gdl-la-progress-track {
@@ -155,11 +143,8 @@ export function ensureAchievementSidebarStyles(doc: Document): void {
 			width: 100%;
 		}
 		.gdl-la-header.is-complete .gdl-la-progress-track {
-			height: 8px;
 			margin-top: 4px;
 			margin-left: 0;
-			width: 100%;
-			border-radius: 2px;
 			background: rgba(0, 0, 0, .5);
 			position: relative;
 			z-index: 1;
@@ -171,9 +156,6 @@ export function ensureAchievementSidebarStyles(doc: Document): void {
 			min-width: 0;
 			transition: width .3s ease;
 		}
-		.gdl-la-summary.is-complete .gdl-la-progress-fill {
-			background: #2b78ff;
-		}
 
 		.gdl-la-body {
 			padding: 16px 10px 10px 10px;
@@ -181,10 +163,6 @@ export function ensureAchievementSidebarStyles(doc: Document): void {
 			backdrop-filter: blur(8px) saturate(112%) !important;
 			-webkit-backdrop-filter: blur(8px) saturate(112%) !important;
 			min-width: 0;
-			overflow: visible;
-		}
-		.gdl-la-summary.is-complete .gdl-la-body {
-			padding: 16px 10px 10px 10px;
 			overflow: visible;
 		}
 
@@ -377,7 +355,6 @@ export function ensureAchievementSidebarStyles(doc: Document): void {
 			transition: color .12s ease, background-color .12s ease;
 			display: block;
 		}
-		.gdl-la-summary.is-complete .gdl-la-view { margin: 18px 0 0 auto; }
 		.gdl-la-view:hover { color: #ffffff; background: rgba(115, 116, 136, .42); text-decoration: none; }
 
 		/* Steam's controller capability surface matching official native layout */
@@ -465,14 +442,8 @@ export function ensureAchievementSidebarStyles(doc: Document): void {
 			background: transparent !important;
 		}
 		#gdl-achievements-section .gdl-la-header {
-			background: rgba(56, 66, 78, .55) !important;
 			backdrop-filter: none !important;
 			-webkit-backdrop-filter: none !important;
-		}
-		#gdl-achievements-section .gdl-la-body {
-			background: linear-gradient(180deg, rgba(24, 30, 39, .24) 0%, rgba(16, 22, 30, .16) 100%) !important;
-			backdrop-filter: blur(8px) saturate(112%) !important;
-			-webkit-backdrop-filter: blur(8px) saturate(112%) !important;
 		}
 
 		/* Defer vertical spacing between right-sidebar sections to Steam's cloned wrapper nodes. */

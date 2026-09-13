@@ -42,24 +42,13 @@ export function ensureInfoPanelStyles(doc: Document): void {
 		   private module does not constrain images inserted outside React, which
 		   otherwise lets a horizontal legacy capsule cover every information
 		   column. */
-		/* Preserve the pre-existing linked-game geometry outside legacy mode. */
-		#gdl-game-info-panel[data-gdl-native-layout="1"][data-gdl-legacy="0"] .gdl-info-portrait {
+		#gdl-game-info-panel[data-gdl-native-layout="1"] .gdl-info-portrait {
 			width:109px !important;min-width:109px !important;max-width:109px !important;
 			height:163px !important;min-height:163px !important;max-height:163px !important;
 			overflow:hidden !important;border-radius:2px !important;
 		}
-		#gdl-game-info-panel[data-gdl-native-layout="1"][data-gdl-legacy="0"] .gdl-info-portrait img {
+		#gdl-game-info-panel[data-gdl-native-layout="1"] .gdl-info-portrait img {
 			width:100% !important;height:100% !important;object-fit:cover !important;display:block !important;
-		}
-		#gdl-game-info-panel[data-gdl-native-layout="1"][data-gdl-legacy="1"] .gdl-info-portrait {
-			width:109px !important;min-width:109px !important;max-width:109px !important;
-			height:163px !important;min-height:163px !important;max-height:163px !important;
-			overflow:hidden !important;border-radius:2px !important;
-		}
-		#gdl-game-info-panel[data-gdl-native-layout="1"][data-gdl-legacy="1"] .gdl-info-portrait img {
-			width:109px !important;min-width:109px !important;max-width:109px !important;
-			height:163px !important;min-height:163px !important;max-height:163px !important;
-			object-fit:cover !important;display:block !important;
 		}
 		@media (max-width: 900px) {
 			#gdl-game-info-panel .gdl-info-portrait,

@@ -1,4 +1,6 @@
 import { injectAchievementStyle } from './inject';
+import { steamRareAchievementStyles } from './rare';
+
 
 export function ensureAchievementModalStyles(doc: Document): void {
 	injectAchievementStyle(doc, 'gdl-achievement-modal-style', `
@@ -31,36 +33,7 @@ export function ensureAchievementModalStyles(doc: Document): void {
 			from { transform: translateX(18px); opacity: 0; }
 			to { transform: translateX(0); opacity: 1; }
 		}
-		@keyframes gdl-lam-rare-rays-a {
-			0%, 100% { opacity: .18; filter: blur(2.8px); }
-			23% { opacity: .62; filter: blur(2px); }
-			48% { opacity: .28; filter: blur(3px); }
-			74% { opacity: .52; filter: blur(2.2px); }
-		}
-		@keyframes gdl-lam-rare-rays-b {
-			0%, 100% { opacity: .48; filter: blur(2.2px); }
-			29% { opacity: .16; filter: blur(3.2px); }
-			58% { opacity: .57; filter: blur(1.9px); }
-			83% { opacity: .24; filter: blur(2.9px); }
-		}
-		@media (prefers-reduced-motion: reduce) {
-			.gdl-lam-row-icon-frame.is-highlighted .gdl-lam-row-rare-ring,
-			.gdl-lam-row-icon-frame.is-highlighted .gdl-lam-row-rare-beam {
-				animation: none !important;
-			}
-		}
-		@keyframes gdl-lam-rays-a {
-			0%, 100% { opacity: .12; transform: scale(.96); filter: blur(3.1px); }
-			28% { opacity: .44; transform: scale(1.015); filter: blur(2.3px); }
-			57% { opacity: .22; transform: scale(.985); filter: blur(3px); }
-			78% { opacity: .38; transform: scale(1.025); filter: blur(2.5px); }
-		}
-		@keyframes gdl-lam-rays-b {
-			0%, 100% { opacity: .30; transform: scale(1.015); filter: blur(2.5px); }
-			24% { opacity: .13; transform: scale(.975); filter: blur(3.3px); }
-			52% { opacity: .40; transform: scale(1.025); filter: blur(2.2px); }
-			82% { opacity: .16; transform: scale(.985); filter: blur(3.1px); }
-		}
+${steamRareAchievementStyles()}
 		.gdl-lam-window {
 			width: min(840px, calc(100% - 96px));
 			height: 100%;
@@ -270,79 +243,35 @@ export function ensureAchievementModalStyles(doc: Document): void {
 		.gdl-lam-row:hover {
 			background: rgba(38, 45, 56, 0.96);
 		}
-		/* Modal icon frame with subtle native-like rare glow */
+		/* Official Steam 1:1 modal achievement icon frame */
 		.gdl-lam-row-icon-frame {
 			position: relative;
 			width: 64px;
 			height: 64px;
+			min-width: 64px;
+			max-width: 64px;
 			flex: 0 0 64px;
-			display: flex;
-			align-items: center;
-			justify-content: center;
+			display: inline-block;
 			border-radius: 3px;
 			overflow: visible;
 			background: linear-gradient(180deg, #101722 0%, #121820 100%);
 			box-sizing: border-box;
-			isolation: isolate;
 			border: 1px solid rgba(0, 0, 0, 0.42);
 		}
-		.gdl-lam-row-icon-frame.is-highlighted {
-			border-color: rgba(0, 0, 0, 0.42);
-			box-shadow: none;
-		}
-		.gdl-lam-row-rare-ring,
-		.gdl-lam-row-rare-beam {
-			display: none;
-			pointer-events: none;
-		}
-		.gdl-lam-row-icon-frame.is-highlighted .gdl-lam-row-rare-ring {
-			display: block;
-			position: absolute;
-			inset: -2px;
-			z-index: 1;
-			border: 1px solid rgba(255, 220, 92, .78);
-			border-radius: 5px;
-			box-shadow: 0 0 2px rgba(255, 238, 148, .95), 0 0 7px rgba(255, 169, 32, .62);
-			animation: gdl-lam-rare-rays-b 15s cubic-bezier(.42,0,.32,1) infinite;
-		}
-		.gdl-lam-row-icon-frame.is-highlighted .gdl-lam-row-rare-beam {
-			display: block;
-			position: absolute;
-			inset: -8px;
-			z-index: 0;
-			border-radius: 50%;
-			background: repeating-conic-gradient(from 2deg,
-				rgba(255, 224, 105, .68) 0deg 2deg,
-				transparent 2deg 14deg);
-			filter: blur(1.2px);
-			opacity: .38;
-			will-change: opacity, filter;
-			animation: gdl-lam-rare-rays-a 15s cubic-bezier(.42,0,.32,1) infinite;
-		}
-		.gdl-lam-row-icon-frame.is-highlighted .gdl-lam-row-rare-beam::after {
-			content: '';
-			position: absolute;
-			inset: 3px;
-			border-radius: 50%;
-			background: repeating-conic-gradient(from 10deg,
-				rgba(255, 170, 30, .46) 0deg 1deg,
-				transparent 1deg 11deg);
-			filter: blur(1.2px);
-			opacity: .64;
+		.gdl-lam-row-icon-frame.is-rare {
+			border-color: transparent;
+			background: transparent;
 		}
 		.gdl-lam-row-icon-frame .gdl-lam-row-icon {
 			position: relative;
-			z-index: 3;
+			z-index: 2;
 			width: 100%;
 			height: 100%;
 			object-fit: cover;
 			border-radius: 2px;
 			border: none !important;
-			box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
-		}
-		.gdl-lam-row-icon-frame.is-highlighted .gdl-lam-row-icon {
-			filter: drop-shadow(0 0 2px rgba(255, 224, 86, .92))
-				drop-shadow(0 0 8px rgba(255, 174, 36, .72));
+			box-shadow: 0 0 3px rgba(0, 0, 0, 0.333);
+			cursor: pointer;
 		}
 		.gdl-lam-row-icon-frame:not(.is-highlighted) .gdl-lam-row-icon {
 			border: 1px solid rgba(255, 255, 255, 0.06);

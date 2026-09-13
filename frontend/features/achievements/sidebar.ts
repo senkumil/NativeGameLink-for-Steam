@@ -7,7 +7,8 @@ import { cacheLocalAchievements, localAchievementDataSignature } from './cache';
 import { localAchievementPercent } from './format';
 import { ensureLocalPlaybarStat } from './playbar';
 import { openLocalAchievementsModal } from './modal';
-import { compareEarnedAchievementsForDisplay, compareLockedAchievementsForDisplay, highlightedAchievementNames } from './rarity';
+import { compareEarnedAchievementsForDisplay, compareLockedAchievementsForDisplay, highlightedAchievementNames, isRareAchievement } from './rarity';
+import { getSteamRareAchievementClasses, renderSteamRareGlowHtml } from './steam-rare';
 import { desktopFeatureFlags } from '../desktop/flags';
 import { mountSingleDesktopNativeAchievement } from '../desktop/achievements/SingleDesktopNativeAchievement';
 
@@ -38,19 +39,18 @@ export function achievementSidebarColumnsForWidth(width: number): number {
 
 function localAchievementIcon(item: LocalAchievementItem, locked = false, highlightedNames: ReadonlySet<string> = new Set()): string {
 	const url = locked ? (item.icon_gray || item.icon) : item.icon;
-	const isRare = !locked && highlightedNames.has(String(item.name));
-	const frameClass = `gdl-la-icon-frame${isRare ? ' gdl-shimmer-active' : ''}`;
-	const shimmerHtml = isRare
-		? '<div class="gdl-la-rare-ring"></div><div class="gdl-la-shimmer-spin"></div>'
-		: '';
+	const isRare = !locked && (isRareAchievement(item) || highlightedNames.has(String(item.name)));
+	const rareClasses = getSteamRareAchievementClasses();
+	const frameClass = `gdl-la-icon-frame ${rareClasses.wrapper}${isRare ? ' is-rare' : ''}`;
+	const glowHtml = isRare ? renderSteamRareGlowHtml(rareClasses) : '';
 
 	if (!url) {
 		if (item.name.startsWith('GDL_PENDING_')) {
-			return `<div class="${frameClass}"><div class="gdl-la-icon gdl-la-icon-fallback${locked ? ' is-locked' : ''}">★</div></div>`;
+			return `<div class="${frameClass}"><div class="gdl-la-icon ${rareClasses.icon} gdl-la-icon-fallback${locked ? ' is-locked' : ''}">★</div></div>`;
 		}
-		return `<div class="${frameClass}">${shimmerHtml}<div class="gdl-la-icon gdl-la-icon-fallback${locked ? ' is-locked' : ''}">★</div></div>`;
+		return `<div class="${frameClass}">${glowHtml}<div class="gdl-la-icon ${rareClasses.icon} gdl-la-icon-fallback${locked ? ' is-locked' : ''}${isRare ? ` is-rare-glow ${rareClasses.iconGlow}` : ''}">★</div></div>`;
 	}
-	return `<div class="${frameClass}">${shimmerHtml}<img class="gdl-la-icon${locked ? ' is-locked' : ''}" src="${escapeHtml(url)}" loading="lazy" data-gdl-invisible-on-error="1" /></div>`;
+	return `<div class="${frameClass}">${glowHtml}<img class="gdl-la-icon ${rareClasses.icon}${locked ? ' is-locked' : ''}${isRare ? ` is-rare-glow ${rareClasses.iconGlow}` : ''}" src="${escapeHtml(url)}" loading="lazy" data-gdl-invisible-on-error="1" /></div>`;
 }
 
 function renderAchievementIconRowHtml(

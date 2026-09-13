@@ -77,6 +77,12 @@ const playtimeTrackerTs = read('frontend/features/playtime/tracker.ts');
 const playtimeServiceTs = read('frontend/features/playtime/service.ts');
 const infoPanelTs = read('frontend/features/library/info-panel.ts');
 const featureIconsTs = read('frontend/features/library/feature-icons.ts');
+const steamRareTs = read('frontend/features/achievements/steam-rare.ts');
+const rareStylesTs = read('frontend/features/achievements/styles/rare.ts');
+const achSidebarTs = read('frontend/features/achievements/sidebar.ts');
+const achSidebarStylesTs = read('frontend/features/achievements/styles/sidebar.ts');
+const achModalTs = read('frontend/features/achievements/modal.ts');
+const achModalStylesTs = read('frontend/features/achievements/styles/modal.ts');
 
 let passed = 0;
 function assert(condition, message) {
@@ -522,5 +528,19 @@ assert(infoPanelTs.includes('nativeArrowSvg()') && !infoPanelTs.includes('topAnc
 assert(featureIconsTs.includes('SVGIcon_Arrow') && featureIconsTs.includes('stroke-width="10"') && featureIconsTs.includes('points="128,247.688'), 'scroll-to-top arrow uses Steam native thin polyline glyph');
 // 5. Dynamic Controller Sidebar Card mounts when connected and tears down when disconnected
 assert(controllerTs.includes('buildNativeSidebarSection') && controllerTs.includes('!controllerInfo.connected') && controllerTs.includes('section.remove()') && controllerTs.includes('setupControllerSidebarWatcher'), 'dynamic controller card mounts when connected and tears down when disconnected');
+
+// Official Steam Webpack Rare Achievement Animation:
+// 1. steam-rare.ts resolves live Webpack classes from Module 33175 with verified fallbacks
+assert(steamRareTs.includes('findModuleExport') && steamRareTs.includes('RareAchievementIconGlowContainerRoot') && steamRareTs.includes('_2HUbCbZUn27MliiC8gRxGB'), 'steam-rare resolves official Webpack classes from module 33175 with exact fallbacks');
+// 2. Official 1:1 nested 3-level glow container DOM structure is generated
+assert(steamRareTs.includes('gdl-rare-glow-root') && steamRareTs.includes('gdl-rare-glow-container') && steamRareTs.includes('gdl-rare-glow') && steamRareTs.includes('renderSteamRareGlowHtml'), 'steam-rare generates official 3-level nested glow container DOM structure');
+// 3. Rare styles contain official Steam animations, mask URIs, conic gradient, and gold box-shadow
+assert(rareStylesTs.includes('gdl-rare-rotate') && rareStylesTs.includes('repeating-conic-gradient') && rareStylesTs.includes('mix-blend-mode: overlay') && rareStylesTs.includes('box-shadow: 0px 0px 2px 1px rgba(255, 184, 78, .6)'), 'rare styles implement Steam 1:1 rotation, mask interference, overlay conic gradient, and gold aura');
+// 4. Obsolete fake rays animations and elements are completely eliminated
+assert(!achSidebarStylesTs.includes('gdl-rare-rays-a') && !achSidebarStylesTs.includes('gdl-la-rare-ring') && !achSidebarTs.includes('gdl-la-rare-ring'), 'sidebar achievements eliminate legacy simulated rays and fake rings');
+assert(!achModalStylesTs.includes('gdl-lam-rare-rays-a') && !achModalStylesTs.includes('gdl-lam-row-rare-ring') && !achModalTs.includes('gdl-lam-row-rare-ring'), 'modal achievements eliminate legacy simulated rays and fake rings');
+// 5. Sidebar and modal icons both use official Webpack classes and glow HTML
+assert(achSidebarTs.includes('getSteamRareAchievementClasses()') && achSidebarTs.includes('renderSteamRareGlowHtml(rareClasses)'), 'sidebar achievement icons use official Webpack classes and glow HTML');
+assert(achModalTs.includes('getSteamRareAchievementClasses()') && achModalTs.includes('renderSteamRareGlowHtml(rareClasses)'), 'modal achievement icons use official Webpack classes and glow HTML');
 
 console.log(`All ${passed} user-reported bug regression checks passed.`);

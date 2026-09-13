@@ -1,4 +1,6 @@
 import { injectAchievementStyle } from './inject';
+import { steamRareAchievementStyles } from './rare';
+
 
 export function ensureAchievementSidebarStyles(doc: Document): void {
 	injectAchievementStyle(doc, 'gdl-achievement-sidebar-style', `
@@ -28,25 +30,7 @@ export function ensureAchievementSidebarStyles(doc: Document): void {
 		}
 		#gdl-achievements-section.gdl-achievement-focus { position:relative;z-index:2;animation:gdl-achievement-focus-pulse 1.35s ease-out; }
 
-		/* Native Steam-like rare achievement animation: close solar corona, no rotation. */
-		@keyframes gdl-rare-rays-a {
-			0%, 100% { opacity: .18; filter: blur(2.4px); }
-			23% { opacity: .62; filter: blur(1.7px); }
-			48% { opacity: .28; filter: blur(2.6px); }
-			74% { opacity: .52; filter: blur(1.9px); }
-		}
-		@keyframes gdl-rare-rays-b {
-			0%, 100% { opacity: .48; filter: blur(1.9px); }
-			29% { opacity: .16; filter: blur(2.8px); }
-			58% { opacity: .57; filter: blur(1.6px); }
-			83% { opacity: .24; filter: blur(2.5px); }
-		}
-		@media (prefers-reduced-motion: reduce) {
-			.gdl-la-icon-frame.gdl-shimmer-active .gdl-la-rare-ring,
-			.gdl-la-icon-frame.gdl-shimmer-active .gdl-la-shimmer-spin {
-				animation: none !important;
-			}
-		}
+${steamRareAchievementStyles()}
 
 		/* Native Steam translucent panel matching official client */
 		#gdl-achievements-section, #gdl-achievements-section *, .gdl-la-summary {
@@ -219,7 +203,7 @@ export function ensureAchievementSidebarStyles(doc: Document): void {
 			max-width: 100%;
 		}
 
-		/* Achievement icon frame with subtle native-like rare glow */
+		/* Official Steam 1:1 achievement icon frame */
 		.gdl-la-icon-frame {
 			position: relative;
 			width: 48px;
@@ -227,77 +211,26 @@ export function ensureAchievementSidebarStyles(doc: Document): void {
 			min-width: 48px;
 			max-width: 48px;
 			aspect-ratio: 1;
-			display: flex;
-			align-items: center;
-			justify-content: center;
+			display: inline-block;
 			background: linear-gradient(180deg, #0f1720 0%, #101820 100%);
 			border: 1px solid rgba(0, 0, 0, .46);
 			box-sizing: border-box;
 			overflow: visible;
-			isolation: isolate;
 		}
-		.gdl-la-icon-frame.gdl-shimmer-active {
-			border-color: rgba(0, 0, 0, .46);
-			box-shadow: none;
-		}
-		.gdl-la-icon-frame .gdl-la-rare-ring,
-		.gdl-la-icon-frame .gdl-la-shimmer-spin {
-			display: none;
-			pointer-events: none;
-		}
-		/* Steam's toast has a bright corona around the icon. These layers were
-		   already emitted by the page, but hidden; keep them behind the image and
-		   animate only the two featured rare achievements. */
-		.gdl-la-icon-frame.gdl-shimmer-active .gdl-la-rare-ring {
-			display: block;
-			position: absolute;
-			inset: -2px;
-			z-index: 1;
-			border: 1px solid rgba(255, 220, 92, .78);
-			border-radius: 5px;
-			box-shadow: 0 0 2px rgba(255, 238, 148, .95), 0 0 6px rgba(255, 169, 32, .62);
-			animation: gdl-rare-rays-b 15s cubic-bezier(.42,0,.32,1) infinite;
-		}
-		.gdl-la-icon-frame.gdl-shimmer-active .gdl-la-shimmer-spin {
-			display: block;
-			position: absolute;
-			inset: -7px;
-			z-index: 0;
-			border-radius: 50%;
-			background: repeating-conic-gradient(from 2deg,
-				rgba(255, 224, 105, .68) 0deg 2deg,
-				transparent 2deg 14deg);
-			filter: blur(1px);
-			opacity: .38;
-			will-change: opacity, filter;
-			animation: gdl-rare-rays-a 15s cubic-bezier(.42,0,.32,1) infinite;
-		}
-		.gdl-la-icon-frame.gdl-shimmer-active .gdl-la-shimmer-spin::after {
-			content: '';
-			position: absolute;
-			inset: 3px;
-			border-radius: 50%;
-			background: repeating-conic-gradient(from 10deg,
-				rgba(255, 170, 30, .46) 0deg 1deg,
-				transparent 1deg 11deg);
-			filter: blur(1px);
-			opacity: .64;
+		.gdl-la-icon-frame.is-rare {
+			border-color: transparent;
+			background: transparent;
 		}
 		.gdl-la-icon-frame .gdl-la-icon {
 			position: relative;
-			z-index: 3;
+			z-index: 2;
 			width: 100%;
 			height: 100%;
 			object-fit: cover;
 			display: block;
 			border: none !important;
-			box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .04);
-		}
-		.gdl-la-icon-frame.gdl-shimmer-active .gdl-la-icon {
-			width: 100%;
-			height: 100%;
-			filter: drop-shadow(0 0 2px rgba(255, 224, 86, .92))
-				drop-shadow(0 0 7px rgba(255, 174, 36, .72));
+			box-shadow: 0 0 3px rgba(0, 0, 0, .333);
+			cursor: pointer;
 		}
 		.gdl-la-icon.is-locked {
 

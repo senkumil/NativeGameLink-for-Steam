@@ -46,18 +46,34 @@ export function isSteamControllerConnected(ctrl: any): boolean {
 function getSteamControllerStore(doc?: Document): any {
 	try {
 		const win = doc?.defaultView || (typeof window !== 'undefined' ? window : null);
-		if (win) {
-			if ((win as any).ControllerStore) return (win as any).ControllerStore;
-			if ((win as any).controllerStore) return (win as any).controllerStore;
-			if ((win as any).opener && ((win as any).opener.ControllerStore || (win as any).opener.controllerStore)) {
-				return (win as any).opener.ControllerStore || (win as any).opener.controllerStore;
-			}
-			if ((win as any).parent && ((win as any).parent.ControllerStore || (win as any).parent.controllerStore)) {
-				return (win as any).parent.ControllerStore || (win as any).parent.controllerStore;
-			}
-			if ((win as any).top && ((win as any).top.ControllerStore || (win as any).top.controllerStore)) {
-				return (win as any).top.ControllerStore || (win as any).top.controllerStore;
-			}
+		const candidates = [
+			typeof window !== 'undefined' ? window : null,
+			win,
+			(win as any)?.opener,
+			(win as any)?.top,
+			(win as any)?.parent,
+		];
+		for (const w of candidates) {
+			if (w?.ControllerStore) return w.ControllerStore;
+			if (w?.controllerStore) return w.controllerStore;
+		}
+	} catch {}
+	return null;
+}
+
+function getSteamUIStore(doc?: Document): any {
+	try {
+		const win = doc?.defaultView || (typeof window !== 'undefined' ? window : null);
+		const candidates = [
+			typeof window !== 'undefined' ? window : null,
+			win,
+			(win as any)?.opener,
+			(win as any)?.top,
+			(win as any)?.parent,
+		];
+		for (const w of candidates) {
+			if (w?.SteamUIStore) return w.SteamUIStore;
+			if (w?.steamUIStore) return w.steamUIStore;
 		}
 	} catch {}
 	return null;
@@ -65,10 +81,10 @@ function getSteamControllerStore(doc?: Document): any {
 
 function classifyGamepadId(rawId: string): ControllerDeviceType {
 	const id = (rawId || '').toLowerCase();
-	if (id.includes('dualsense') || id.includes('ps5') || id.includes('0ce6') || id.includes('0df2')) {
+	if (id.includes('dualsense') || id.includes('0ce6') || id.includes('0df2') || (id.includes('ps5') && !id.includes('xinput'))) {
 		return 'dualsense';
 	}
-	if (id.includes('dualshock') || id.includes('ps4') || id.includes('05c4') || id.includes('09cc')) {
+	if (id.includes('dualshock') || id.includes('05c4') || id.includes('09cc') || (id.includes('ps4') && !id.includes('xinput'))) {
 		return 'dualshock';
 	}
 	if (id.includes('playstation') || id.includes('sony') || id.includes('054c')) {
@@ -77,6 +93,9 @@ function classifyGamepadId(rawId: string): ControllerDeviceType {
 	if (id.includes('switch') || id.includes('nintendo') || id.includes('joy-con') || id.includes('057e') || id.includes('pro controller')) {
 		return 'switch';
 	}
+	if (id.includes('xbox') || id.includes('xinput') || id.includes('045e') || id.includes('microsoft')) {
+		return 'xbox';
+	}
 	return 'xbox';
 }
 
@@ -84,48 +103,154 @@ function classifySteamControllerType(eType: number, name: string): ControllerDev
 	if (eType === 45 || eType === 48) return 'dualsense';
 	if (eType === 33 || eType === 34 || eType === 47) return 'dualshock';
 	if (eType === 38 || eType === 39 || eType === 40 || eType === 41 || eType === 42 || eType === 44 || eType === 51) return 'switch';
-	if (eType === 31 || eType === 32 || eType === 46) return 'xbox';
+	if (eType === 31 || eType === 32 || eType === 46 || eType === 49 || eType === 50) return 'xbox';
+	if (eType === 4 || eType === 100 || eType === 101 || eType === 102 || eType === 120 || eType === 130) return 'xbox';
 	return classifyGamepadId(name);
 }
 
-export function detectConnectedController(doc?: Document): ConnectedControllerInfo {
-	// 1. Check Web Gamepad API (direct Chromium / hardware detection)
+interface ActiveControllerTracker {
+	type: ControllerDeviceType;
+	name: string;
+	timestamp: number;
+}
+
+let g_lastActiveController: ActiveControllerTracker | null = null;
+let g_knownGamepadIds = new Set<string>();
+
+interface ScoredCandidate {
+	connected: boolean;
+	name: string;
+	type: ControllerDeviceType;
+	score: number;
+	hasInput: boolean;
+	timestamp: number;
+}
+
+function getWebGamepadCandidates(doc?: Document): ScoredCandidate[] {
+	const candidates: ScoredCandidate[] = [];
 	try {
 		const win = doc?.defaultView || (typeof window !== 'undefined' ? window : null);
-		const navList = [win?.navigator, typeof navigator !== 'undefined' ? navigator : null].filter(Boolean);
+		const navList = [
+			typeof navigator !== 'undefined' ? navigator : null,
+			win?.navigator,
+			(win as any)?.opener?.navigator,
+			(win as any)?.top?.navigator,
+		].filter(Boolean);
+
+		const seenPads = new Set<string>();
+
 		for (const nav of navList) {
 			const gamepads = typeof nav?.getGamepads === 'function' ? nav.getGamepads() : [];
 			for (let i = 0; i < gamepads.length; i++) {
 				const gp = gamepads[i];
-				if (gp && gp.connected !== false && (gp.connected === true || (gp.buttons && gp.buttons.length > 0) || (gp.axes && gp.axes.length > 0))) {
-					const type = classifyGamepadId(gp.id || '');
-					return { connected: true, name: gp.id || 'Controller', type };
+				if (!gp || gp.connected !== true) continue;
+
+				const key = `${i}_${gp.id}`;
+				if (seenPads.has(key)) continue;
+				seenPads.add(key);
+
+				const buttons = gp.buttons || [];
+				const hasButtonPressed = buttons.some((b: any) => b && (b.pressed || (typeof b.value === 'number' && b.value > 0.25)));
+				const axes = gp.axes || [];
+				const hasAxisMoved = axes.some((a: any) => typeof a === 'number' && Math.abs(a) > 0.25);
+				const hasInput = hasButtonPressed || hasAxisMoved;
+
+				const type = classifyGamepadId(gp.id || '');
+				const timestamp = typeof gp.timestamp === 'number' ? gp.timestamp : 0;
+
+				let score = timestamp;
+				if (hasInput) {
+					score += 1_000_000_000;
 				}
+
+				candidates.push({
+					connected: true,
+					name: gp.id || 'Controller',
+					type,
+					score,
+					hasInput,
+					timestamp,
+				});
 			}
 		}
 	} catch {}
+	return candidates;
+}
 
-	// 2. Check official Steam ControllerStore (instantaneous & accurate)
+function getSteamCandidates(doc?: Document): ScoredCandidate[] {
+	const candidates: ScoredCandidate[] = [];
 	try {
-		const store = getSteamControllerStore(doc);
-		if (store) {
-			const list = typeof store.GetControllers === 'function' ? store.GetControllers() : store.m_controllerList;
-			if (Array.isArray(list) && list.length > 0) {
+		const uiStore = getSteamUIStore(doc);
+		const ctrlStore = getSteamControllerStore(doc);
+
+		const mostRecent = uiStore?.MostRecentlyActiveController;
+		if (mostRecent && isSteamControllerConnected(mostRecent)) {
+			const eType = Number(mostRecent.eControllerType || 0);
+			const type = classifySteamControllerType(eType, mostRecent.strName || '');
+			candidates.push({
+				connected: true,
+				name: mostRecent.strName || 'Controller',
+				type,
+				score: 500_000_000,
+				hasInput: true,
+				timestamp: 0,
+			});
+		}
+
+		const activeIdx = uiStore?.MostRecentlyActiveControllerIndex
+			?? uiStore?.ActiveControllerIndex
+			?? ctrlStore?.m_nLastValidActiveControllerIndex
+			?? -1;
+
+		if (typeof activeIdx === 'number' && activeIdx >= 0 && ctrlStore?.GetController) {
+			const ctrl = ctrlStore.GetController(activeIdx);
+			if (ctrl && isSteamControllerConnected(ctrl)) {
+				const eType = Number(ctrl.eControllerType || 0);
+				const type = classifySteamControllerType(eType, ctrl.strName || '');
+				candidates.push({
+					connected: true,
+					name: ctrl.strName || 'Controller',
+					type,
+					score: 400_000_000,
+					hasInput: true,
+					timestamp: 0,
+				});
+			}
+		}
+
+		if (ctrlStore) {
+			const list = typeof ctrlStore.GetControllers === 'function' ? ctrlStore.GetControllers() : ctrlStore.m_controllerList;
+			if (Array.isArray(list)) {
 				const candidate = list.find(isSteamControllerConnected);
 				if (candidate) {
-					const eType = Number(candidate?.eControllerType || 0);
-					const type = classifySteamControllerType(eType, candidate?.strName || '');
-					return { connected: true, name: candidate?.strName || 'Controller', type };
+					const eType = Number(candidate.eControllerType || 0);
+					const type = classifySteamControllerType(eType, candidate.strName || '');
+					candidates.push({
+						connected: true,
+						name: candidate.strName || 'Controller',
+						type,
+						score: 200_000_000,
+						hasInput: Boolean(candidate.bActive || candidate.m_bActive),
+						timestamp: 0,
+					});
+				}
+				for (const ctrl of list) {
+					if (!isSteamControllerConnected(ctrl)) continue;
+					const eType = Number(ctrl.eControllerType || 0);
+					const type = classifySteamControllerType(eType, ctrl.strName || '');
+					const isActive = Boolean(ctrl.bActive || ctrl.m_bActive);
+					candidates.push({
+						connected: true,
+						name: ctrl.strName || 'Controller',
+						type,
+						score: isActive ? 300_000_000 : 100_000,
+						hasInput: isActive,
+						timestamp: 0,
+					});
 				}
 			}
-			if (typeof store.BHasExternalGamepadConnected === 'function' && store.BHasExternalGamepadConnected()) {
-				return { connected: true, name: 'Controller', type: 'xbox' };
-			}
 		}
-	} catch {}
 
-	// 3. Check SteamClient.Input (Steam's internal controller service)
-	try {
 		const win = doc?.defaultView || (typeof window !== 'undefined' ? window : null);
 		const steamInput = (win as any)?.SteamClient?.Input || (typeof window !== 'undefined' ? (window as any).SteamClient?.Input : null);
 		if (steamInput) {
@@ -134,14 +259,103 @@ export function detectConnectedController(doc?: Document): ConnectedControllerIn
 				|| steamInput.m_rgControllers
 				|| steamInput.m_controllerList
 				|| steamInput.m_controllers;
-			if (Array.isArray(list) && list.length > 0) {
-				const candidate = list.find(isSteamControllerConnected);
-				if (candidate) {
-					const eType = Number(candidate?.eControllerType || 0);
-					const type = classifySteamControllerType(eType, candidate?.strName || '');
-					return { connected: true, name: candidate?.strName || 'Controller', type };
+			if (Array.isArray(list)) {
+				for (const ctrl of list) {
+					if (!isSteamControllerConnected(ctrl)) continue;
+					const eType = Number(ctrl.eControllerType || 0);
+					const type = classifySteamControllerType(eType, ctrl.strName || '');
+					candidates.push({
+						connected: true,
+						name: ctrl.strName || 'Controller',
+						type,
+						score: 50_000,
+						hasInput: false,
+						timestamp: 0,
+					});
 				}
 			}
+		}
+	} catch {}
+	return candidates;
+}
+
+export function detectConnectedController(doc?: Document): ConnectedControllerInfo {
+	const webCandidates = getWebGamepadCandidates(doc);
+	const steamCandidates = getSteamCandidates(doc);
+
+	// 1. Check for active physical button/axis input right now (highest priority)
+	const activeWeb = webCandidates.find(c => c.hasInput);
+	if (activeWeb) {
+		g_lastActiveController = {
+			type: activeWeb.type,
+			name: activeWeb.name,
+			timestamp: activeWeb.timestamp,
+		};
+		return { connected: true, name: activeWeb.name, type: activeWeb.type };
+	}
+
+	// 2. Check Steam's most recently active controller
+	const activeSteam = steamCandidates.find(c => c.hasInput);
+	if (activeSteam) {
+		const stillConnected = webCandidates.some(c => c.type === activeSteam.type)
+			|| steamCandidates.some(c => c.type === activeSteam.type);
+		if (stillConnected) {
+			g_lastActiveController = {
+				type: activeSteam.type,
+				name: activeSteam.name,
+				timestamp: Date.now(),
+			};
+			return { connected: true, name: activeSteam.name, type: activeSteam.type };
+		}
+	}
+
+	// 3. If we had a previously active controller and it is STILL CONNECTED, preserve it across idle moments
+	if (g_lastActiveController) {
+		const isStillInWeb = webCandidates.some(c => c.type === g_lastActiveController?.type);
+		const isStillInSteam = steamCandidates.some(c => c.type === g_lastActiveController?.type);
+		if (isStillInWeb || isStillInSteam) {
+			return {
+				connected: true,
+				name: g_lastActiveController.name,
+				type: g_lastActiveController.type,
+			};
+		}
+		g_lastActiveController = null;
+	}
+
+	// 4. If Web Gamepads are connected, pick the one with highest score/timestamp
+	if (webCandidates.length > 0) {
+		webCandidates.sort((a, b) => b.score - a.score);
+		const best = webCandidates[0];
+		g_lastActiveController = {
+			type: best.type,
+			name: best.name,
+			timestamp: best.timestamp,
+		};
+		return { connected: true, name: best.name, type: best.type };
+	}
+
+	// 5. If Steam has connected controllers, pick the best candidate
+	if (steamCandidates.length > 0) {
+		steamCandidates.sort((a, b) => b.score - a.score);
+		const best = steamCandidates[0];
+		g_lastActiveController = {
+			type: best.type,
+			name: best.name,
+			timestamp: Date.now(),
+		};
+		return { connected: true, name: best.name, type: best.type };
+	}
+
+	// 6. Generic Steam fallback indicators
+	try {
+		const store = getSteamControllerStore(doc);
+		if (typeof store?.BHasExternalGamepadConnected === 'function' && store.BHasExternalGamepadConnected()) {
+			return { connected: true, name: 'Controller', type: 'xbox' };
+		}
+		const win = doc?.defaultView || (typeof window !== 'undefined' ? window : null);
+		const steamInput = (win as any)?.SteamClient?.Input || (typeof window !== 'undefined' ? (window as any).SteamClient?.Input : null);
+		if (steamInput) {
 			if (typeof steamInput.GetConnectedGamepadCount === 'function' && steamInput.GetConnectedGamepadCount() > 0) {
 				return { connected: true, name: 'Controller', type: 'xbox' };
 			}
@@ -162,8 +376,24 @@ export function subscribeControllerChanges(doc: Document, onChange: (info: Conne
 	let timer: any = null;
 
 	const check = () => {
+		const webCandidates = getWebGamepadCandidates(doc);
+
+		// If a new controller was just plugged in or powered on, prioritize it
+		for (const cand of webCandidates) {
+			const idKey = `${cand.name}_${cand.type}`;
+			if (!g_knownGamepadIds.has(idKey)) {
+				g_lastActiveController = {
+					type: cand.type,
+					name: cand.name,
+					timestamp: cand.timestamp,
+				};
+				break;
+			}
+		}
+		g_knownGamepadIds = new Set(webCandidates.map(c => `${c.name}_${c.type}`));
+
 		const current = detectConnectedController(doc);
-		if (current.connected !== lastState.connected || current.type !== lastState.type) {
+		if (current.connected !== lastState.connected || current.type !== lastState.type || current.name !== lastState.name) {
 			lastState = current;
 			onChange(current);
 		}
@@ -171,7 +401,30 @@ export function subscribeControllerChanges(doc: Document, onChange: (info: Conne
 
 	check();
 
-	const onGamepadEvent = () => {
+	const onGamepadConnected = (e: any) => {
+		const gp = e?.gamepad;
+		if (gp && gp.connected !== false) {
+			const type = classifyGamepadId(gp.id || '');
+			g_lastActiveController = {
+				type,
+				name: gp.id || 'Controller',
+				timestamp: typeof gp.timestamp === 'number' ? gp.timestamp : Date.now(),
+			};
+		}
+		check();
+		setTimeout(check, 30);
+		setTimeout(check, 100);
+		setTimeout(check, 250);
+	};
+
+	const onGamepadDisconnected = (e: any) => {
+		const gp = e?.gamepad;
+		if (gp && g_lastActiveController) {
+			const type = classifyGamepadId(gp.id || '');
+			if (g_lastActiveController.type === type) {
+				g_lastActiveController = null;
+			}
+		}
 		check();
 		setTimeout(check, 30);
 		setTimeout(check, 100);
@@ -189,8 +442,8 @@ export function subscribeControllerChanges(doc: Document, onChange: (info: Conne
 
 	for (const target of targets) {
 		try {
-			target.addEventListener('gamepadconnected', onGamepadEvent);
-			target.addEventListener('gamepaddisconnected', onGamepadEvent);
+			target.addEventListener('gamepadconnected', onGamepadConnected as EventListener);
+			target.addEventListener('gamepaddisconnected', onGamepadDisconnected as EventListener);
 		} catch {}
 	}
 
@@ -204,11 +457,14 @@ export function subscribeControllerChanges(doc: Document, onChange: (info: Conne
 				'RegisterForActiveControllerChanges',
 				'RegisterForUnboundControllerListChanges',
 				'RegisterForGamepadActivityChanges',
+				'RegisterForControllerInputMessages',
 			];
 			for (const method of registerMethods) {
 				if (typeof steamInput[method] === 'function') {
 					try {
-						const reg = steamInput[method](() => onGamepadEvent());
+						const reg = steamInput[method](() => {
+							check();
+						});
 						if (reg && typeof reg.unregister === 'function') {
 							unregisters.push(() => {
 								try { reg.unregister(); } catch {}
@@ -220,15 +476,19 @@ export function subscribeControllerChanges(doc: Document, onChange: (info: Conne
 		}
 	} catch {}
 
+	let fastTimer: any = null;
+	// Fast polling (120ms) ensures instant real-time response when switching between controllers
+	fastTimer = setInterval(check, 120);
 	timer = setInterval(check, 1000);
 
 	return () => {
 		for (const target of targets) {
 			try {
-				target.removeEventListener('gamepadconnected', onGamepadEvent);
-				target.removeEventListener('gamepaddisconnected', onGamepadEvent);
+				target.removeEventListener('gamepadconnected', onGamepadConnected as EventListener);
+				target.removeEventListener('gamepaddisconnected', onGamepadDisconnected as EventListener);
 			} catch {}
 		}
+		if (fastTimer) clearInterval(fastTimer);
 		if (timer) clearInterval(timer);
 		for (const unreg of unregisters) {
 			unreg();

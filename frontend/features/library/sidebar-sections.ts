@@ -8,6 +8,7 @@ import {
 	renderLocalAchievementSidebarHtml,
 	ensureLocalAchievementSidebarResponsiveGrid,
 	ensureAchievementSidebarStyles,
+	ensureAchievementModalStyles,
 } from '../achievements/runtime';
 import type { NativeLibraryLayout } from './layout';
 import { buildNativeSidebarSection } from './layout';
@@ -72,6 +73,7 @@ export function renderLinkedSidebarCore(
 	const total = options.data.achievements?.total || 0;
 	if (total <= 0) return;
 	ensureAchievementSidebarStyles(doc);
+	ensureAchievementModalStyles(doc);
 	const cachedAchievements = getCachedLocalAchievementsForGame(options.steamAppId, options.shortcutAppId);
 	let initialAchievements = cachedAchievements;
 	if (!initialAchievements && options.data.achievements && options.data.achievements.total > 0) {

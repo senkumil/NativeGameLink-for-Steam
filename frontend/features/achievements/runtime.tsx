@@ -23,6 +23,7 @@ export {
 export { startFirstLaunchAchievementWatcher, stopFirstLaunchAchievementWatcher } from './launch-watcher';
 export { renderLocalAchievementSidebarHtml, renderLocalAchievementSidebar, revealPendingAchievementSidebar, ensureLocalAchievementSidebarResponsiveGrid, achievementSidebarColumnsForWidth } from './sidebar';
 export { ensureAchievementSidebarStyles } from './styles/sidebar';
+export { ensureAchievementModalStyles } from './styles/modal';
 export { findVisibleTextElement, ensureLocalPlaybarStat } from './playbar';
 export { openLocalAchievementsModal } from './modal';
 export {

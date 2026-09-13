@@ -88,6 +88,7 @@ const controllerStylesTs = read('frontend/features/library/styles/controller.ts'
 const routeExitTs = read('frontend/features/library/route-exit.ts');
 const cloudStatusTs = read('frontend/features/library/cloud-status.ts');
 const achPlaybarStylesTs = read('frontend/features/achievements/styles/playbar.ts');
+const sidebarSectionsTs = read('frontend/features/library/sidebar-sections.ts');
 
 let passed = 0;
 function assert(condition, message) {
@@ -585,6 +586,16 @@ assert(achSidebarStylesTs.includes('.gdl-la-summary') && achSidebarStylesTs.incl
 assert(achSidebarStylesTs.includes('.BasicUI .gdl-la-icon-frame') && achSidebarStylesTs.includes('width: 48px !important') && achSidebarStylesTs.includes('height: 48px !important'), 'sidebar achievement icon frame forces 48x48px with !important over Steam BasicUI 64px');
 // 4. Sidebar header and body enforce vertical flex layout and full width
 assert(achSidebarStylesTs.includes('.BasicUI .gdl-la-header') && achSidebarStylesTs.includes('.BasicUI .gdl-la-body'), 'sidebar header and body include BasicUI overrides');
+
+// Achievements Modal Styling & Persistence:
+// 1. Modal creation guarantees stylesheet injection even across route exit style deletions
+assert(achModalTs.includes('ensureAchievementModalStyles(doc)'), 'achievements modal explicitly ensures stylesheet injection on open');
+// 2. Sidebar sections ensure modal styles when mounting achievements section
+assert(sidebarSectionsTs.includes('ensureAchievementModalStyles(doc)'), 'sidebar sections ensure modal styles when building achievements section');
+// 3. Modal overlay enforces position: fixed !important to prevent taking normal document flow
+assert(achModalStylesTs.includes('.BasicUI #gdl-local-achievement-modal') && achModalStylesTs.includes('position: fixed !important'), 'modal overlay enforces position: fixed !important with BasicUI scoping');
+// 4. Modal elements use BasicUI scoping and !important overrides
+assert(achModalStylesTs.includes('.BasicUI .gdl-lam-window') && achModalStylesTs.includes('.BasicUI .gdl-lam-head') && achModalStylesTs.includes('.BasicUI .gdl-lam-close') && achModalStylesTs.includes('.BasicUI .gdl-lam-tab') && achModalStylesTs.includes('.BasicUI .gdl-lam-search') && achModalStylesTs.includes('.BasicUI .gdl-lam-row'), 'modal components use BasicUI scoping and resilient styling');
 
 console.log(`All ${passed} user-reported bug regression checks passed.`);
 

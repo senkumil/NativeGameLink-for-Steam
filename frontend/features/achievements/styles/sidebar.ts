@@ -297,7 +297,7 @@ ${steamRareAchievementStyles()}
 			min-height: unset !important;
 			padding: 11px 16px 11px 12px !important;
 			box-sizing: border-box !important;
-			/* Native-like glass without a white/frosted veil. */
+			/* Native-like glass matching native Steam right sidebar panels. */
 			background: rgba(20, 27, 36, .30) !important;
 			border: 1px solid rgba(255, 255, 255, .085) !important;
 			border-radius: 0 !important;
@@ -306,47 +306,112 @@ ${steamRareAchievementStyles()}
 			-webkit-backdrop-filter: none !important;
 			transition: background-color .20s ease, border-color .20s ease, box-shadow .20s ease !important;
 			cursor: pointer;
+			position: relative;
+			padding: 12px 14px;
 		}
 		#gdl-controller-section[data-gdl-controller-scrolled="1"] .gdl-controller-card {
-			/* Scroll only lowers opacity; it never adds white or blur. */
 			background: rgba(16, 22, 30, .14) !important;
 			border-color: rgba(255, 255, 255, .06) !important;
 			box-shadow: inset 0 1px 0 rgba(255, 255, 255, .012) !important;
-			backdrop-filter: none !important;
-			-webkit-backdrop-filter: none !important;
 		}
-		.gdl-controller-main { display: flex; align-items: flex-start; gap: 6px; min-width: 0; }
-		.gdl-controller-icon { width: 76px; height: 52px; flex: 0 0 76px; display: flex; align-items: center; justify-content: center; margin-left: -1px; margin-top: -4px; }
-		.gdl-controller-icon-art { width: 76px; height: 52px; display: block; object-fit: contain; image-rendering: auto; }
-		.gdl-controller-copy { min-width: 0; flex: 1; }
-		.gdl-controller-title {
-			font-size: 13px;
-			font-weight: 600;
-			line-height: 18px;
-			color: #ffffff;
-			white-space: nowrap;
-			overflow: hidden;
-			text-overflow: ellipsis;
-		}
-		.gdl-controller-desc {
-			font-size: 12px;
-			font-weight: 400;
-			line-height: 16px;
-			color: #8f98a0;
-			margin-top: 2px;
-			display: -webkit-box;
-			-webkit-line-clamp: 2;
-			-webkit-box-orient: vertical;
-			overflow: hidden;
-		}
-		.gdl-controller-link-wrap { margin-top: 8px; text-align: right; line-height: 16px; }
-		.gdl-controller-link { display: inline-block; color: #8f98a0; font-size: 12px; line-height: 16px; text-decoration: none; padding: 6px 12px; background: transparent; border-radius: 0; transition: color .15s ease, background-color .15s ease; }
 		.gdl-controller-card:hover {
-			/* Avoid the bright white flash while scrolling under a stationary cursor. */
 			border-color: rgba(255, 255, 255, .12) !important;
 			box-shadow: inset 0 1px 0 rgba(255, 255, 255, .045) !important;
 		}
-		.gdl-controller-card:hover .gdl-controller-link { color: #ffffff; background: rgba(115, 116, 136, .26); text-decoration: none; }
+		/* Steam Webpack Module 10191 Controller Classes & Semantic Fallbacks */
+		._2A8NghNvAnMQQTHsudFu7H, .gdl-controller-status-svg {
+			width: 44px !important;
+			min-width: 44px !important;
+			flex-basis: 44px !important;
+			height: 44px !important;
+			color: #ffffff;
+			margin-inline-start: 4px;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			flex-shrink: 0;
+		}
+		._2A8NghNvAnMQQTHsudFu7H svg, .gdl-controller-status-svg svg {
+			width: 100%;
+			height: 100%;
+			display: block;
+		}
+		._2A8NghNvAnMQQTHsudFu7H._3vJM7qN0DSpUfz-bhkewEQ, .gdl-controller-status-svg.gdl-controller-unknown {
+			color: #95999e !important;
+		}
+		._29FYex2d6Tntax9SEBTxkL, .gdl-controller-stroke {
+			position: absolute !important;
+			width: 52px !important;
+			height: 3px !important;
+			top: 32px !important;
+			inset-inline-start: 10px !important;
+			background: #e05f5f !important;
+			transform: rotate(155.43deg) !important;
+			z-index: 2 !important;
+			pointer-events: none !important;
+		}
+		.bG5F-o9ZUikaoNCIniMEa, .gdl-controller-body {
+			display: flex;
+			flex-direction: column;
+			position: relative;
+			min-width: 0;
+		}
+		.Gs_qHIFwN4Z9JusWrfbfP, .gdl-controller-row {
+			display: flex;
+			flex-direction: row;
+			align-items: center;
+			min-width: 0;
+		}
+		._1vvIpx6zQ1mZiiY1y-PtlS, .gdl-controller-column {
+			display: flex;
+			flex-direction: column;
+			margin-inline-start: 14px;
+			margin-top: 2px;
+			min-width: 0;
+			flex: 1;
+		}
+		._2L06P_EWxoS_20kC2eNCQl, .gdl-controller-header {
+			color: #ffffff;
+			font-family: "Motiva Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+			font-style: normal;
+			font-weight: 500;
+			font-size: 13px;
+			line-height: 19px;
+			text-wrap: wrap;
+		}
+		._8tm4KhHFNHvzsiuuyHgld, .gdl-controller-desc {
+			display: flex;
+			font-family: "Motiva Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+			font-style: normal;
+			font-weight: 400;
+			font-size: 12px;
+			line-height: 17px;
+			text-wrap: wrap;
+			color: #cacbcd;
+			margin-top: 2px;
+		}
+		.QO0udpE4qSEcDjkVg5IwH, .gdl-controller-button-container {
+			display: flex;
+			justify-content: flex-end;
+			margin-top: 10px;
+		}
+		._3Cdin80d-hVsakHUZboheb, .gdl-controller-link {
+			color: #8c9193;
+			font-size: 12px;
+			line-height: 16px;
+			font-family: "Motiva Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+			background: transparent;
+			border: 0;
+			cursor: pointer;
+			padding: 0;
+			transition: color .15s ease;
+		}
+		.gdl-controller-card:hover ._3Cdin80d-hVsakHUZboheb,
+		.gdl-controller-card:hover .gdl-controller-link,
+		._3Cdin80d-hVsakHUZboheb:hover,
+		.gdl-controller-link:hover {
+			color: #ffffff !important;
+		}
 
 		/* One translucency level for every NativeGameLink box in Steam's right sidebar.
 		   Solid inner headers (achievements/trading cards) keep their own explicit

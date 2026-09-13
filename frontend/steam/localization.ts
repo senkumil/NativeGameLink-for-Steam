@@ -33,13 +33,19 @@ export function steamLocalizationManager(): any | null {
 }
 
 export const SPANISH_TRANSLATIONS: Record<string, string> = {
-	controller_section_title: 'Control',
+	controller_section_title: 'MANDOS',
 	controller_supported_xbox: 'Compatible con tu control de Xbox',
 	controller_supported_dualshock: 'Compatible con tu control DualShock',
 	controller_supported_dualsense: 'Compatible con tu control DualSense',
 	controller_supported_generic: 'Compatible con tu control',
 	controller_supported_desc: 'Este juego debería funcionar muy bien con tu control',
-	controller_settings_link: 'Ver los ajustes del control',
+	controller_unsupported_title: 'No compatible con controles',
+	controller_unsupported_desc: 'El juego no fue diseñado para ser compatible con controles.',
+	controller_unknown_title: 'Compatibilidad con control desconocida',
+	controller_unknown_desc: 'Este juego aún no ha proporcionado nueva información de compatibilidad con controles y se desconoce su compatibilidad con tu dispositivo.',
+	controller_playable_title: 'Jugable',
+	controller_steam_input_desc: 'Steam Input está habilitado para este dispositivo.',
+	controller_settings_link: 'Configuración del control',
 	activity: 'Actividad',
 	post_placeholder: 'Diles algo sobre este juego a tus amigos...',
 	publish: 'Publicar',

@@ -543,4 +543,15 @@ assert(!achModalStylesTs.includes('gdl-lam-rare-rays-a') && !achModalStylesTs.in
 assert(achSidebarTs.includes('getSteamRareAchievementClasses()') && achSidebarTs.includes('renderSteamRareGlowHtml(rareClasses)'), 'sidebar achievement icons use official Webpack classes and glow HTML');
 assert(achModalTs.includes('getSteamRareAchievementClasses()') && achModalTs.includes('renderSteamRareGlowHtml(rareClasses)'), 'modal achievement icons use official Webpack classes and glow HTML');
 
+// Native Controller Section & Webpack Parity:
+// 1. Controller section implements official Webpack Module 35488 SVGs
+assert(controllerTs.includes('NATIVE_SVG_PS5') && controllerTs.includes('NATIVE_SVG_XBOX') && controllerTs.includes('NATIVE_SVG_PS4') && controllerTs.includes('NATIVE_SVG_SWITCH'), 'controller section uses official Webpack controller SVGs');
+// 2. Controller section incorporates exact Steam Webpack Module 10191 classes
+assert(controllerTs.includes('_2A8NghNvAnMQQTHsudFu7H') && controllerTs.includes('_3vJM7qN0DSpUfz-bhkewEQ') && controllerTs.includes('_29FYex2d6Tntax9SEBTxkL'), 'controller section incorporates exact Steam Webpack Module 10191 classes');
+// 3. Controller section evaluates all compatibility states (supported, unsupported, unknown, partial)
+assert(controllerTs.includes('detectGameControllerSupportState') && controllerTs.includes('data-gdl-controller-state'), 'controller section evaluates compatibility states supported, unsupported, unknown, and partial');
+// 4. Adjust logo button is completely removed from artwork properties
+assert(!artworkProperties.includes('Adjust logo') && !artworkProperties.includes('openLogoEditor'), 'adjust logo button is removed from artwork properties');
+
 console.log(`All ${passed} user-reported bug regression checks passed.`);
+

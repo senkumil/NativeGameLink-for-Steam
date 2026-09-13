@@ -77,6 +77,19 @@ export const GDL_STEAM_TOKEN_SPECS: Record<string, SteamUiTokenSpec> = {
 	last_played_days_ago: { tokens: ['DateTime_DaysAgo'], params: ['count'] },
 	hidden_achievement: { tokens: ['Achievement_Hidden'] },
 	no_achievements: { tokens: ['AppDetails_NoAchievements', 'Achievement_Filter_None', 'AppOverview_NoAchievements'] },
+	controller_section_title: { tokens: ['AppDetails_SectionTitle_Controller', 'AppDetails_SectionTitle_Hardware'] },
+	controller_supported_xbox: { tokens: ['AppDetailsControllerSection_Title_Supported_Xbox'] },
+	controller_supported_dualshock: { tokens: ['AppDetailsControllerSection_Title_Supported_DualShock'] },
+	controller_supported_dualsense: { tokens: ['AppDetailsControllerSection_Title_Supported_Dualsense'] },
+	controller_supported_generic: { tokens: ['AppDetailsControllerSection_Title_Supported_Generic'] },
+	controller_supported_desc: { tokens: ['AppDetailsControllerSection_DevSupported'] },
+	controller_unsupported_title: { tokens: ['AppDetailsControllerSection_Title_Unsupported'] },
+	controller_unsupported_desc: { tokens: ['AppDetailsControllerSection_NoSupport'] },
+	controller_unknown_title: { tokens: ['AppDetailsControllerSection_Title_Unknown'] },
+	controller_unknown_desc: { tokens: ['AppDetailsControllerSection_Unknown'] },
+	controller_playable_title: { tokens: ['AppDetailsControllerSection_Title_Playable'] },
+	controller_steam_input_desc: { tokens: ['AppDetailsControllerSection_SteamInput', 'AppDetailsControllerSection_SteamInputTranslation'] },
+	controller_settings_link: { tokens: ['AppControllerConfiguration_Link'] },
 };
 
 export const STEAM_LANGUAGE_TO_LOCALE: Record<string, string> = {

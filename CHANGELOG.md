@@ -1,3 +1,14 @@
+## v4.0.3 - Dynamic Controller Switching, Native Links Bar & Webpack Polish (2026-09-13)
+
+- **Dynamic Real-Time Controller Switching**:
+  - Direct bidirectional switching between Xbox, PlayStation (DualShock / DualSense), and generic gamepad layouts based on active device inputs.
+  - Authoritative `ControllerStore` integration eliminating ghost Chromium gamepad state and stale controller cards.
+  - Immediate removal of the controller card when all controllers are disconnected or powered down.
+- **Desktop Playbar & Links Bar Modernization**:
+  - Implemented `NativeDesktopLinksBar.tsx` using native Steam links bar architecture for store, community, discussions, guides, and points shop.
+  - Aligned desktop playbar stat ordering to authentic Steam specs (Achievements placed at the end of the playbar).
+  - Added native Steam category feature icons and refined Steam Webpack golden ray animations for rare achievements.
+
 ## v4.0.2 - Strict Native Playbar Isolation & Typography Bugfix (2026-09-13)
 
 - **Strict Native Playbar Isolation**:

@@ -44,7 +44,7 @@
 	},
 	"type": "module",
 	"name": "nativegamelink-for-steam",
-	"version": "4.0.2",
+	"version": "4.0.3",
 	"description": "Vincula juegos no-Steam con metadatos oficiales de Steam para mostrar datos reales en la biblioteca.",
 	"main": "./frontend/index.tsx",
 	"author": "David Miranda (Davidjarod11)",

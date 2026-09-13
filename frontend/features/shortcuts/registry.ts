@@ -1,6 +1,6 @@
 import { listShortcutsBackend, backendLog } from '../../api/backend';
-import { findMappingByExe, findMappingForTitle, isMappingSnapshotVerified, mappings, shortcutMappingKey } from '../../core/mappings';
-import { getSteamAppStore, readShortcutOverviewField, replaceFallbackShortcutApps, shortcutExecutableIdentity, shortcutPathBasename, toSignedShortcutAppId } from '../../steam/shortcuts';
+import { findMappingByExe, findMappingForTitle, isMappingSnapshotVerified, mappings, saveMappingChecked, shortcutMappingKey } from '../../core/mappings';
+import { getShortcutAppById, getSteamAppStore, readShortcutOverviewField, replaceFallbackShortcutApps, shortcutExecutableIdentity, shortcutPathBasename, toSignedShortcutAppId } from '../../steam/shortcuts';
 
 export interface ShortcutRecord {
 	id: number;
@@ -154,24 +154,33 @@ export function findMappingForShortcut(
 	const numId = normalizedShortcutAppId(shortcutAppId);
 	if (numId) {
 		const signedId = toSignedShortcutAppId(numId);
-		const exact = mappings[shortcutMappingKey(numId)]
+		let exact = mappings[shortcutMappingKey(numId)]
 			|| mappings[shortcutMappingKey(signedId)]
-			|| (title ? findMappingForTitle(title, numId) : null)
-			|| (exePath ? findMappingByExe(exePath) : null);
+			|| (title && title.trim() ? findMappingForTitle(title, numId) : null)
+			|| (exePath && exePath.trim() ? findMappingByExe(exePath) : null);
+		if (!exact) {
+			const app = getShortcutAppById(numId) || getAllShortcutRecords().find(r => r.id === numId)?.app;
+			const appTitle = (title && title.trim()) || (app ? String(app.display_name || app.m_strDisplayName || app.strDisplayName || app.strAppName || app.name || '').trim() : '');
+			const appExe = (exePath && exePath.trim()) || (app ? String(readShortcutOverviewField(app, 'strShortcutExe', 'm_strShortcutExe', 'shortcut_exe', 'strExePath') || '').trim() : '');
+			if (appTitle) exact = findMappingForTitle(appTitle, numId);
+			if (!exact && appExe) exact = findMappingByExe(appExe);
+			if (!exact) exact = findMappingForDuplicateShortcut(numId);
+		}
 		if (exact && /^\d+$/.test(String(exact))) {
 			const strExact = String(exact);
 			if (!mappings[shortcutMappingKey(numId)]) {
 				mappings[shortcutMappingKey(numId)] = strExact;
+				void saveMappingChecked(shortcutMappingKey(numId), strExact).catch(() => {});
 			}
 			return strExact;
 		}
 	}
 
-	if (exePath) {
+	if (exePath && exePath.trim()) {
 		const byExe = findMappingByExe(exePath);
 		if (byExe && /^\d+$/.test(String(byExe))) return String(byExe);
 	}
-	if (title) {
+	if (title && title.trim()) {
 		const byTitle = findMappingForTitle(title);
 		if (byTitle && /^\d+$/.test(String(byTitle))) return String(byTitle);
 	}

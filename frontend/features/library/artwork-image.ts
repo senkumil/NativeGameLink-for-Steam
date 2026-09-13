@@ -185,6 +185,11 @@ export async function normalizeCommunityLogoDataUrl(dataUrl: string): Promise<st
 					destH = Math.max(1, Math.round(destH * scale));
 				}
 
+				if (!excessivePadding && destW === srcW && destH === srcH) {
+					resolve(dataUrl);
+					return;
+				}
+
 				const outCanvas = document.createElement('canvas');
 				outCanvas.width = destW;
 				outCanvas.height = destH;

@@ -150,15 +150,48 @@ export function discoverNativeLibraryLayout(doc: Document, noticeElement: Elemen
 		}
 
 		if (anchorRegion) {
+			const isHeaderOrContainsHeader = (el: HTMLElement | null): boolean => {
+				if (!el) return false;
+				const className = String(el.className || '');
+				if (/playbar|gamestats|header|hero|appdetailsheader/i.test(className)) return true;
+				if (el.querySelector('[class*="PlayBar"], [class*="playbar"], [class*="PlayButton"], [class*="playButton"], [class*="GameStatsSection"], [class*="AppDetailsHeader"]')) return true;
+				return false;
+			};
+			const isInsideHeader = (el: HTMLElement | null): boolean => {
+				if (!el) return false;
+				return Boolean(el.closest('[class*="AppDetailsHeader"], [class*="appdetailsheader"], [class*="HeaderContainer"]'));
+			};
+
 			const noticeChain = ancestorChain(noticeElement);
 			const anchorChain = ancestorChain(anchorRegion);
 			for (let ai = 1; ai < anchorChain.length; ai += 1) {
 				const ni = noticeChain.indexOf(anchorChain[ai]);
 				if (ni > 0) {
-					twoColumnRow = anchorChain[ai];
-					sidebarColumn = anchorChain[ai - 1];
-					contentColumn = noticeChain[ni - 1];
-					break;
+					const candidateRow = anchorChain[ai];
+					const candidateSidebar = anchorChain[ai - 1];
+					const candidateContent = noticeChain[ni - 1];
+					if (!isHeaderOrContainsHeader(candidateRow) && !isInsideHeader(candidateContent) && !isHeaderOrContainsHeader(candidateContent)) {
+						twoColumnRow = candidateRow;
+						sidebarColumn = candidateSidebar;
+						contentColumn = candidateContent;
+						break;
+					}
+				}
+			}
+
+			if (!twoColumnRow) {
+				const header = doc.querySelector<HTMLElement>('[class*="AppDetailsHeader"], [class*="appdetailsheader"], [class*="HeaderContainer"]');
+				const mainContainer = header?.parentElement;
+				if (mainContainer) {
+					for (let ai = 0; ai < anchorChain.length; ai += 1) {
+						if (anchorChain[ai].parentElement === mainContainer && anchorChain[ai] !== header && !isHeaderOrContainsHeader(anchorChain[ai])) {
+							twoColumnRow = anchorChain[ai];
+							sidebarColumn = ai > 0 ? anchorChain[ai - 1] : anchorChain[ai];
+							const siblingContent = Array.from(twoColumnRow.children).find(c => c !== sidebarColumn && c instanceof HTMLElement && !isHeaderOrContainsHeader(c as HTMLElement)) as HTMLElement | null;
+							contentColumn = siblingContent || null;
+							break;
+						}
+					}
 				}
 			}
 		}
@@ -195,6 +228,31 @@ export function discoverNativeLibraryLayout(doc: Document, noticeElement: Elemen
 				}
 			}
 			cur = parent;
+		}
+
+		if (!twoColumnRow) {
+			const header = doc.querySelector<HTMLElement>('[class*="AppDetailsHeader"], [class*="appdetailsheader"], [class*="HeaderContainer"]');
+			const mainContainer = header?.parentElement;
+			if (mainContainer) {
+				const isHeaderOrPlaybar = (el: HTMLElement): boolean => {
+					const className = String(el.className || '');
+					if (/playbar|gamestats|header|hero/i.test(className)) return true;
+					if (el.querySelector('[class*="PlayBar"], [class*="playbar"], [class*="PlayButton"], [class*="playButton"], [class*="GameStatsSection"]')) return true;
+					return false;
+				};
+				const siblings = Array.from(mainContainer.children).filter(c => c !== header && c instanceof HTMLElement && !c.id?.startsWith('gdl-') && !isHeaderOrPlaybar(c as HTMLElement)) as HTMLElement[];
+				for (const sib of siblings) {
+					if (sib.children.length >= 2) {
+						twoColumnRow = sib;
+						contentColumn = sib.firstElementChild as HTMLElement;
+						sidebarColumn = sib.lastElementChild as HTMLElement;
+						if (!anchorRegion && sidebarColumn) {
+							anchorRegion = (sidebarColumn.querySelector('[role="region"]') || sidebarColumn) as HTMLElement;
+						}
+						break;
+					}
+				}
+			}
 		}
 	}
 
@@ -313,6 +371,16 @@ export function insertMainContent(
 			hideNativeLibraryElement(element);
 		}
 		contentColumn.insertBefore(wrapper, contentColumn.firstChild);
+		return;
+	}
+	const doc = wrapper.ownerDocument;
+	const header = doc.querySelector<HTMLElement>('[class*="AppDetailsHeader"], [class*="appdetailsheader"], [class*="HeaderContainer"]');
+	if (header && header.parentElement && ((noticeParent && header.contains(noticeParent)) || !noticeParent)) {
+		if (header.nextElementSibling) {
+			header.parentElement.insertBefore(wrapper, header.nextElementSibling);
+		} else {
+			header.parentElement.appendChild(wrapper);
+		}
 		return;
 	}
 	if (noticeParent?.parentElement) noticeParent.parentElement.insertBefore(wrapper, noticeParent.nextSibling);

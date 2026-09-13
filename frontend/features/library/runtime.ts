@@ -40,8 +40,8 @@ let configuredLibraryRuntimeHost: LibraryRuntimeHost | null = null, currentInjec
 let currentInjectedAppId: string | null = null, currentInjectedShortcutAppId: string | null = null, injectionGeneration = 0;
 let injectionInFlight: { doc: Document; steamAppId: string; generation: number } | null = null;
 const navigationController = new LibraryNavigationController();
-const linkedRenderRetryState = new WeakMap<Document, { generation: number; attempts: number }>();
-const routeMismatchRetryState = new WeakMap<Document, { generation: number; attempts: number }>();
+const linkedRenderRetryState = new WeakMap<Document, { generation: number; attempts: number }>(), routeMismatchRetryState = new WeakMap<Document, { generation: number; attempts: number }>();
+const reconciledLaunchOptions = new Set<number>();
 const MAX_LINKED_RENDER_RETRIES = 12;
 function isCurrentNavigation(doc: Document, generation: number): boolean {
 	return isUsableLibraryDocument(doc) && navigationController.isCurrent(doc, generation);
@@ -90,42 +90,37 @@ function renderLinkedPage(
 }
 
 /** Remove GDL desktop-Library UI and restore Steam's original shortcut notice. */
-export function cleanupInjection(doc: Document): void {
+export function cleanupInjection(doc: Document, preserveLinkBar = false): void {
 	cancelLinkedShortcutLoading(doc);
 	linkedRenderRetryState.delete(doc); routeMismatchRetryState.delete(doc);
-	navigationController.cancelCleanup(doc);
-	finishLibraryRouteExit(doc);
-	removeNativeGameChrome(doc, true);
-	removePlaytimeFallbackStats(doc);
-	disposeStatusPostBox(doc);
-	disposeActivityFeedInteractions(doc);
-	disposeTradingCardPreview(doc);
-	disposeResponsiveTradingCardGrids(doc);
+	navigationController.cancelCleanup(doc); finishLibraryRouteExit(doc);
+	removeNativeGameChrome(doc, true); removePlaytimeFallbackStats(doc);
+	disposeStatusPostBox(doc); disposeActivityFeedInteractions(doc);
+	disposeTradingCardPreview(doc); disposeResponsiveTradingCardGrids(doc);
 	const community = doc.getElementById('gdl-community-content');
 	if (community instanceof HTMLElement) disposeCommunitySection(community);
-	for (const id of ['gdl-main-content-stack', GDL_INJECTED, 'gdl-skeleton', 'gdl-controller-section', 'gdl-friends-section', 'gdl-achievements-section', 'gdl-trading-cards-section', 'gdl-dlc-section', 'gdl-workshop-section', 'gdl-playbar-achievements', 'gdl-link-bar', 'gdl-community-content', 'gdl-activity-feed', 'gdl-historical-info-section', 'gdl-external-achievements-section', 'gdl-manual-link-notice-button-row', LINKED_LOADING_SIDEBAR_ID]) doc.getElementById(id)?.remove();
-	removeManualLinkNoticeButton(doc);
-	restoreNativeLibraryStyles(doc);
+	for (const id of ['gdl-main-content-stack', GDL_INJECTED, 'gdl-skeleton', 'gdl-controller-section', 'gdl-friends-section', 'gdl-achievements-section', 'gdl-trading-cards-section', 'gdl-dlc-section', 'gdl-workshop-section', 'gdl-playbar-achievements', 'gdl-link-bar', 'gdl-community-content', 'gdl-activity-feed', 'gdl-historical-info-section', 'gdl-external-achievements-section', 'gdl-manual-link-notice-button-row', LINKED_LOADING_SIDEBAR_ID]) {
+		if (preserveLinkBar && id === 'gdl-link-bar') continue;
+		doc.getElementById(id)?.remove();
+	}
+	removeManualLinkNoticeButton(doc); restoreNativeLibraryStyles(doc);
 	doc.querySelectorAll('[data-gdl-hidden]').forEach(element => element.removeAttribute('data-gdl-hidden'));
 }
 
 function cleanupOwnedLibraryChromeAfterRouteExit(doc: Document): void {
-	cancelLinkedShortcutLoading(doc);
-	finishLibraryRouteExit(doc);
-	disposeStatusPostBox(doc);
-	disposeActivityFeedInteractions(doc);
-	disposeTradingCardPreview(doc);
-	disposeResponsiveTradingCardGrids(doc);
+	cancelLinkedShortcutLoading(doc); finishLibraryRouteExit(doc);
+	disposeStatusPostBox(doc); disposeActivityFeedInteractions(doc);
+	disposeTradingCardPreview(doc); disposeResponsiveTradingCardGrids(doc);
 	const community = doc.getElementById('gdl-community-content');
 	if (community instanceof HTMLElement) disposeCommunitySection(community);
-	removeNativeGameChrome(doc, true);
-	removeOwnedLibraryChrome(doc);
+	removeNativeGameChrome(doc, true); removeOwnedLibraryChrome(doc);
 }
 
 function retireLinkedRouteFromNativePage(doc: Document, generation: number): void {
 	if (currentInjectedDocument === doc) clearCurrentInjection(doc);
 	cancelLinkedShortcutLoading(doc, generation);
 	restoreNativeLibraryStyles(doc);
+	doc.getElementById('gdl-game-info-panel')?.remove(); doc.getElementById('gdl-link-bar')?.remove(); removeNativeGameChrome(doc, true);
 	if (!hasOwnedLibraryChrome(doc) && !isLibraryRouteExitPending(doc)) return;
 	beginLibraryRouteExit(doc, generation);
 	cleanupOwnedLibraryChromeAfterRouteExit(doc);
@@ -133,9 +128,10 @@ function retireLinkedRouteFromNativePage(doc: Document, generation: number): voi
 export function handleLibraryNavigation(doc: Document): void {
 	const generation = navigationController.advance(doc);
 	linkedRenderRetryState.delete(doc);
-	const hadCurrentInjection = currentInjectedDocument === doc;
-	const hadOwnedChrome = hasOwnedLibraryChrome(doc);
+	const hadCurrentInjection = currentInjectedDocument === doc, hadOwnedChrome = hasOwnedLibraryChrome(doc);
+	doc.getElementById('gdl-game-info-panel')?.remove();
 	if (isPublicSteamLibraryRoute(doc)) {
+		doc.getElementById('gdl-link-bar')?.remove(); doc.getElementById('gdl-game-info-panel')?.remove(); removeNativeGameChrome(doc, true);
 		if (hadCurrentInjection) clearCurrentInjection(doc);
 		if (hadCurrentInjection || hadOwnedChrome) {
 			restoreNativeLibraryStyles(doc);
@@ -235,8 +231,8 @@ export async function tryInjectLibraryData(doc: Document): Promise<void> {
 		return;
 	}
 	if (isLibraryRouteExitPending(doc)) {
-		scheduleNavigationCleanup(doc, navigationGeneration);
-		return;
+		if (findActiveShortcutAppId(doc, noticeInfo.title)) cleanupOwnedLibraryChromeAfterRouteExit(doc);
+		else { scheduleNavigationCleanup(doc, navigationGeneration); return; }
 	}
 	installSteamNavigation(doc);
 	navigationController.cancelCleanup(doc);
@@ -337,18 +333,19 @@ export async function tryInjectLibraryData(doc: Document): Promise<void> {
 				request_json: JSON.stringify({ exe_path: shortcutExe, start_dir: shortcutStartDir }),
 			}).catch(() => {});
 		}
-		const apps = (window as any).SteamClient?.Apps;
-		if (typeof apps?.SetShortcutLaunchOptions === 'function') {
+		const activeIdNum = Number(activeShortcutAppId), apps = (window as any).SteamClient?.Apps;
+		if (typeof apps?.SetShortcutLaunchOptions === 'function' && !reconciledLaunchOptions.has(activeIdNum)) {
+			reconciledLaunchOptions.add(activeIdNum);
 			const currentOptions = String(app?.strShortcutLaunchOptions || app?.m_strShortcutLaunchOptions || app?.shortcut_launch_options || app?.strArguments || '').trim();
 			if (shouldAutoApplyNoLauncher(steamAppId)) {
 				if (!hasNoLauncherOption(currentOptions)) {
 					const updated = mergeNoLauncherOption(currentOptions, steamAppId);
-					void apps.SetShortcutLaunchOptions(Number(activeShortcutAppId), updated);
+					void apps.SetShortcutLaunchOptions(activeIdNum, updated);
 					backendLog(`Auto-reconciled launcher bypass on view for "${gameTitle}" (${activeShortcutAppId}): "${updated}"`);
 				}
 			} else if (hasNoLauncherOption(currentOptions)) {
 				const cleaned = removeIncompatibleLauncherBypass(currentOptions, steamAppId);
-				void apps.SetShortcutLaunchOptions(Number(activeShortcutAppId), cleaned);
+				void apps.SetShortcutLaunchOptions(activeIdNum, cleaned);
 				backendLog(`Cleaned incompatible launcher bypass on view for "${gameTitle}" (${activeShortcutAppId}): "${cleaned}"`);
 			}
 		}

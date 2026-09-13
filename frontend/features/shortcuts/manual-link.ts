@@ -12,11 +12,15 @@ import { cancelPendingLinkJobs, enqueueLinkJob, getPendingLinkJob, PENDING_LINK_
 import { isShortcutIdentityMutationInProgress, linkShortcutToSteam, shouldAutoApplyNoLauncher } from './linking';
 import { isShortcutDismissed, undismissShortcut } from './dismissed';
 import { navigateToLibraryShortcut } from '../../steam/navigation';
+import { clearShortcutEdition, saveShortcutEdition } from './editions';
 const REVIEW_CONFIDENCE_THRESHOLD = 70;
 function displayConfidence(candidate: ShortcutDetectionCandidate): 'HIGH' | 'MEDIUM' | 'LOW' {
 	if (!candidate.identity_collision && candidate.score >= 90) return 'HIGH';
 	if (candidate.score >= 70) return 'MEDIUM';
 	return 'LOW';
+}
+function getCandidateKey(candidate: ShortcutDetectionCandidate): string {
+	return candidate.candidate_key || (candidate.edition ? `${candidate.appid}:edition:${candidate.edition}` : candidate.appid);
 }
 let shortcutLinkInProgress = false;
 const shortcutDetectionInFlight = new Set<number>();
@@ -100,31 +104,18 @@ export function showShortcutManualLinkModal(
 				<div class="gdl-manual-link-dialog-message" style="font-size:13px;line-height:1.5;color:#acb2b8;margin-bottom:17px;">${escapeHtml(dialogMessage)}</div>
 				<div style="display:flex;gap:16px;align-items:stretch;margin-bottom:16px;padding:12px;background:rgba(0,0,0,.16);border:1px solid rgba(255,255,255,.06);border-radius:4px;">
 					<img class="gdl-manual-link-image" alt="" style="width:40%;max-width:194px;min-width:0;height:91px;object-fit:cover;border:1px solid rgba(255,255,255,.10);border-radius:2px;" />
-					<div style="display:flex;flex:1;min-width:0;flex-direction:column;justify-content:center;gap:7px;">
-						<div class="gdl-manual-link-name" style="font-size:17px;font-weight:500;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"></div>
-						<div class="gdl-manual-link-id" style="font-size:12px;color:#66c0f4;"></div>
-						<select class="gdl-manual-link-select" style="width:100%;padding:7px 9px;background:#20242b;border:1px solid #3d4450;border-radius:2px;color:#dcdedf;font-size:12px;color-scheme:dark;"></select>
-					</div>
+					<div style="display:flex;flex:1;min-width:0;flex-direction:column;justify-content:center;gap:7px;"><div class="gdl-manual-link-name" style="font-size:17px;font-weight:500;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"></div><div class="gdl-manual-link-id" style="font-size:12px;color:#66c0f4;"></div><select class="gdl-manual-link-select" style="width:100%;padding:7px 9px;background:#20242b;border:1px solid #3d4450;border-radius:2px;color:#dcdedf;font-size:12px;color-scheme:dark;"></select></div>
 				</div>
 				<label style="display:block;margin:0 0 14px;font-size:11px;color:#8f98a0;">
 					<span style="display:block;margin-bottom:6px;text-transform:uppercase;letter-spacing:.45px;">${escapeHtml(gdlText('manual_appid_label', 'Or enter a Steam AppID manually'))}</span>
 					<span style="display:flex;gap:8px;align-items:stretch;"><input class="gdl-manual-link-manual-appid" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="${escapeHtml(gdlText('manual_appid_placeholder', 'Steam AppID'))}" style="box-sizing:border-box;width:100%;min-width:0;flex:1;padding:8px 9px;background:#101820;border:1px solid #3d4450;border-radius:2px;color:#dcdedf;font-size:12px;" /><button type="button" class="gdl-manual-link-paste" style="flex-shrink:0;padding:8px 14px;border:1px solid #3d4450;border-radius:2px;background:#3d4450;color:#dcdedf;cursor:pointer;">${escapeHtml(gdlText('paste', 'Paste'))}</button></span>
 				</label>
 				<div class="gdl-manual-link-exe-summary" style="padding:9px 11px;background:rgba(0,0,0,.18);color:#8f98a0;font-size:11px;line-height:1.35;overflow-wrap:anywhere;">${escapeHtml(executableSummary)}</div>
-				<label class="gdl-manual-link-tracking" style="display:none;align-items:flex-start;gap:8px;margin-top:12px;padding:10px 11px;background:rgba(91,163,43,.10);border:1px solid rgba(91,163,43,.28);color:#acb2b8;font-size:12px;line-height:1.35;cursor:pointer;">
-					<input class="gdl-manual-link-tracking-input" type="checkbox" style="margin-top:2px;" />
-					<span><strong style="color:#dcdedf;font-weight:500;">${escapeHtml(gdlText('use_tracking_executable', 'Use the real game executable'))}</strong><br />${escapeHtml(gdlText('tracking_executable_help', '{bootstrap} closes after launching {game}. Use {game} so Steam keeps tracking playtime.', { bootstrap: shortcutPathBasename(activeContext.exePath), game: shortcutPathBasename(activeContext.recommendedExePath || '') }))}</span>
-				</label>
-				<label class="gdl-manual-link-launcher" style="display:none;align-items:flex-start;gap:8px;margin-top:12px;color:#acb2b8;font-size:12px;line-height:1.35;cursor:pointer;">
-					<input class="gdl-manual-link-launcher-input" type="checkbox" style="margin-top:2px;" />
-					<span><strong style="color:#dcdedf;font-weight:500;">${escapeHtml(gdlText('skip_launcher', 'Try to skip the launcher'))}</strong><br />${escapeHtml(gdlText('launcher_detected', 'This target looks like a game launcher. You may optionally add -nolauncher.'))}</span>
-				</label>
+				<label class="gdl-manual-link-tracking" style="display:none;align-items:flex-start;gap:8px;margin-top:12px;padding:10px 11px;background:rgba(91,163,43,.10);border:1px solid rgba(91,163,43,.28);color:#acb2b8;font-size:12px;line-height:1.35;cursor:pointer;"><input class="gdl-manual-link-tracking-input" type="checkbox" style="margin-top:2px;" /><span><strong style="color:#dcdedf;font-weight:500;">${escapeHtml(gdlText('use_tracking_executable', 'Use the real game executable'))}</strong><br />${escapeHtml(gdlText('tracking_executable_help', '{bootstrap} closes after launching {game}. Use {game} so Steam keeps tracking playtime.', { bootstrap: shortcutPathBasename(activeContext.exePath), game: shortcutPathBasename(activeContext.recommendedExePath || '') }))}</span></label>
+				<label class="gdl-manual-link-launcher" style="display:none;align-items:flex-start;gap:8px;margin-top:12px;color:#acb2b8;font-size:12px;line-height:1.35;cursor:pointer;"><input class="gdl-manual-link-launcher-input" type="checkbox" style="margin-top:2px;" /><span><strong style="color:#dcdedf;font-weight:500;">${escapeHtml(gdlText('skip_launcher', 'Try to skip the launcher'))}</strong><br />${escapeHtml(gdlText('launcher_detected', 'This target looks like a game launcher. You may optionally add -nolauncher.'))}</span></label>
 				<div class="gdl-manual-link-progress" style="display:flex;gap:7px;margin-top:15px;color:#8f98a0;font-size:11px;"><span data-step="link" style="padding:5px 8px;border-radius:12px;background:rgba(255,255,255,.05);">${escapeHtml(gdlText('auto_link_step_link', '1 · Link'))}</span><span data-step="identity" style="padding:5px 8px;border-radius:12px;background:rgba(255,255,255,.05);">${escapeHtml(gdlText('auto_link_step_identity', '2 · Prepare'))}</span><span data-step="assets" style="padding:5px 8px;border-radius:12px;background:rgba(255,255,255,.05);">${escapeHtml(gdlText('auto_link_step_assets', '3 · Finish'))}</span></div>
 				<div class="gdl-manual-link-status" aria-live="polite" style="display:none;margin-top:11px;padding:9px 11px;border:1px solid rgba(255,255,255,.08);border-radius:3px;background:rgba(0,0,0,.16);font-size:12px;line-height:1.4;color:#8f98a0;"></div>
-				<div style="display:flex;justify-content:flex-end;gap:9px;margin-top:14px;">
-					<button class="gdl-manual-link-cancel" style="padding:9px 17px;border:0;border-radius:2px;background:#3d4450;color:#dcdedf;cursor:pointer;">${escapeHtml(automaticNativeAddReview ? gdlText('reject_link', 'Reject') : gdlText('cancel', 'Cancel'))}</button>
-					<button class="gdl-manual-link-confirm" style="padding:9px 18px;border:0;border-radius:2px;background:linear-gradient(90deg,#06bfff,#2d73ff);color:#fff;cursor:pointer;">${escapeHtml(gdlText('link_game', 'Link game'))}</button>
-				</div>
+				<div style="display:flex;justify-content:flex-end;gap:9px;margin-top:14px;"><button class="gdl-manual-link-cancel" style="padding:9px 17px;border:0;border-radius:2px;background:#3d4450;color:#dcdedf;cursor:pointer;">${escapeHtml(automaticNativeAddReview ? gdlText('reject_link', 'Reject') : gdlText('cancel', 'Cancel'))}</button><button class="gdl-manual-link-confirm" style="padding:9px 18px;border:0;border-radius:2px;background:linear-gradient(90deg,#06bfff,#2d73ff);color:#fff;cursor:pointer;">${escapeHtml(gdlText('link_game', 'Link game'))}</button></div>
 			</div>
 		</div>`;
 	const select = overlay.querySelector('.gdl-manual-link-select') as HTMLSelectElement;
@@ -164,15 +155,16 @@ export function showShortcutManualLinkModal(
 	};
 	for (const candidate of currentCandidates) {
 		const option = targetDoc.createElement('option');
-		option.value = candidate.appid;
+		option.value = getCandidateKey(candidate);
 		const confBadge = ` [${displayConfidence(candidate)}]`;
 		const isCollision = candidate.identity_collision ? ' ⚠️' : '';
-		option.textContent = `${candidate.name} — AppID ${candidate.appid} (${Math.round(candidate.score)}%)${confBadge}${isCollision}`;
+		const editionBadge = candidate.edition ? ` [${candidate.edition.toUpperCase()}]` : '';
+		option.textContent = `${candidate.name} — AppID ${candidate.appid} (${Math.round(candidate.score)}%)${confBadge}${editionBadge}${isCollision}`;
 		select.appendChild(option);
 	}
 	if (currentCandidates.length) {
 		select.selectedIndex = 0;
-		select.value = currentCandidates[0].appid;
+		select.value = getCandidateKey(currentCandidates[0]);
 	} else {
 		const option = targetDoc.createElement('option');
 		option.value = '';
@@ -193,10 +185,8 @@ export function showShortcutManualLinkModal(
 		status.textContent = message;
 		status.style.display = message ? 'block' : 'none';
 		const styles: Record<ManualStatusTone, { color: string; background: string; border: string }> = {
-			neutral: { color: '#acb2b8', background: 'rgba(0,0,0,.16)', border: 'rgba(255,255,255,.08)' },
-			active: { color: '#66c0f4', background: 'rgba(102,192,244,.08)', border: 'rgba(102,192,244,.22)' },
-			success: { color: '#a4d007', background: 'rgba(91,163,43,.10)', border: 'rgba(91,163,43,.30)' },
-			warning: { color: '#e5ad37', background: 'rgba(229,173,55,.09)', border: 'rgba(229,173,55,.28)' },
+			neutral: { color: '#acb2b8', background: 'rgba(0,0,0,.16)', border: 'rgba(255,255,255,.08)' }, active: { color: '#66c0f4', background: 'rgba(102,192,244,.08)', border: 'rgba(102,192,244,.22)' },
+			success: { color: '#a4d007', background: 'rgba(91,163,43,.10)', border: 'rgba(91,163,43,.30)' }, warning: { color: '#e5ad37', background: 'rgba(229,173,55,.09)', border: 'rgba(229,173,55,.28)' },
 			error: { color: '#ff6b6b', background: 'rgba(217,65,38,.10)', border: 'rgba(217,65,38,.30)' },
 		};
 		const style = styles[tone];
@@ -209,7 +199,7 @@ export function showShortcutManualLinkModal(
 			clearTimeout(manualLookupTimer);
 			manualLookupTimer = null;
 		}
-		const candidate = currentCandidates.find(item => item.appid === select.value) || currentCandidates[0];
+		const candidate = currentCandidates.find(item => getCandidateKey(item) === select.value) || currentCandidates[0];
 		const requestRevision = ++imageRequestRevision;
 		if (!candidate) {
 			name.textContent = activeContext.title;
@@ -287,17 +277,18 @@ export function showShortcutManualLinkModal(
 			}
 			for (const cand of currentCandidates) {
 				const option = targetDoc.createElement('option');
-				option.value = cand.appid;
+				option.value = getCandidateKey(cand);
 				const confBadge = ` [${displayConfidence(cand)}]`;
 				const isCollision = cand.identity_collision ? ' ⚠️' : '';
-				option.textContent = `${cand.name} — AppID ${cand.appid} (${Math.round(cand.score)}%)${confBadge}${isCollision}`;
+				const editionBadge = cand.edition ? ` [${cand.edition.toUpperCase()}]` : '';
+				option.textContent = `${cand.name} — AppID ${cand.appid} (${Math.round(cand.score)}%)${confBadge}${editionBadge}${isCollision}`;
 				select.appendChild(option);
 			}
-			if (userHasInteracted && previousSelectedValue && currentCandidates.some(c => c.appid === previousSelectedValue)) {
+			if (userHasInteracted && previousSelectedValue && currentCandidates.some(c => getCandidateKey(c) === previousSelectedValue)) {
 				select.value = previousSelectedValue;
 			} else if (!userHasInteracted) {
 				select.selectedIndex = 0;
-				select.value = currentCandidates[0].appid;
+				select.value = getCandidateKey(currentCandidates[0]);
 			}
 		} else {
 			const option = targetDoc.createElement('option');
@@ -391,7 +382,7 @@ export function showShortcutManualLinkModal(
 		userHasInteracted = true;
 		if (manualAppIdInput.value) manualAppIdInput.value = '';
 		renderCandidate();
-		const currentSelected = currentCandidates.find(candidate => candidate.appid === select.value) || currentCandidates[0];
+		const currentSelected = currentCandidates.find(candidate => getCandidateKey(candidate) === select.value) || currentCandidates[0];
 		updateLauncherBypass(currentSelected?.appid || '');
 	});
 	manualAppIdInput.addEventListener('input', () => {
@@ -405,7 +396,7 @@ export function showShortcutManualLinkModal(
 				confirm.style.opacity = '1';
 			}
 		} else if (!val) {
-			const hasCandidate = Boolean(currentCandidates.find(candidate => candidate.appid === select.value) || currentCandidates[0]);
+			const hasCandidate = Boolean(currentCandidates.find(candidate => getCandidateKey(candidate) === select.value) || currentCandidates[0]);
 			confirm.disabled = !hasCandidate || modalSubmitting;
 			confirm.style.opacity = (hasCandidate && !modalSubmitting) ? '1' : '.65';
 		} else {
@@ -553,15 +544,12 @@ export function showShortcutManualLinkModal(
 	};
 	const queueLinkInBackground = (steamAppId: string, shortcutAppId = activeContext.shortcutAppId, repairResources = false): void => {
 		const job = enqueueLinkJob({
-			title: activeContext.title,
-			shortcutAppId,
-			steamAppId,
+			title: activeContext.title, shortcutAppId, steamAppId,
 			skipLauncher: launcherInput.checked || shouldAutoApplyNoLauncher(steamAppId),
 			existingLaunchOptions: activeContext.launchOptions,
 			trackingExecutable: hasTrackingRecommendation && (activeContext.trackingExecutableAutoApply || trackingInput.checked) ? activeContext.recommendedExePath : '',
 			trackingStartDir: hasTrackingRecommendation && (activeContext.trackingExecutableAutoApply || trackingInput.checked) ? activeContext.recommendedStartDir : '',
-			shortcutExecutable: activeContext.exePath || '',
-			repairResources,
+			shortcutExecutable: activeContext.exePath || '', repairResources,
 		});
 		setStatus(gdlText('link_queued_background', 'Linked. Finishing resources in the background…'), 'active');
 		watchQueuedLink(job.id);
@@ -573,12 +561,23 @@ export function showShortcutManualLinkModal(
 			setStatus(gdlText('manual_appid_invalid', 'Enter a numeric Steam AppID.'), 'error');
 			return;
 		}
-		const selected = currentCandidates.find(candidate => candidate.appid === select.value) || currentCandidates[0];
+		const selected = currentCandidates.find(candidate => getCandidateKey(candidate) === select.value) || currentCandidates[0];
 		const steamAppId = manualAppId || selected?.appid || '';
 		if (!steamAppId) {
 			setStatus(gdlText('enter_appid', 'Enter an AppID or store link.'), 'error');
 			manualAppIdInput.focus();
 			return;
+		}
+		if (selected?.is_edition && !manualAppId) {
+			saveShortcutEdition(activeContext.shortcutAppId, {
+				edition: selected.edition || '',
+				name: selected.name,
+				appId: selected.appid,
+				assets: selected.edition_assets,
+				bundleId: selected.bundle_id,
+			});
+		} else {
+			clearShortcutEdition(activeContext.shortcutAppId);
 		}
 		modalSubmitting = true;
 		shortcutLinkInProgress = true;
@@ -595,6 +594,7 @@ export function showShortcutManualLinkModal(
 			trackingExecutable: hasTrackingRecommendation && (activeContext.trackingExecutableAutoApply || trackingInput.checked) ? activeContext.recommendedExePath : '',
 			trackingStartDir: hasTrackingRecommendation && (activeContext.trackingExecutableAutoApply || trackingInput.checked) ? activeContext.recommendedStartDir : '',
 			shortcutExecutable: activeContext.exePath || '',
+			canonicalNameHint: selected?.is_edition && !manualAppId ? selected.name : undefined,
 		};
 		stageLinkJobForRecovery({ ...linkInput, repairResources: false });
 		try {
@@ -613,6 +613,19 @@ export function showShortcutManualLinkModal(
 				const setup = result.setup;
 				const resourcesComplete = Boolean(setup?.artworkComplete && setup?.iconApplied);
 				linkSucceeded = resourcesComplete;
+				if (result.shortcutAppId && result.shortcutAppId !== activeContext.shortcutAppId) {
+					if (selected?.is_edition && !manualAppId) {
+						saveShortcutEdition(result.shortcutAppId, {
+							edition: selected.edition || '',
+							name: selected.name,
+							appId: selected.appid,
+							assets: selected.edition_assets,
+							bundleId: selected.bundle_id,
+						});
+					} else {
+						clearShortcutEdition(result.shortcutAppId);
+					}
+				}
 				if (resourcesComplete) {
 					cancelPendingLinkJobs(result.shortcutAppId || activeContext.shortcutAppId, activeContext.title);
 					setProgress(3, false);
@@ -666,14 +679,7 @@ async function inspectShortcutReview(
 		? targetDoc
 		: (shortcutRuntimeHost().getMainWindowDoc() || (typeof document !== 'undefined' ? document : null));
 	const immediateContext: ShortcutDetectionContext = {
-		shortcutAppId: record.id,
-		title: record.title,
-		exePath: '',
-		startDir: '',
-		launchOptions: '',
-		bootstrapDetected: false,
-		recommendedExePath: '',
-		recommendedStartDir: '',
+		shortcutAppId: record.id, title: record.title, exePath: '', startDir: '', launchOptions: '', bootstrapDetected: false, recommendedExePath: '', recommendedStartDir: '',
 	};
 	const currentGeneration = ++globalDetectionGeneration;
 	const loadingShown = Boolean(immediateDoc?.body && !immediateDoc.getElementById('gdl-manual-link-modal'));
@@ -719,14 +725,7 @@ async function inspectShortcutReview(
 		}
 		if (!context) {
 			context = {
-				shortcutAppId: record.id,
-				title: record.title,
-				exePath: '',
-				startDir: '',
-				launchOptions: '',
-				bootstrapDetected: false,
-				recommendedExePath: '',
-				recommendedStartDir: '',
+				shortcutAppId: record.id, title: record.title, exePath: '', startDir: '', launchOptions: '', bootstrapDetected: false, recommendedExePath: '', recommendedStartDir: '',
 			};
 		}
 		if (!context.title && !context.exePath) {

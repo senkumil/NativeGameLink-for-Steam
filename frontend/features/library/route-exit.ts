@@ -1,4 +1,5 @@
 import { GDL_INJECTED } from './constants';
+import { isPublicSteamLibraryRoute } from './native-route';
 
 // Steam reuses the same React-owned Library containers while it changes games.
 // Removing our children during that commit can make React remove a node that is
@@ -38,7 +39,9 @@ export function hasOwnedLibraryChrome(doc: Document): boolean {
 export function beginLibraryRouteExit(doc: Document, generation: number): void {
 	pendingExitGenerations.set(doc, generation);
 	try {
+		const isNativeSteamRoute = isPublicSteamLibraryRoute(doc);
 		doc.querySelectorAll<HTMLElement>(OWNED_LIBRARY_SELECTORS).forEach(element => {
+			if (!isNativeSteamRoute && element.id === 'gdl-link-bar') return;
 			// These nodes will be removed after the native route stabilizes, so no
 			// Steam-owned inline style is changed or later guessed/restored here.
 			element.style.setProperty('display', 'none', 'important');
@@ -61,6 +64,11 @@ export function finishLibraryRouteExit(doc: Document): void {
  * because it never removes, clicks, reorders, styles or reads React state from
  * a Steam-owned element. */
 export function removeOwnedLibraryChrome(doc: Document): void {
-	try { doc.querySelectorAll(OWNED_LIBRARY_SELECTORS).forEach(element => element.remove()); }
-	catch {}
+	try {
+		const isNativeSteamRoute = isPublicSteamLibraryRoute(doc);
+		doc.querySelectorAll(OWNED_LIBRARY_SELECTORS).forEach(element => {
+			if (!isNativeSteamRoute && element.id === 'gdl-link-bar') return;
+			element.remove();
+		});
+	} catch {}
 }

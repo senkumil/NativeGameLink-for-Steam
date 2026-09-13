@@ -17,6 +17,7 @@ import {
 	isRenderedElement,
 	removeCssModuleClass,
 } from '../../steam/native-dom';
+import { isPublicSteamLibraryRoute } from './native-route';
 
 const GDL_INFO_PANEL_EXPANDED_KEY = 'gdl_info_panel_expanded';
 
@@ -409,7 +410,31 @@ function installInfoButtonScrollBehavior(
 
 	const MutationObserverCtor = view?.MutationObserver;
 	const mutationObserver = typeof MutationObserverCtor === 'function'
-		? new MutationObserverCtor(() => {
+		? new MutationObserverCtor((mutations) => {
+			if (isPublicSteamLibraryRoute(doc)) {
+				cleanup();
+				removeNativeInfoButton(doc);
+				removeNativeInfoPanel(doc);
+				return;
+			}
+			const hasExternalMutations = mutations.some(m => {
+				const target = m.target as HTMLElement | null;
+				if (target?.closest?.('[data-gdl-game-info-button], #gdl-game-info-panel, [data-gdl-injected]')) return false;
+				for (let i = 0; i < m.addedNodes.length; i++) {
+					const node = m.addedNodes[i] as HTMLElement;
+					if (node.nodeType === 1 && !node.closest?.('[data-gdl-game-info-button], #gdl-game-info-panel, [data-gdl-injected]')) {
+						return true;
+					}
+				}
+				for (let i = 0; i < m.removedNodes.length; i++) {
+					const node = m.removedNodes[i] as HTMLElement;
+					if (node.nodeType === 1 && !node.closest?.('[data-gdl-game-info-button], #gdl-game-info-panel, [data-gdl-injected]')) {
+						return true;
+					}
+				}
+				return false;
+			});
+			if (!hasExternalMutations) return;
 			scheduleEnsureButtons();
 			queueUpdate();
 		})
@@ -698,6 +723,10 @@ export function removeNativeInfoPanel(doc: Document, _preserveExpansion = false)
 }
 
 export function ensureNativeInfoPanel(doc: Document, model: NativeGameInfo): HTMLElement | null {
+	if (isPublicSteamLibraryRoute(doc)) {
+		removeNativeInfoPanel(doc);
+		return null;
+	}
 	let panel = doc.getElementById('gdl-game-info-panel') as HTMLElement | null;
 	const signature = nativeInfoSignature(model);
 	if (panel && panel.dataset.gameKey !== model.key) {
@@ -751,9 +780,17 @@ export function ensureNativeInfoPanel(doc: Document, model: NativeGameInfo): HTM
 }
 
 export function ensureNativeInfoButton(doc: Document, model: NativeGameInfo): void {
+	if (isPublicSteamLibraryRoute(doc)) {
+		removeNativeInfoButton(doc);
+		return;
+	}
 	const playbarModule = PLAYBAR_CLASS_MODULE();
 	const classes = playbarModule.classes;
 	const syncButtons = (): void => {
+		if (isPublicSteamLibraryRoute(doc)) {
+			removeNativeInfoButton(doc);
+			return;
+		}
 		const containers = elementsWithCssModuleClass(doc, classes.AppButtonsContainer).filter(container => container.isConnected);
 		const viewportHeight = Math.max(0, doc.defaultView?.innerHeight || doc.documentElement.clientHeight || 0);
 		const isViewportRendered = (container: HTMLElement): boolean => {
@@ -771,7 +808,19 @@ export function ensureNativeInfoButton(doc: Document, model: NativeGameInfo): vo
 			? visibleInPage
 			: (visibleContainers.length > 0 ? visibleContainers : inPageCandidates.length > 0 ? inPageCandidates : containers.slice(0, 1));
 		for (const container of targets) {
-			let button = container.querySelector<HTMLElement>('[data-gdl-game-info-button="1"]');
+			const existingGdlButton = container.querySelector<HTMLElement>('[data-gdl-game-info-button="1"]');
+			const hasNativeInfo = Boolean(
+				Array.from(container.querySelectorAll<HTMLElement>('button, [role="button"]'))
+					.some(b => !b.closest('[data-gdl-game-info-button]') && (
+						Boolean(b.querySelector('.SVGIcon_Information, svg[class*="Information"]')) ||
+						/details|informaci|detalles/i.test(b.getAttribute('aria-label') || b.getAttribute('title') || '')
+					))
+			);
+			if (hasNativeInfo) {
+				if (existingGdlButton) existingGdlButton.remove();
+				continue;
+			}
+			let button = existingGdlButton;
 			if (!button) {
 				button = buildNativeInfoButtonBlueprint(doc) || doc.createElement('button');
 				const usesNativeBlueprint = button.dataset.gdlNativeBlueprint === '1';

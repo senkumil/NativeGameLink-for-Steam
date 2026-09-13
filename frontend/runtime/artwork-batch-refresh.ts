@@ -3,6 +3,7 @@ interface ArtworkChangedDetail {
 	user_action?: boolean;
 	user_choice?: boolean;
 	batch_complete?: boolean;
+	automatic?: boolean;
 }
 
 /** Repaint once after a complete artwork transaction. Steam may report several
@@ -16,7 +17,8 @@ export function installArtworkBatchRefresh(
 	const onArtworkChanged = (event: Event): void => {
 		const detail = (event as CustomEvent<ArtworkChangedDetail>).detail;
 		if (!detail || String(detail.steamAppId || '') !== getCurrentAppId()
-			|| !(detail.user_action || detail.user_choice || detail.batch_complete)) return;
+			|| detail.automatic
+			|| !(detail.user_action || detail.user_choice)) return;
 		if (timer) clearTimeout(timer);
 		timer = setTimeout(() => {
 			timer = null;

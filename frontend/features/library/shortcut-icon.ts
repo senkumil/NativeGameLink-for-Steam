@@ -1,7 +1,6 @@
 import { backendLog, saveShortcutIconBackend } from '../../api/backend';
 import { getPreferences } from '../../core/preferences';
 import { steamLanguageSync } from '../../steam/localization';
-import { getShortcutAppById, readShortcutOverviewField } from '../../steam/shortcuts';
 import { getCommunityArtwork } from './artwork-community';
 import { imageUrlToBase64 } from './artwork-image';
 import { getModernLibraryAssets, getResolvedLibraryAssets } from './library-assets';
@@ -96,15 +95,24 @@ async function fetchOfficialShortcutIconPayload(candidates: { url?: string; exte
 	return null;
 }
 
-function shortcutIconMarkerMatches(shortcutAppId: number, steamAppId: string): boolean {
+const appliedShortcutIcons = new Set<string>();
+
+export function clearAppliedShortcutIcons(shortcutAppId?: number): void {
+	if (shortcutAppId != null) {
+		for (const key of Array.from(appliedShortcutIcons)) {
+			if (key.startsWith(`${shortcutAppId}:`)) appliedShortcutIcons.delete(key);
+		}
+	} else {
+		appliedShortcutIcons.clear();
+	}
+}
+
+export function shortcutIconMarkerMatches(shortcutAppId: number, steamAppId: string): boolean {
+	const sessionKey = `${shortcutAppId}:${steamAppId}`;
+	if (appliedShortcutIcons.has(sessionKey)) return true;
 	try {
 		const marker = JSON.parse(localStorage.getItem(SHORTCUT_ICON_STORAGE_PREFIX + shortcutAppId) || 'null');
-		if (marker?.steamAppId !== steamAppId) return false;
-		const app = getShortcutAppById(shortcutAppId);
-		const currentPath = readShortcutOverviewField(app,
-			'strShortcutIcon', 'm_strShortcutIcon', 'shortcut_icon', 'strIconPath');
-		const normalizePath = (value: unknown): string => String(value || '').replace(/\\/g, '/').toLowerCase();
-		return Boolean(currentPath && marker.path && normalizePath(currentPath) === normalizePath(marker.path));
+		return Boolean(marker?.steamAppId === steamAppId && marker?.path);
 	} catch { return false; }
 }
 
@@ -115,12 +123,14 @@ function markShortcutIconApplied(shortcutAppId: number, steamAppId: string, path
 }
 
 export function clearShortcutIconMarker(shortcutAppId: number): void {
+	clearAppliedShortcutIcons(shortcutAppId);
 	try {
 		localStorage.removeItem(SHORTCUT_ICON_STORAGE_PREFIX + shortcutAppId);
 	} catch {}
 }
 
 export function clearAllShortcutIconMarkers(): void {
+	appliedShortcutIcons.clear();
 	try {
 		const keys = Object.keys(localStorage);
 		for (const key of keys) {
@@ -146,9 +156,13 @@ export function clearShortcutIconInFlight(shortcutAppId?: number): void {
 }
 
 export async function applyOfficialShortcutIconOnce(shortcutAppId: number, steamAppId: string, force = false): Promise<boolean> {
+	const sessionKey = `${shortcutAppId}:${steamAppId}`;
+	if (!force && (appliedShortcutIcons.has(sessionKey) || shortcutIconMarkerMatches(shortcutAppId, steamAppId))) {
+		appliedShortcutIcons.add(sessionKey);
+		return true;
+	}
 	const generation = shortcutIconGeneration(shortcutAppId);
 	try {
-		if (!force && shortcutIconMarkerMatches(shortcutAppId, steamAppId)) return true;
 		const apps = (window as any).SteamClient?.Apps;
 		const applyIconPath = async (path: string): Promise<boolean> => {
 			if (typeof apps?.SetShortcutIcon !== 'function') return false;
@@ -160,6 +174,7 @@ export async function applyOfficialShortcutIconOnce(shortcutAppId: number, steam
 						if (!shortcutIconGenerationIsCurrent(shortcutAppId, generation)) return false;
 						try { await waitForSteamBridge(apps.RequestIconDataForApp?.(shortcutAppId), 1500); } catch {}
 						if (!shortcutIconGenerationIsCurrent(shortcutAppId, generation)) return false;
+						appliedShortcutIcons.add(sessionKey);
 						markShortcutIconApplied(shortcutAppId, steamAppId, path);
 						setTimeout(() => {
 							if (!shortcutIconGenerationIsCurrent(shortcutAppId, generation)) return;

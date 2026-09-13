@@ -25,6 +25,7 @@ import {
 	type LinkTransaction, type LinkResourceManifest, type ResourceStatus,
 	saveShortcutManifest, clearShortcutManifest, createLinkTransaction,
 } from './transaction';
+import { getShortcutEdition, saveShortcutEdition } from './editions';
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, errorCode: string): Promise<T> {
 	return new Promise<T>((resolve, reject) => {
@@ -139,7 +140,8 @@ export class LinkOrchestrator {
 				is_delisted: canonicalData?.is_delisted === true,
 			};
 		}
-		const canonicalName = String(canonicalData?.name || data?.name || options.canonicalNameHint || title).trim();
+		const edition = options.shortcutAppId ? getShortcutEdition(options.shortcutAppId) : null;
+		const canonicalName = String(edition?.name || options.canonicalNameHint || canonicalData?.name || data?.name || title).trim();
 		return { data, canonicalName, localizedData };
 	}
 
@@ -234,6 +236,12 @@ export class LinkOrchestrator {
 				staleIds.add(shortcutAppId);
 				if (currentName) {
 					rememberOriginalShortcutTitle(shortcutAppId, currentName);
+				}
+				if (originalShortcutId !== shortcutAppId) {
+					const editionMeta = getShortcutEdition(originalShortcutId);
+					if (editionMeta) {
+						saveShortcutEdition(shortcutAppId, editionMeta);
+					}
 				}
 				const renamedShortcut = getShortcutAppById(shortcutAppId);
 				const renamedTitle = String(renamedShortcut?.display_name

@@ -49,14 +49,17 @@ const INJECTED_SECTION_IDS = [
 
 const controllerWatchers = new WeakMap<Document, () => void>();
 
-function cleanupPreviousRender(doc: Document): void {
+function cleanupPreviousRender(doc: Document, preserveLinkBar = false): void {
 	controllerWatchers.get(doc)?.();
 	controllerWatchers.delete(doc);
 	removeNativeGameChrome(doc);
 	disposeTradingCardPreview(doc);
 	const community = doc.getElementById('gdl-community-content');
 	if (community instanceof HTMLElement) disposeCommunitySection(community);
-	for (const id of INJECTED_SECTION_IDS) doc.getElementById(id)?.remove();
+	for (const id of INJECTED_SECTION_IDS) {
+		if (preserveLinkBar && id === 'gdl-link-bar') continue;
+		doc.getElementById(id)?.remove();
+	}
 	doc.querySelectorAll<HTMLElement>('[data-gdl-hidden]').forEach(element => {
 		element.style.display = '';
 		element.removeAttribute('data-gdl-hidden');
@@ -82,15 +85,15 @@ export function renderLinkedGamePage(
 ): boolean {
 	if (noticeElement.ownerDocument !== doc || !noticeElement.isConnected || !context.isCurrent()) return false;
 	const previousActivity = doc.getElementById(GDL_INJECTED) as HTMLElement | null;
+	const previousBelongsToSession = previousActivity?.dataset.gdlSteamAppId === steamAppId
+		&& (!context.shortcutAppId || previousActivity.dataset.gdlShortcutAppId === context.shortcutAppId);
 	const layout = discoverNativeLibraryLayout(doc, noticeElement);
 	if (!layout.anchorRegion?.isConnected || !layout.sidebarColumn?.isConnected
 		|| !layout.twoColumnRow?.isConnected || !layout.contentColumn?.isConnected) {
-		const previousBelongsToSession = previousActivity?.dataset.gdlSteamAppId === steamAppId
-			&& (!context.shortcutAppId || previousActivity.dataset.gdlShortcutAppId === context.shortcutAppId);
 		if (!previousBelongsToSession || previousActivity?.dataset.gdlLayoutComplete !== '1') cleanupPreviousRender(doc);
 		return false;
 	}
-	cleanupPreviousRender(doc);
+	cleanupPreviousRender(doc, previousBelongsToSession);
 	const isLegacy = isLegacyGame(steamAppId, data);
 	const initialAssets = getResolvedLibraryAssets(steamAppId);
 	prepareNativeLibraryLayout(layout);

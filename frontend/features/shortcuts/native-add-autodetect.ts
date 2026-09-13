@@ -5,6 +5,8 @@ import { candidateSteamDocuments, nativeAddNonSteamDialogOpen, nativeAddSelected
 import { findMappingForShortcut, getAllShortcutRecords, refreshShortcutRecordsFromBackend, shortcutAlreadyLinked, type ShortcutRecord } from './registry';
 import { requestNativeAddShortcutReview } from './manual-link';
 import { hasNoLauncherOption, mergeNoLauncherOption, removeIncompatibleLauncherBypass, shouldAutoApplyNoLauncher } from './linking';
+import { mappings, updateMappingsChecked } from '../../core/mappings';
+import { purgeShortcutCachesAndArtwork } from './purge';
 
 let watcherTimer: ReturnType<typeof setInterval> | null = null;
 let closeEvaluationTimers: ReturnType<typeof setTimeout>[] = [];
@@ -204,6 +206,19 @@ function scanForNewlyAddedShortcuts(): void {
 		if (!currentIds.has(id)) {
 			knownShortcutIds.delete(id);
 			handledIds.delete(id);
+		}
+	}
+
+	if (currentIds.size > 0) {
+		for (const key of Object.keys(mappings)) {
+			if (key.startsWith('shortcut:')) {
+				const sid = Number(key.slice('shortcut:'.length));
+				if (Number.isFinite(sid) && sid >= 2147483648 && !currentIds.has(sid)) {
+					const mappedSteamAppId = mappings[key];
+					void updateMappingsChecked({ remove: [key] }).catch(() => {});
+					void purgeShortcutCachesAndArtwork(sid, mappedSteamAppId, true).catch(() => {});
+				}
+			}
 		}
 	}
 }

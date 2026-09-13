@@ -15,6 +15,7 @@ import { syncMissingArtworkForMappedShortcuts } from '../library/artwork-sync';
 import { runDurableReconciliation } from './reconciler';
 import { isPriorityShortcut } from './link-job-priority';
 import { getFactoryResetEpoch, isFactoryEpochCurrent, isFactoryResetInProgress, readShortcutManifest } from './transaction';
+import { saveShortcutEdition } from './editions';
 export { setPriorityShortcut as prioritizeBulkLinkShortcut } from './link-job-priority';
 
 const BULK_ANALYSIS_CONCURRENCY = 2;
@@ -307,6 +308,15 @@ export async function linkAllShortcutsExperimental(
 			});
 
 			try {
+				if (item.candidate.is_edition) {
+					saveShortcutEdition(item.record.id, {
+						edition: item.candidate.edition || '',
+						name: item.candidate.name,
+						appId: item.candidate.appid,
+						assets: item.candidate.edition_assets,
+						bundleId: item.candidate.bundle_id,
+					});
+				}
 				const linked = await linkShortcutToSteam({
 					doc: null,
 					title: item.context.title,
@@ -324,6 +334,15 @@ export async function linkAllShortcutsExperimental(
 				});
 
 				const resolvedShortcutId = Number(linked.shortcutAppId || item.record.id);
+				if (linked.ok && item.candidate.is_edition && resolvedShortcutId && resolvedShortcutId !== item.record.id) {
+					saveShortcutEdition(resolvedShortcutId, {
+						edition: item.candidate.edition || '',
+						name: item.candidate.name,
+						appId: item.candidate.appid,
+						assets: item.candidate.edition_assets,
+						bundleId: item.candidate.bundle_id,
+					});
+				}
 
 				if (linked.ok) {
 					cancelPendingLinkJobs(item.record.id, item.context.title);

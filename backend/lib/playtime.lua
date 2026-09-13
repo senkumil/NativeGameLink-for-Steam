@@ -182,25 +182,12 @@ end
 local function prune_foreign_sessions()
     local registry = deps.shortcut_registry
     if not registry or type(registry.list) ~= "function" then return 0 end
-    local ok_list, raw = pcall(registry.list)
-    if not ok_list then return 0 end
-    local ok_decode, snapshot = pcall(cjson.decode, tostring(raw or ""))
-    if not ok_decode or type(snapshot) ~= "table" or snapshot.ok ~= true
-        or tostring(snapshot.account_id or "") == "" or type(snapshot.shortcuts) ~= "table" then
-        return 0
-    end
-
-    local valid = {}
-    for _, shortcut in ipairs(snapshot.shortcuts) do
-        if type(shortcut) == "table" then
-            local id = valid_shortcut_id(shortcut.shortcut_app_id)
-            if id then valid[id] = true end
-        end
-    end
-
+    -- Playtime and last session history are permanently preserved per-user in
+    -- playtime_sessions.json across shortcut deletions, unlinks and relinks.
+    -- Only prune malformed or unparseable keys to protect store integrity.
     local removed = 0
-    for canonical in pairs(STORE.sessions) do
-        if not valid[tostring(canonical)] then
+    for canonical, list in pairs(STORE.sessions) do
+        if not valid_shortcut_id(canonical) or type(list) ~= "table" then
             STORE.sessions[canonical] = nil
             removed = removed + 1
         end
@@ -264,43 +251,6 @@ local function flush_if_due(force)
     return save_sessions()
 end
 
-local function register_aliases(keys, canonical)
-    if not canonical or canonical == "" then return end
-    for _, key in ipairs(keys) do
-        -- Any key that is not the exact canonical shortcut ID itself should point to the canonical ID.
-        if key ~= ("id:" .. canonical) and key ~= canonical then
-            STORE.aliases[key] = canonical
-        end
-    end
-end
-
-local function canonical_from_request(req, keys)
-    local direct = valid_shortcut_id(req.shortcut_app_id or req.state_app_id or req.local_app_id)
-    -- Steam regenerates a shortcut AppID when identity inputs such as its name
-    -- or executable change. Prefer that ID only once it owns sessions; until
-    -- then recover the existing canonical history through the official AppID
-    -- or normalized-title alias before creating a new empty timeline.
-    if direct and STORE.sessions[direct] then return direct end
-    for _, key in ipairs(keys) do
-        local canonical = valid_shortcut_id(STORE.aliases[key])
-        if canonical and STORE.sessions[canonical] then return canonical end
-    end
-    return direct
-end
-
-local function find_sessions_list(req, keys)
-    local canonical = canonical_from_request(req, keys)
-    return canonical and STORE.sessions[canonical] or nil, canonical
-end
-
-local function ensure_sessions_list(req, keys)
-    local canonical = canonical_from_request(req, keys)
-    if not canonical then return nil, nil end
-    if type(STORE.sessions[canonical]) ~= "table" then STORE.sessions[canonical] = {} end
-    register_aliases(keys, canonical)
-    return STORE.sessions[canonical], canonical
-end
-
 local function collapse_sessions(sessions)
     if type(sessions) ~= "table" or #sessions == 0 then return end
     local two_weeks_ago = os.time() - (14 * 24 * 60 * 60)
@@ -330,6 +280,82 @@ local function collapse_sessions(sessions)
             end
         end
     end
+end
+
+local function register_aliases(keys, canonical)
+    if not canonical or canonical == "" then return end
+    for _, key in ipairs(keys) do
+        -- Any key that is not the exact canonical shortcut ID itself should point to the canonical ID.
+        if key ~= ("id:" .. canonical) and key ~= canonical then
+            if STORE.aliases[key] ~= canonical then
+                STORE.aliases[key] = canonical
+                STORE_DIRTY = true
+            end
+        end
+    end
+end
+
+local function canonical_from_request(req, keys)
+    local direct = valid_shortcut_id(req.shortcut_app_id or req.state_app_id or req.local_app_id)
+    -- Steam regenerates a shortcut AppID when identity inputs such as its name
+    -- or executable change. Prefer that ID only once it owns sessions; until
+    -- then recover the existing canonical history through the official AppID
+    -- or normalized-title alias before creating a new empty timeline.
+    if direct and STORE.sessions[direct] then return direct end
+    for _, key in ipairs(keys) do
+        local canonical = valid_shortcut_id(STORE.aliases[key])
+        if canonical and STORE.sessions[canonical] then return canonical end
+    end
+    return direct
+end
+
+local function find_sessions_list(req, keys)
+    local direct = valid_shortcut_id(req.shortcut_app_id or req.state_app_id or req.local_app_id)
+    local canonical = canonical_from_request(req, keys)
+
+    -- If a new/relinked shortcut ID is provided and existing sessions were
+    -- recovered via steam_app_id or title alias from a previous shortcut,
+    -- migrate and merge the accumulated history to the current shortcut.
+    if direct and canonical and direct ~= canonical and STORE.sessions[canonical] then
+        if not STORE.sessions[direct] then
+            STORE.sessions[direct] = STORE.sessions[canonical]
+            STORE.sessions[canonical] = nil
+        else
+            for _, session in ipairs(STORE.sessions[canonical]) do
+                table.insert(STORE.sessions[direct], session)
+            end
+            collapse_sessions(STORE.sessions[direct])
+            STORE.sessions[canonical] = nil
+        end
+        register_aliases(candidate_keys(canonical), direct)
+        canonical = direct
+        STORE_DIRTY = true
+    end
+
+    if canonical then
+        register_aliases(keys, canonical)
+    end
+    if STORE_DIRTY then
+        save_sessions()
+    end
+    return canonical and STORE.sessions[canonical] or nil, canonical
+end
+
+local function ensure_sessions_list(req, keys)
+    local sessions, canonical = find_sessions_list(req, keys)
+    if not canonical then
+        canonical = valid_shortcut_id(req.shortcut_app_id or req.state_app_id or req.local_app_id)
+    end
+    if not canonical then return nil, nil end
+    if type(STORE.sessions[canonical]) ~= "table" then
+        STORE.sessions[canonical] = {}
+        STORE_DIRTY = true
+    end
+    register_aliases(keys, canonical)
+    if STORE_DIRTY then
+        save_sessions()
+    end
+    return STORE.sessions[canonical], canonical
 end
 
 function M.start_session(request_json)

@@ -189,6 +189,17 @@ function requestNativeInfoRerender(doc: Document): void {
 	rerenderTimers.set(doc, timer);
 }
 
+function isNativeInfoSurfaceActive(doc: Document): boolean {
+	if (!doc.body) return true;
+	const root = doc.getElementById('gdl-bp-detail-root');
+	if (root && (root.hidden || root.style.display === 'none')) {
+		return true;
+	}
+	const activeTab = doc.querySelector('[role="tab"][aria-selected="true"], [class*="Tab"][class*="Active"]');
+	const text = (activeTab?.textContent || '').toLowerCase();
+	return text.includes('info') || text.includes('información') || text.includes('informacion');
+}
+
 export function activateNativeGameInfoBridge(doc: Document, shortcut: MappedShortcut, game: SteamGameData | null): void {
 	const win = doc.defaultView;
 	if (!win) return;
@@ -197,7 +208,11 @@ export function activateNativeGameInfoBridge(doc: Document, shortcut: MappedShor
 	const signature = gameSignature(shortcut, game);
 	const previous = activeTargets.get(win);
 	activeTargets.set(win, { shortcut, game, signature });
-	if (previous?.signature !== signature) requestNativeInfoRerender(doc);
+	if (game && previous && previous.signature !== signature && isNativeInfoSurfaceActive(doc)) {
+		requestNativeInfoRerender(doc);
+	} else if (!doc.body && previous?.signature !== signature) {
+		requestNativeInfoRerender(doc);
+	}
 }
 
 export function deactivateNativeGameInfoBridge(doc: Document): void {

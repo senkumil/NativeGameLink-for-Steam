@@ -1,3 +1,29 @@
+## v4.0.0 - Major Release: Game Editions Catalog, Permanent Playtime Preservation, Deep Storage Purge & Native Route Isolation (2026-09-12)
+
+- **Curated Game Editions Catalog & Dedicated Artwork**:
+  - Adds a high-fidelity catalog of popular game editions sharing base Steam AppIDs (e.g. *Cyberpunk 2077: Ultimate Edition*, *The Witcher 3: Complete Edition*, *Red Dead Redemption 2: Ultimate Edition*, *Resident Evil 4: Gold Edition*, etc.).
+  - Preserves edition assets and metadata across linking sessions.
+
+- **Permanent Playtime Preservation & Smart Session Migration**:
+  - Playtime records and last-session timestamps in `%APPDATA%\NativeGameLinkForSteam\playtime_sessions.json` are permanently preserved across shortcut unlinks, deletions, and factory resets.
+  - Re-adding or relinking a previously tracked game automatically restores and merges all accumulated hours and session dates.
+
+- **Deep Clean & Orphan Storage Purge**:
+  - Completely purges orphaned manifests, icons, disk artwork caches, and local storage items upon unlinking or shortcut removal.
+  - Removes custom Steam logo configuration files (`<id>.json`) on reset to ensure clean layout recovery without residual styling.
+
+- **Strict Native Steam Route Isolation & Leak Prevention**:
+  - Fully decoupled ownership boundaries: official Steam library routes are identified instantly via native store/community links and sidebar attributes without circular dependency bugs.
+  - Guarantees immediate removal of injected panels, buttons, and observers when navigating to native Steam titles, permanently preventing cross-game metadata bleed and duplicate information controls.
+
+- **Hero Artwork Base-First Policy & High-Resolution Parity**:
+  - Strictly prioritizes canonical base hero artwork before 2X or community variants, with graceful fallback to 2X and SteamGridDB when base artwork is unavailable.
+  - Achieves 100% parity for delisted classics such as *Pro Evolution Soccer 2013* and *Mortal Kombat Komplete Edition*.
+
+- **Big Picture & Spatial Navigation Polish**:
+  - Refined 2D grid spatial navigation for gamepads without skipping rows or encountering dead-end focus traps.
+  - Side-by-side controller glyph indicators rendered natively in the playbar with webpack components.
+
 ## v3.0.1 - Clean-install portability and recovery hardening (2026-09-02)
 
 - Moves mutable mappings, achievement settings and playtime history to a per-user data directory instead of the plugin installation folder.

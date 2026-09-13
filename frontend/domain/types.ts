@@ -118,6 +118,11 @@ export interface ShortcutDetectionCandidate {
 	remembered?: boolean;
 	validation_state?: 'pending' | 'partial' | 'confirmed';
 	phase?: 'local' | 'remote' | 'all';
+	candidate_key?: string;
+	edition?: string;
+	is_edition?: boolean;
+	edition_assets?: { hero?: string; portrait?: string; logo?: string; wide?: string; icon?: string };
+	bundle_id?: number;
 }
 
 export interface ShortcutDetectionResult {

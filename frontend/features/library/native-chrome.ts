@@ -6,6 +6,7 @@ import { clearNativeInfoSessionState, ensureNativeInfoButton, ensureNativeInfoPa
 import { steamNativeGameInfo as buildSteamNativeGameInfo } from './native-game-model';
 import { ensureNativeGameInfoStyles } from './styles';
 import { restoreLinkedPlaybarVisibility } from '../../steam/playbar-visibility';
+import { isPublicSteamLibraryRoute } from './native-route';
 
 let currentNativeGameInfo: NativeGameInfo | null = null;
 
@@ -22,6 +23,10 @@ export function steamNativeGameInfo(data: SteamGameData, steamAppId: string, mod
  * This module intentionally contains no markup or CSS; each surface owns its own implementation.
  */
 export function ensureNativeGameChrome(doc: Document, model: NativeGameInfo): void {
+	if (isPublicSteamLibraryRoute(doc)) {
+		removeNativeGameChrome(doc, true);
+		return;
+	}
 	currentNativeGameInfo = model;
 	ensureNativeGameInfoStyles(doc);
 

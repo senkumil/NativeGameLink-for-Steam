@@ -9,6 +9,32 @@ export function routedSteamAppId(doc: Document): number | null {
 		const match = url.match(/(?:games\/details|library\/app|app)\/(\d+)/i);
 		if (match) return Number(match[1]);
 	}
+	try {
+		const view = (doc.defaultView as any) || (typeof window !== 'undefined' ? (window as any) : null);
+		const history = view?.g_History || view?.g_AppHistory || (typeof window !== 'undefined' ? (window as any).g_History || (window as any).g_AppHistory : null);
+		const path = String(history?.location?.pathname || history?.location?.hash || '');
+		const historyMatch = path.match(/(?:games\/details|library\/app|app)\/(\d+)/i);
+		if (historyMatch) return Number(historyMatch[1]);
+	} catch {}
+	try {
+		const selected = doc.querySelectorAll<HTMLElement>(
+			'[class*="gameListRow"][class*="Selected"], [class*="GameListEntry"][class*="Selected"], [class*="gamelistentry_"][class*="selected_"]'
+		);
+		for (const el of Array.from(selected)) {
+			const id = el.getAttribute('data-appid') || el.getAttribute('data-app-id');
+			if (id && /^\d+$/.test(id) && Number(id) > 0) return Number(id);
+		}
+	} catch {}
+	try {
+		const detailContainers = Array.from(doc.querySelectorAll<HTMLElement>(
+			'[class*="AppDetailsContainer"], [class*="appdetails_Container"], [class*="appdetails_AppDetails"]'
+		));
+		for (const el of detailContainers) {
+			if (el.closest('[id^="gdl-"]')) continue;
+			const id = el.getAttribute('data-appid') || el.getAttribute('data-app-id');
+			if (id && /^\d+$/.test(id) && Number(id) > 0) return Number(id);
+		}
+	} catch {}
 	return null;
 }
 
@@ -70,6 +96,7 @@ export function hasVisibleNativeLinksBar(doc: Document): boolean {
 export function isPublicSteamLibraryRoute(doc: Document): boolean {
 	const appId = routedSteamAppId(doc);
 	if (appId !== null && appId > 0 && appId < 2147483648) return true;
+	if (appId !== null && appId >= 2147483648) return false;
 	if (findNonSteamNotice(doc)) return false;
 	if (hasVisibleNativeLinksBar(doc)) return true;
 	return false;

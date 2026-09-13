@@ -9,7 +9,8 @@ import {
 	saveShortcutManifest,
 	type ResourceStatus,
 } from './transaction';
-import { spoofArtwork, applyOfficialShortcutIcon, isLogoPositionVerified } from '../library/artwork';
+import { spoofArtwork, applyOfficialShortcutIcon, isLogoPositionVerified, artworkAlreadySaved } from '../library/artwork';
+import { shortcutIconMarkerMatches } from '../library/shortcut-icon';
 import { shortcutRuntimeHost } from './host';
 import { isLegacyGame } from '../library/legacy-games';
 import { getGameData } from '../../core/game-data';
@@ -57,10 +58,15 @@ export async function reconcileShortcut(
 		return 'superseded';
 	}
 
+	const isArtSaved = artworkAlreadySaved(shortcutAppId, steamAppId);
+	const isIconSaved = shortcutIconMarkerMatches(shortcutAppId, steamAppId);
+	const logoUnverified = !isLogoPositionVerified(shortcutAppId, steamAppId);
+	if (isArtSaved && isIconSaved && !logoUnverified) {
+		return 'healthy';
+	}
+
 	const manifest = readShortcutManifest(shortcutAppId, steamAppId)
 		|| createInitialManifest(shortcutAppId, steamAppId);
-
-	const logoUnverified = !isLogoPositionVerified(shortcutAppId, steamAppId);
 	const hasMissingSlots =
 		manifest.portrait.status !== 'READY' ||
 		manifest.hero.status !== 'READY' ||

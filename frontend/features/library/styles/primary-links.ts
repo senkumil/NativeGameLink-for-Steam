@@ -2,6 +2,11 @@ import { injectLibraryStyle } from './inject';
 
 export function ensurePrimaryLinksStyles(doc: Document): void {
 	injectLibraryStyle(doc, 'gdl-primary-links-styles', `
+		#gdl-link-bar:not([data-gdl-links-settled="1"]) {
+			visibility: hidden !important;
+			opacity: 0 !important;
+			pointer-events: none !important;
+		}
 		#gdl-link-bar {
 			margin: 11px 20px 8px 20px !important;
 			width: calc(100% - 40px) !important;

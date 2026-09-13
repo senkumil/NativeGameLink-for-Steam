@@ -18,6 +18,7 @@ export interface HeroCandidateOptions {
 	} | null;
 	communityHero?: string;
 	userHero?: string;
+	editionHero?: string;
 	/** For confirmed retired/legacy apps, do not burn time probing several guessed
 	 * Steam CDN paths before a community fallback that is already resolved.
 	 * Explicit Steam metadata still remains authoritative. */
@@ -62,7 +63,7 @@ export function isHeroBaseUrl(url: string, modern?: { hero?: string; hero2x?: st
  * 7. Community Hero (SteamGridDB)
  */
 export function buildHeroCandidateUrls(options: HeroCandidateOptions): string[] {
-	const { steamAppId, modern, communityHero, userHero, preferCommunityBeforeDirectProbes = false } = options;
+	const { steamAppId, modern, communityHero, userHero, editionHero, preferCommunityBeforeDirectProbes = false } = options;
 	const sharedBase = `https://shared.steamstatic.com/store_item_assets/steam/apps/${steamAppId}`;
 	const fastlyBase = `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${steamAppId}`;
 	const cfBase = `https://shared.cloudflare.steamstatic.com/store_item_assets/steam/apps/${steamAppId}`;
@@ -96,6 +97,11 @@ export function buildHeroCandidateUrls(options: HeroCandidateOptions): string[] 
 			userHero, modern?.hero, ...baseProbes, modern?.hero2x, ...twoXProbes,
 			modern?.legacy_header, communityHero,
 		];
+
+	if (editionHero) {
+		const insertIdx = userHero ? 1 : 0;
+		candidates.splice(insertIdx, 0, editionHero);
+	}
 
 	return Array.from(new Set(candidates.filter((u): u is string => Boolean(u))));
 }

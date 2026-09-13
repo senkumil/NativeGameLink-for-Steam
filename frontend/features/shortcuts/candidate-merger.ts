@@ -16,12 +16,17 @@ export function mergeCandidateLists(
 	const merged: ShortcutDetectionCandidate[] = [];
 	const seen = new Set<string>();
 
+	const getKey = (item: ShortcutDetectionCandidate): string =>
+		item.candidate_key || (item.edition ? `${item.appid}:edition:${item.edition}` : item.appid);
+
 	for (const rem of remote) {
-		const loc = local.find(item => item.appid === rem.appid);
+		const remKey = getKey(rem);
+		const loc = local.find(item => getKey(item) === remKey);
 		if (loc) {
 			merged.push({
 				...loc,
 				...rem,
+				candidate_key: remKey,
 				name: rem.name || loc.name,
 				image: rem.image || loc.image,
 				validation_state: rem.validation_state || 'confirmed',
@@ -32,22 +37,25 @@ export function mergeCandidateLists(
 		} else {
 			merged.push({
 				...rem,
+				candidate_key: remKey,
 				validation_state: rem.validation_state || 'confirmed',
 			});
 		}
-		seen.add(rem.appid);
+		seen.add(remKey);
 	}
 
 	for (const loc of local) {
-		if (!seen.has(loc.appid)) {
+		const locKey = getKey(loc);
+		if (!seen.has(locKey)) {
 			merged.push({
 				...loc,
+				candidate_key: locKey,
 				validation_state: 'partial',
 				warnings: loc.warnings && loc.warnings.includes('remote_validation_unavailable')
 					? loc.warnings
 					: [...(loc.warnings || []), 'remote_validation_unavailable'],
 			});
-			seen.add(loc.appid);
+			seen.add(locKey);
 		}
 	}
 

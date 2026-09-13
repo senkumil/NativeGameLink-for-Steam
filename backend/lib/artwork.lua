@@ -581,12 +581,20 @@ local function remove_grid_files(grid_dir, sid, suffixes)
     local sid_num = tonumber(sid_str)
     local signed_sid = (sid_num and sid_num >= 2147483648) and tostring(math.floor(sid_num - 4294967296)) or nil
     local ids = signed_sid and { sid_str, signed_sid } or { sid_str }
+    local has_logo_or_all = false
+    for _, suffix in ipairs(suffixes) do
+        if suffix == "_logo" or suffix == "" then has_logo_or_all = true end
+    end
     for _, id in ipairs(ids) do
         for _, suffix in ipairs(suffixes) do
             for _, ext in ipairs({ "jpg", "jpeg", "png", "tga", "ico" }) do
                 local filepath = fs.join(grid_dir, id .. suffix .. "." .. ext)
                 if fs.exists(filepath) then os.remove(filepath); removed = removed + 1 end
             end
+        end
+        if has_logo_or_all then
+            local json_path = fs.join(grid_dir, id .. ".json")
+            if fs.exists(json_path) then os.remove(json_path); removed = removed + 1 end
         end
     end
     return removed

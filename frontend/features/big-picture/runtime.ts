@@ -16,6 +16,9 @@ function normalizedDomText(value: unknown): string {
 }
 function isBigPictureGameDetailSurface(doc: Document): boolean {
 	if (doc.getElementById('gdl-bp-detail-root') || doc.getElementById('gdl-bp-detail-shell')) return true;
+	if (doc.querySelector('[class*="PlayBar"], [class*="playbar"], [class*="PlayButton"], [class*="playButton"], [class*="AppDetailsHeader"], [class*="appDetailsHeader"]')) {
+		return true;
+	}
 	const detail = doc.querySelector<HTMLElement>('[class*="AppDetails"], [class*="GameDetails"]');
 	if (detail && detail.isConnected && detail.offsetParent !== null && !detail.hasAttribute('hidden') && detail.getAttribute('aria-hidden') !== 'true') {
 		const rect = detail.getBoundingClientRect();
@@ -223,7 +226,7 @@ function isManagedBigPictureShortcutObject(app: any): boolean {
 	return false;
 }
 
-let lastRerenderTime = 0;
+let lastRerenderTime = 0, hasRerenderedLibraryShims = false;
 let rerenderThrottleTimer: ReturnType<typeof setTimeout> | null = null;
 
 function requestBigPictureRerender(): void {
@@ -318,6 +321,7 @@ export function mergeShortcutsIntoBigPictureLibrary(_doc: Document): void {
 
 	const candidates = collectMappedShortcutApps(appStore, mappedShortcuts);
 	const seen = new Set<object>();
+	const isDefaultMode = defaultBigPictureModeEnabled();
 	let changed = false;
 
 	for (const app of candidates) {
@@ -353,17 +357,20 @@ export function mergeShortcutsIntoBigPictureLibrary(_doc: Document): void {
 			bigPictureShortcutState.set(app, state);
 		}
 		installBigPicturePrototypeShim(app);
+		if (isDefaultMode) {
+			if (app.canonicalAppType !== state.canonicalAppType && setBigPictureField(app, 'canonicalAppType', state.canonicalAppType)) changed = true;
+			if (app.controller_support !== state.controllerSupport && setBigPictureField(app, 'controller_support', state.controllerSupport)) changed = true;
+			if (app.xbox_controller_support !== state.xboxControllerSupport && setBigPictureField(app, 'xbox_controller_support', state.xboxControllerSupport)) changed = true;
+			if (app.gamepad_preferred !== state.gamepadPreferred && setBigPictureField(app, 'gamepad_preferred', state.gamepadPreferred)) changed = true;
+		} else {
+			const targetCanonicalType = 1;
+			if (app.canonicalAppType !== targetCanonicalType && setBigPictureField(app, 'canonicalAppType', targetCanonicalType)) changed = true;
+			if (Number(app.controller_support || 0) !== 2 && setBigPictureField(app, 'controller_support', 2)) changed = true;
+			// Big Picture's controller tab is backed by the native Xbox collection,
+			// which filters this field (not the generic controller_support value).
+			if (Number(app.xbox_controller_support || 0) !== 2 && setBigPictureField(app, 'xbox_controller_support', 2)) changed = true;
+			if (app.gamepad_preferred !== true && setBigPictureField(app, 'gamepad_preferred', true)) changed = true;
 
-		const isDefaultMode = defaultBigPictureModeEnabled();
-		const targetCanonicalType = isDefaultMode ? state.canonicalAppType : 1;
-		if (app.canonicalAppType !== targetCanonicalType && setBigPictureField(app, 'canonicalAppType', targetCanonicalType)) changed = true;
-		if (Number(app.controller_support || 0) !== 2 && setBigPictureField(app, 'controller_support', 2)) changed = true;
-		// Big Picture's controller tab is backed by the native Xbox collection,
-		// which filters this field (not the generic controller_support value).
-		if (Number(app.xbox_controller_support || 0) !== 2 && setBigPictureField(app, 'xbox_controller_support', 2)) changed = true;
-		if (app.gamepad_preferred !== true && setBigPictureField(app, 'gamepad_preferred', true)) changed = true;
-
-		if (!isDefaultMode) {
 			const packed = Number(app.steam_hw_compat_category_packed || 0);
 			if ((packed & 3) !== 3 && setBigPictureField(app, 'steam_hw_compat_category_packed', (packed & ~3) | 3)) changed = true;
 			for (const clientData of [app.local_per_client_data, app.most_available_per_client_data, app.selected_per_client_data]) {
@@ -389,26 +396,16 @@ export function mergeShortcutsIntoBigPictureLibrary(_doc: Document): void {
 		}
 	}
 
-	if (changed && !isBigPictureGameDetailSurface(_doc)) {
+	if (changed && !isDefaultMode && !hasRerenderedLibraryShims && !isBigPictureGameDetailSurface(_doc)) {
+		hasRerenderedLibraryShims = true;
 		requestBigPictureRerender();
 	}
 }
 
 export function restoreBigPictureShortcutState(): void {
 	for (const [app, state] of bigPictureShortcutState) {
-		setBigPictureField(app, 'canonicalAppType', state.canonicalAppType);
-		setBigPictureField(app, 'controller_support', state.controllerSupport);
-		setBigPictureField(app, 'xbox_controller_support', state.xboxControllerSupport);
-		setBigPictureField(app, 'gamepad_preferred', state.gamepadPreferred);
-		setBigPictureField(app, 'steam_hw_compat_category_packed', state.compatPacked);
-		const playtimeKeys: BigPicturePlaytimeKey[] = [
-			'minutes_playtime_forever',
-			'minutes_playtime_last_two_weeks',
-			'rt_last_time_played',
-			'm_rtimeLastPlayed',
-			'rtime_last_played',
-			'rt_recent_activity_time',
-		];
+		for (const [k, v] of [['canonicalAppType', state.canonicalAppType], ['controller_support', state.controllerSupport], ['xbox_controller_support', state.xboxControllerSupport], ['gamepad_preferred', state.gamepadPreferred], ['steam_hw_compat_category_packed', state.compatPacked]] as const) setBigPictureField(app, k, v);
+		const playtimeKeys: BigPicturePlaytimeKey[] = ['minutes_playtime_forever', 'minutes_playtime_last_two_weeks', 'rt_last_time_played', 'm_rtimeLastPlayed', 'rtime_last_played', 'rt_recent_activity_time'];
 		for (const key of playtimeKeys) {
 			const descriptors = state.playtimeOwnDescriptors;
 			if (descriptors && Object.prototype.hasOwnProperty.call(descriptors, key)) {
@@ -447,6 +444,7 @@ export function activateBigPicture(doc: Document): void {
 
 export function deactivateBigPicture(): void {
 	bigPictureGeneration += 1;
+	hasRerenderedLibraryShims = false;
 	if (rerenderThrottleTimer) { clearTimeout(rerenderThrottleTimer); rerenderThrottleTimer = null; }
 	cleanupBigPictureBrowserProtection?.();
 	cleanupBigPictureBrowserProtection = null;

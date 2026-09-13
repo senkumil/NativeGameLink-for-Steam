@@ -11,6 +11,9 @@ import { findMappingForShortcut, getAllShortcutRecords, normalizedShortcutAppId 
 import { forgetOriginalShortcutTitle, forgetShortcutSteamAppId, getOriginalShortcutTitle } from './link-history';
 import { runShortcutMutations, shortcutMutationKeys } from './operation-lock';
 import { clearShortcutManifest, clearAllShortcutManifests } from './transaction';
+import { clearShortcutEdition } from './editions';
+import { purgeShortcutStorage, purgeShortcutCachesAndArtwork } from './purge';
+export { purgeShortcutStorage, purgeShortcutCachesAndArtwork };
 
 export interface ShortcutUnlinkOptions {
 	doc?: Document | null;
@@ -65,6 +68,7 @@ async function unlinkShortcutFromSteamUnlocked(options: ShortcutUnlinkOptions): 
 	}
 
 	clearShortcutManifest(shortcutAppId);
+	clearShortcutEdition(shortcutAppId);
 	const supersedePromise = supersedeArtworkApplications(shortcutAppId, !options.clearIcon);
 	let supersedeSettled = false;
 	await Promise.race([
@@ -89,8 +93,8 @@ async function unlinkShortcutFromSteamUnlocked(options: ShortcutUnlinkOptions): 
 			if (typeof apps?.SetShortcutIcon === 'function') {
 				try { void apps.SetShortcutIcon(shortcutAppId, ''); } catch {}
 			}
-			try { localStorage.removeItem(`gdl_shortcut_icon_${shortcutAppId}`); } catch {}
 		}
+		purgeShortcutStorage(shortcutAppId);
 		const originalTitle = getOriginalShortcutTitle(shortcutAppId);
 		if (originalTitle && typeof apps?.SetShortcutName === 'function') {
 			try {
@@ -221,7 +225,7 @@ export async function unlinkAllShortcutsFromSteam(doc?: Document | null, queuesA
 	clearAllShortcutManifests();
 	const apps = (window as any).SteamClient?.Apps;
 	for (const { record } of targets) {
-		try { localStorage.removeItem(`gdl_shortcut_icon_${record.id}`); } catch {}
+		purgeShortcutStorage(record.id);
 		if (typeof apps?.SetShortcutIcon === 'function') {
 			try { void apps.SetShortcutIcon(record.id, ''); } catch {}
 		}

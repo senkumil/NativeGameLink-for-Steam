@@ -1,7 +1,7 @@
 import { loc } from '../../steam/localization';
 import { PLAYBAR_CLASSES } from '../../steam/css';
 import { resolveActiveGameContext } from '../../steam/gamepad/GamepadContext';
-import { detectGameControllerSupport, type GameControllerSupport } from '../library/controller';
+import { detectConnectedController, detectGameControllerSupport, type GameControllerSupport } from '../library/controller';
 import { mountPlaybarControllerIcons } from './PlaybarControllerIcons';
 import { ensureBigPictureDetailStyles } from './details-styles';
 
@@ -463,6 +463,11 @@ export function removeCloudDivider(doc: Document): void {
 }
 
 export function ensurePlaybarControllerStat(doc: Document, supportOverride?: GameControllerSupport): HTMLElement | null {
+	const controllerInfo = detectConnectedController(doc);
+	if (!controllerInfo.connected) {
+		removePlaybarControllerStat(doc);
+		return null;
+	}
 	const context = resolveActiveGameContext(doc);
 	const linkedDetailRoot = doc.getElementById('gdl-bp-detail-root')?.dataset.gdlSteamAppId;
 	const playbar = PLAYBAR_CLASSES();
@@ -562,7 +567,7 @@ export function ensurePlaybarControllerStat(doc: Document, supportOverride?: Gam
 	return stat;
 }
 
-export function removePlaybarControllerStat(doc: Document): void {
+export function removePlaybarControllerStat(doc: Document, restoreNative = false): void {
 	playbarControllerObservers.get(doc)?.disconnect();
 	playbarControllerObservers.delete(doc);
 	playbarControllerObserverTargets.delete(doc);
@@ -574,6 +579,12 @@ export function removePlaybarControllerStat(doc: Document): void {
 	doc.getElementById('gdl-bp-playbar-controller-styles')?.remove();
 	const stat = doc.getElementById('gdl-bp-playbar-controller');
 	stat?.remove();
+	if (restoreNative) {
+		restoreNativePlaybarController(doc);
+	}
+}
+
+export function restoreNativePlaybarController(doc: Document): void {
 	for (const native of Array.from(doc.querySelectorAll<HTMLElement>('[data-gdl-bp-native-controller-hidden="1"]'))) {
 		native.hidden = false;
 		const previous = native.dataset.gdlBpNativeControllerDisplay || '';

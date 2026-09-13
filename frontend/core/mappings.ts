@@ -5,6 +5,7 @@ import { nglEvents } from './events';
 
 export const MAPPINGS_CACHE_STORAGE_KEY = 'gdl_mappings_snapshot_v1';
 const MAPPINGS_CHANGED_EVENT = 'gdl:mappings-changed';
+export const SHORTCUTS_ORPHANED_EVENT = 'gdl:shortcuts-orphaned';
 let mappingsRevision = 0;
 let mappingSnapshotVerified = false;
 
@@ -213,6 +214,11 @@ async function hydrateMappings(): Promise<void> {
 				const purge = parseMappingMutationResponse(purgeRaw);
 				if (purge?.ok && purge.data) backendMappings = cleanMappings(purge.data);
 				backendLog(`Discarded ${backendFiltered.removed.length} mapping(s) that do not belong to the active Steam shortcut registry${localShortcuts?.accountId ? ` (account ${localShortcuts.accountId})` : ''}.`);
+				try {
+					window.dispatchEvent(new CustomEvent(SHORTCUTS_ORPHANED_EVENT, {
+						detail: { removedKeys: backendFiltered.removed, mappings: parsed },
+					}));
+				} catch {}
 			}
 
 			const cachedSnapshot = cleanMappings({ ...mappings });

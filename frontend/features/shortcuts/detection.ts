@@ -2,6 +2,8 @@ import type { ShortcutDetectionCandidate, ShortcutDetectionContext, ShortcutDete
 import { detectGameCandidatesBackend, detectGameCandidatesLocalBackend, getShortcutDetailsBackend, backendLog } from '../../api/backend';
 import { getSteamLanguage } from '../../steam/localization';
 import { RetryingRequestCache } from '../../core/request-cache';
+import { expandCandidatesWithEditions } from './editions';
+export { expandCandidatesWithEditions } from './editions';
 import {
 	cleanShortcutPath,
 	getShortcutAppById,
@@ -228,6 +230,7 @@ export async function detectShortcutCandidatesLocal(context: ShortcutDetectionCo
 		const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
 		if (!parsed || typeof parsed !== 'object') return null;
 		const result = parseDetectionResult(parsed);
+		result.candidates = expandCandidatesWithEditions(result.candidates);
 		result.phase = 'local';
 		result.validation_state = 'partial';
 		return result;
@@ -269,6 +272,7 @@ export async function enrichShortcutCandidatesRemote(
 		const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
 		if (!parsed || typeof parsed !== 'object') return null;
 		const result = parseDetectionResult(parsed);
+		result.candidates = expandCandidatesWithEditions(result.candidates);
 		result.phase = 'remote';
 		return result;
 	} catch (error) {
@@ -293,7 +297,7 @@ export async function detectShortcutCandidates(context: ShortcutDetectionContext
 					if (localResult && localResult.candidates.length > 0) {
 						return {
 							...localResult,
-							candidates: mergeCandidateLists(localResult.candidates, []),
+							candidates: expandCandidatesWithEditions(mergeCandidateLists(localResult.candidates, [])),
 							transient_error: true,
 							validation_state: 'partial',
 						};
@@ -308,7 +312,7 @@ export async function detectShortcutCandidates(context: ShortcutDetectionContext
 
 				const result: ShortcutDetectionResult = {
 					...remoteResult,
-					candidates: mergedCandidates,
+					candidates: expandCandidatesWithEditions(mergedCandidates),
 					validation_state: remoteResult.validation_state || 'confirmed',
 					phase: 'all',
 				};

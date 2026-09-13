@@ -69,6 +69,10 @@ const shortcutRegistry = read('frontend/features/shortcuts/registry.ts');
 const frontendEntry = read('frontend/index.tsx');
 const browserProtectionBootstrap = read('frontend/steam/browser-protection-bootstrap.ts');
 const bpNativeInfoBridge = read('frontend/features/big-picture/native-info-bridge.ts');
+const primaryLinksTs = read('frontend/features/library/primary-links.ts');
+const primaryLinksStylesTs = read('frontend/features/library/styles/primary-links.ts');
+const artworkSync = read('frontend/features/library/artwork-sync.ts');
+const preferencesTs = read('frontend/core/preferences.ts');
 
 let passed = 0;
 function assert(condition, message) {
@@ -458,6 +462,38 @@ assert(runtimeApp.includes('isDesktopSteamWindow(popupWin, popupName)') && runti
 assert(runtimeApp.includes('setTimeout(() => { try { if (!popupWin.closed && popupWin.document?.body) windowCreated(context);') && runtimeApp.includes('isDesktopSteamWindow(popupWin, popupName)'), 'windowCreated uses timeout retries and validates real Steam UI window');
 // 6. app.tsx maintains a recurring adoption interval to guarantee late-mounting Steam popups are adopted
 assert(runtimeApp.includes('const adoptionInterval = setInterval(() => { try { adoptExistingSteamWindows(windowCreated); } catch {} }, 3000)') && runtimeApp.includes('clearInterval(adoptionInterval)'), 'app.tsx maintains recurring adoption interval and cleans up on dismount');
+// Primary Links Zero-Flicker & Playbar Settlement:
+// 1. Primary links bar starts strictly hidden in CSS until data-gdl-links-settled="1"
+assert(primaryLinksStylesTs.includes('#gdl-link-bar:not([data-gdl-links-settled="1"])') && primaryLinksStylesTs.includes('visibility: hidden !important') && primaryLinksStylesTs.includes('pointer-events: none !important'), 'primary links stylesheet strictly hides #gdl-link-bar until data-gdl-links-settled="1"');
+// 2. Bar element initialized with unsettled state and visibility hidden
+assert(primaryLinksTs.includes("linkBar.dataset.gdlLinksSettled = '0'") && primaryLinksTs.includes("linkBar.style.setProperty('visibility', 'hidden', 'important')"), 'createPrimaryLinksBar initializes linkBar with unsettled state and visibility hidden');
+// 3. Invariant check requires physical position at or below the playbar bottom
+assert(primaryLinksTs.includes('isBarProperlyPositionedBelowPlaybar') && primaryLinksTs.includes('barRect.top >= playbarRect.bottom - 4'), 'primary links bar position check enforces that bar is physically at or below the playbar bottom');
+// 4. Reveal helper removes hidden styles and marks bar settled
+assert(primaryLinksTs.includes("targetBar.dataset.gdlLinksSettled = '1'") && primaryLinksTs.includes("targetBar.style.removeProperty('visibility')"), 'revealBar marks bar settled and removes visibility override');
+// 5. DOM insertion ensures bar is placed after playbar if playbar shares parent and follows twoColumnRow
+assert(primaryLinksTs.includes('Node.DOCUMENT_POSITION_FOLLOWING') && primaryLinksTs.includes('parent.insertBefore(bar, playbar.nextElementSibling)'), 'insertPrimaryLinksBar guarantees bar is never placed before playbar in parent container');
+// 6. Stylesheet guaranteed injected at creation and styles include opacity: 0
+assert(primaryLinksTs.includes('ensurePrimaryLinksStyles(doc)') && primaryLinksStylesTs.includes('opacity: 0 !important'), 'ensurePrimaryLinksStyles is called before element creation and CSS includes opacity 0');
+// 7. Primary links bar strictly kept outside AppDetailsHeader and never inserted inside the header
+assert(primaryLinksTs.includes('playbarInsideOrAfterTwoColumn') && primaryLinksTs.includes('twoColumnRow && twoColumnRow.parentElement') && !primaryLinksTs.includes('currentPlaybar.parentElement.appendChild(bar)'), 'primary links guarantees links bar is anchored outside AppDetailsHeader before twoColumnRow');
+// 8. Play button resolution targets in-page position and checks DOM precedence
+assert(primaryLinksTs.includes('findNativePlayButton') && primaryLinksTs.includes('b.getBoundingClientRect().top - a.getBoundingClientRect().top') && primaryLinksTs.includes('targetBar.compareDocumentPosition(currentPlaybar) & Node.DOCUMENT_POSITION_FOLLOWING'), 'findNativePlayButton resolves in-page play button by vertical position and rejects preceding DOM position');
+// 9. Multi-frame settlement stability prevents single-frame transition flashes
+assert(primaryLinksTs.includes('stableFrames >= 2') && primaryLinksTs.includes('effectivePlaybarBottom'), 'primary links requires consecutive stable animation frames and effective playbar bottom before revealing');
+
+// Big Picture Controller Connection-Aware Display & Zero-Flicker Artwork:
+// 1. Default Big Picture mode is ON by default (meaning experimental enhanced BP is OFF)
+assert(preferencesTs.includes('defaultBigPictureMode: true'), 'default preferences keep enhanced Big Picture mode OFF by default');
+// 2. Big Picture mounts playbar controller stat when a controller is connected, and strips it when off
+assert(bpPanelMount.includes('detectConnectedController(doc)') && bpPanelMount.includes('!controllerInfo.connected') && bpPanelMount.includes('removePlaybarControllerStat(doc);') && bpPanelMount.includes('return null;'), 'ensurePlaybarControllerStat cleans up and returns null when no controller is connected');
+assert(bpDetails.includes('defaultModeDetailShortcuts = new WeakMap') && bpDetails.includes('currentDefault.shortcutId === shortcut.id'), 'refreshBigPictureShortcutDetails is idempotent in default mode and avoids triggering mutation loops');
+assert(bpDetails.includes('removeBigPictureDetailsNodes(doc, true);') && bpDetails.includes('ensureControllerSync(doc);'), 'default Big Picture detail page cleans custom panel nodes while keeping controller sync active');
+assert(bpControllerIcons.includes('ControllerType') && bpControllerIcons.includes('Ps4Outline') && bpControllerIcons.includes('Ps5Outline'), 'PlaybarControllerIcons renders all compatible controller icons side-by-side using webpack components');
+// 6. Big Picture runtime never repeatedly requests global force rerenders
+assert(bpRuntime.includes('hasRerenderedLibraryShims'), 'Big Picture runtime guards library redraws to prevent endless loop flickering');
+assert(bpNativeInfoBridge.includes('isNativeInfoSurfaceActive') && bpNativeInfoBridge.includes('isNativeInfoSurfaceActive(doc)'), 'native info bridge avoids full GamepadUI rerenders during normal game browsing');
+assert(artworkSync.includes('artworkAlreadySaved(shortcutId, steamAppId)') && artworkSync.includes('applyOfficialLogoPosition'), 'artwork sync avoids disk rewriting and texture reload loops when artworks are already saved');
 
 console.log(`All ${passed} user-reported bug regression checks passed.`);
 

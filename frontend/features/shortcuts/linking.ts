@@ -14,6 +14,7 @@ import { findMappingForShortcut, getAllShortcutRecords, refreshShortcutRecordsFr
 import { rememberOriginalShortcutTitle, rememberShortcutSteamAppId } from './link-history';
 import { runShortcutMutations, shortcutMutationKeys } from './operation-lock';
 import { LinkOrchestrator } from './link-orchestrator';
+import { fetchPlaytimeStatsBatch, setInstantPlaytimeStats } from '../playtime/service';
 
 let shortcutIdentityMutationDepth = 0;
 
@@ -381,6 +382,23 @@ export async function synchronizeShortcutOfficialIdentity(options: {
 				throw new Error('mapping_identity_update_failed');
 			}
 			rememberShortcutSteamAppId(shortcutAppId, options.steamAppId);
+			// Automatically synchronize with any preserved playtime history for this game
+			void fetchPlaytimeStatsBatch([{
+				shortcutAppId,
+				title: officialName,
+				steamAppId: options.steamAppId,
+			}]).then(statsMap => {
+				const stats = statsMap.get(shortcutAppId);
+				if (stats) {
+					setInstantPlaytimeStats(shortcutAppId, stats);
+					window.dispatchEvent(new CustomEvent('gdl:playtime-changed', {
+						detail: { shortcutAppId, title: officialName, steamAppId: options.steamAppId },
+					}));
+					backendLog(`Synchronized playtime on link for ${shortcutAppId}: ${stats.minutesForever} mins`);
+				}
+			}).catch(err => {
+				backendLog(`Playtime sync warning on link for ${shortcutAppId}: ${err}`);
+			});
 			const shortcutObj = getShortcutAppById(shortcutAppId);
 			const shortcutExe = readShortcutOverviewField(shortcutObj, 'strShortcutExe', 'm_strShortcutExe', 'shortcut_exe', 'strExePath') || options.trackingExecutable || '';
 			const shortcutStartDir = readShortcutOverviewField(shortcutObj, 'strShortcutStartDir', 'm_strShortcutStartDir', 'shortcut_start_dir', 'strStartDir') || options.trackingStartDir || '';

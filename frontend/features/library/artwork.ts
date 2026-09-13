@@ -10,7 +10,7 @@ import {
 	invalidateLibraryAssetDataCaches, type SteamLibraryAssets,
 } from './library-assets';
 import { waitForSteamBridge } from './steam-bridge';
-import { applyLogoPosition, invalidateLogoPosition, clearLogoPositionSaved, isLogoPositionStorageKey, type SteamLogoPinPosition } from './artwork-logo-position';
+import { applyLogoPosition, invalidateLogoPosition, clearLogoPositionSaved, isLogoPositionVerified, isLogoPositionStorageKey, type SteamLogoPinPosition } from './artwork-logo-position';
 import {
 	buildHeroCandidateUrls,
 	classifyHeroVariant,
@@ -23,6 +23,7 @@ import {
 	clearShortcutIconMarker,
 	SHORTCUT_ICON_STORAGE_PREFIX,
 } from './shortcut-icon';
+import { getShortcutEdition } from '../shortcuts/editions';
 export { getCachedLibraryAssets, getModernLibraryAssets, getResolvedLibraryAssets, refreshModernLibraryAssets } from './library-assets';
 export type { SteamLibraryAssets } from './library-assets';
 export { imageUrlToBase64, normalizeCommunityArtworkDataUrl, normalizeCommunityLogoDataUrl } from './artwork-image';
@@ -131,7 +132,14 @@ function curatedArtworkProfileRevision(steamAppId: string): number {
 }
 function readArtworkMarker(shortcutAppId: number, steamAppId: string): ArtworkStorageMarker | null {
 	try {
-		const marker = JSON.parse(localStorage.getItem(ART_STORAGE_PREFIX + shortcutAppId) || 'null');
+		let raw = localStorage.getItem(ART_STORAGE_PREFIX + shortcutAppId);
+		if (!raw) {
+			for (const prefix of PREVIOUS_ART_STORAGE_PREFIXES.slice().reverse()) {
+				const prev = localStorage.getItem(prefix + shortcutAppId);
+				if (prev) { raw = prev; break; }
+			}
+		}
+		const marker = JSON.parse(raw || 'null');
 		if (marker?.steamAppId !== steamAppId || !Array.isArray(marker?.slots)) return null;
 		const profileRevision = curatedArtworkProfileRevision(steamAppId);
 		if (profileRevision > 0 && marker?.profileRevision !== profileRevision) return null;
@@ -198,6 +206,8 @@ export function linkedShortcutPortrait(shortcutAppId: number | string, steamAppI
 	return '';
 }
 export function artworkAlreadySaved(shortcutAppId: number, steamAppId: string): boolean {
+	const sessionKey = `${shortcutAppId}:${steamAppId}`;
+	if (artworkSpoofed.has(sessionKey)) return true;
 	if (nativeArtworkCustomizationActive(shortcutAppId, steamAppId)) return true;
 	const marker = readArtworkMarker(shortcutAppId, steamAppId);
 	if (!marker) return false;
@@ -317,7 +327,7 @@ export async function supersedeArtworkApplications(shortcutAppId: number, preser
 	]);
 }
 export { isLogoPositionVerified } from './artwork-logo-position';
-async function applyOfficialLogoPosition(
+export async function applyOfficialLogoPosition(
 	shortcutAppId: number, steamAppId: string, rawPosition: unknown, force = false,
 	fallbackPin: SteamLogoPinPosition = 'BottomLeft', source = 'none',
 ): Promise<boolean> {
@@ -399,10 +409,12 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, _game
 	if (!force && artworkAlreadySaved(shortcutAppId, steamAppId)) {
 		artworkSpoofed.add(key);
 		backendLog('Artwork already saved for ' + shortcutAppId + ' -> ' + steamAppId);
-		const modern = await getModernLibraryAssets(steamAppId);
-		const officialPin = ((modern?.logo_position as any)?.pinned_position || (modern?.logo_position as any)?.pinnedPosition || 'BottomLeft') as SteamLogoPinPosition;
-		const targetLogoPos = !userCommunity?.logo && modern?.logo_position ? modern.logo_position : null;
-		await applyOfficialLogoPosition(shortcutAppId, steamAppId, targetLogoPos, false, officialPin, modern?.logo_position_source || 'none');
+		if (!isLogoPositionVerified(shortcutAppId, steamAppId)) {
+			const modern = await getModernLibraryAssets(steamAppId);
+			const officialPin = ((modern?.logo_position as any)?.pinned_position || (modern?.logo_position as any)?.pinnedPosition || 'BottomLeft') as SteamLogoPinPosition;
+			const targetLogoPos = !userCommunity?.logo && modern?.logo_position ? modern.logo_position : null;
+			await applyOfficialLogoPosition(shortcutAppId, steamAppId, targetLogoPos, false, officialPin, modern?.logo_position_source || 'none');
+		}
 		return { complete: true, slots: [0, 1, 2, 3], missing: [], communitySlots: [] };
 	}
 
@@ -458,6 +470,9 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, _game
 		const communityAroundProbes = (communityUrl: string, probes: string[]): string[] =>
 			legacyCommunityFirst ? [communityUrl, ...probes] : [...probes, communityUrl];
 
+		const shortcutEdition = getShortcutEdition(shortcutAppId);
+		const editionAssets = shortcutEdition?.assets;
+
 		// Critical library identity first: Hero + Logo + Portrait. The wide capsule
 		// is intentionally resolved only after those three have been written, so a
 		// slow/404 secondary asset cannot delay the visible game-detail surface.
@@ -468,6 +483,7 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, _game
 					modern,
 					communityHero: preferredCommunity?.hero || '',
 					userHero: userCommunity?.hero?.url || '',
+					editionHero: editionAssets?.hero || '',
 					preferCommunityBeforeDirectProbes: legacyCommunityFirst,
 				}),
 				imageType: 1,
@@ -476,6 +492,7 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, _game
 			{
 				urls: [
 					userCommunity?.logo?.url || '',
+					editionAssets?.logo || '',
 					modern?.logo || '',
 					...communityAroundProbes(preferredCommunity?.logo || '', [
 						`${sharedBase}/logo.png`,
@@ -508,6 +525,7 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, _game
 			{
 				urls: [
 					userCommunity?.wide?.url || '',
+					editionAssets?.wide || '',
 					modern?.wide || '',
 					modern?.legacy_header || '',
 					...communityAroundProbes(preferredCommunity?.wide || '', [
@@ -525,6 +543,10 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, _game
 			},
 		];
 		const portraitSource = sources.find(s => s.imageType === 0);
+		if (editionAssets?.portrait && portraitSource) {
+			const insertIdx = userCommunity?.portrait?.url ? 1 : 0;
+			portraitSource.urls.splice(insertIdx, 0, editionAssets.portrait);
+		}
 		if (legacyPortraitOnly && portraitSource) portraitSource.urls = portraitSource.urls.filter(url => !url.includes('library_600x900'));
 		const pendingSources = sources.filter(source => !reusableSlots.has(source.imageType));
 

@@ -7,7 +7,7 @@ import { cacheLocalAchievements, localAchievementDataSignature } from './cache';
 import { localAchievementPercent } from './format';
 import { ensureLocalPlaybarStat } from './playbar';
 import { openLocalAchievementsModal } from './modal';
-import { compareEarnedAchievementsForDisplay, compareLockedAchievementsForDisplay, highlightedAchievementNames, isRareAchievement } from './rarity';
+import { compareEarnedAchievementsForDisplay, compareLockedAchievementsForDisplay, isRareAchievement } from './rarity';
 import { getSteamRareAchievementClasses, renderSteamRareGlowHtml } from './steam-rare';
 import { desktopFeatureFlags } from '../desktop/flags';
 import { mountSingleDesktopNativeAchievement } from '../desktop/achievements/SingleDesktopNativeAchievement';
@@ -37,9 +37,16 @@ export function achievementSidebarColumnsForWidth(width: number): number {
 	);
 }
 
-function localAchievementIcon(item: LocalAchievementItem, locked = false, highlightedNames: ReadonlySet<string> = new Set()): string {
+function localAchievementIcon(
+	item: LocalAchievementItem,
+	locked = false,
+	allowGlowOrHighlighted: boolean | ReadonlySet<string> = false,
+): string {
 	const url = locked ? (item.icon_gray || item.icon) : item.icon;
-	const isRare = !locked && (isRareAchievement(item) || highlightedNames.has(String(item.name)));
+	const allowGlow = typeof allowGlowOrHighlighted === 'boolean'
+		? allowGlowOrHighlighted
+		: allowGlowOrHighlighted.has(String(item.name));
+	const isRare = !locked && allowGlow && (isRareAchievement(item) || item.global_percent == null);
 	const rareClasses = getSteamRareAchievementClasses();
 	const frameClass = `gdl-la-icon-frame ${rareClasses.wrapper}${isRare ? ' is-rare' : ''}`;
 	const glowHtml = isRare ? renderSteamRareGlowHtml(rareClasses) : '';
@@ -58,7 +65,7 @@ function renderAchievementIconRowHtml(
 	availableCells: number,
 	locked: boolean,
 	maxVisibleIcons: number,
-	highlightedNames: ReadonlySet<string>,
+	allowGlow: boolean | ReadonlySet<string> = false,
 ): string {
 	if (!items.length) return '';
 	const capacity = Math.max(1, Math.min(NATIVE_SIDEBAR_ACHIEVEMENT_MAX_CELLS, availableCells));
@@ -69,14 +76,14 @@ function renderAchievementIconRowHtml(
 		: Math.min(items.length, nativeIconLimit, capacity);
 	const thumbnails = items.slice(0, countToShow);
 	const moreCount = Math.max(0, items.length - countToShow);
-	const iconsHtml = thumbnails.map(item => localAchievementIcon(item, locked, highlightedNames)).join('');
+	const iconsHtml = thumbnails.map(item => localAchievementIcon(item, locked, allowGlow)).join('');
 	const moreHtml = moreCount > 0 ? `<div class="gdl-la-more">+${moreCount}</div>` : '';
 	const renderedCells = countToShow + (moreCount > 0 ? 1 : 0);
 	return `<div class="gdl-la-icon-row" data-gdl-achievement-columns="${renderedCells}" style="--gdl-achievement-columns:${renderedCells};">${iconsHtml}${moreHtml}</div>`;
 }
 
-function renderFeaturedAchievementHtml(item: LocalAchievementItem, highlightedNames: ReadonlySet<string>): string {
-	return `<div class="gdl-la-feature">${localAchievementIcon(item, false, highlightedNames)}<div class="gdl-la-feature-copy"><div class="gdl-la-feature-title">${escapeHtml(item.display_name || item.name)}</div><div class="gdl-la-feature-desc">${escapeHtml(item.description || '')}</div></div></div>`;
+function renderFeaturedAchievementHtml(item: LocalAchievementItem, allowGlow = true): string {
+	return `<div class="gdl-la-feature">${localAchievementIcon(item, false, allowGlow)}<div class="gdl-la-feature-copy"><div class="gdl-la-feature-title">${escapeHtml(item.display_name || item.name)}</div><div class="gdl-la-feature-desc">${escapeHtml(item.description || '')}</div></div></div>`;
 }
 
 export function renderLocalAchievementSidebarHtml(data: LocalAchievementData, columns = 6): string {
@@ -86,15 +93,14 @@ export function renderLocalAchievementSidebarHtml(data: LocalAchievementData, co
 	const isAllUnlocked = data.unlocked >= data.total && data.total > 0;
 	const earned = data.achievements.filter(item => item.earned).sort(compareEarnedAchievementsForDisplay);
 	const locked = data.achievements.filter(item => !item.earned).sort(compareLockedAchievementsForDisplay);
-	const highlightedNames = highlightedAchievementNames(earned);
-	const featuredEarned = earned.length <= 2 ? earned : earned.slice(0, 1);
-	const otherEarned = earned.length > 2 ? earned.slice(1) : [];
-	const latestHtml = featuredEarned.map(item => renderFeaturedAchievementHtml(item, highlightedNames)).join('');
+	const featuredEarned = earned.slice(0, 1);
+	const otherEarned = earned.length <= 2 ? earned.slice(1) : earned.slice(1);
+	const latestHtml = featuredEarned.map(item => renderFeaturedAchievementHtml(item, true)).join('');
 	const earnedRow = otherEarned.length
-		? `<div class="gdl-la-earned-row-wrap">${renderAchievementIconRowHtml(otherEarned, columns, false, NATIVE_SIDEBAR_ACHIEVEMENT_MAX_EARNED_ICONS, highlightedNames)}</div>`
+		? `<div class="gdl-la-earned-row-wrap">${renderAchievementIconRowHtml(otherEarned, columns, false, NATIVE_SIDEBAR_ACHIEVEMENT_MAX_EARNED_ICONS, false)}</div>`
 		: '';
 	const lockedBlock = locked.length
-		? `<div class="gdl-la-divider"></div><div class="gdl-la-locked-label">${escapeHtml(gdlText('locked_achievements', 'Locked achievements'))}</div><div class="gdl-la-locked-row-wrap">${renderAchievementIconRowHtml(locked, columns, true, NATIVE_SIDEBAR_ACHIEVEMENT_MAX_LOCKED_ICONS, highlightedNames)}</div>`
+		? `<div class="gdl-la-divider"></div><div class="gdl-la-locked-label">${escapeHtml(gdlText('locked_achievements', 'Locked achievements'))}</div><div class="gdl-la-locked-row-wrap">${renderAchievementIconRowHtml(locked, columns, true, NATIVE_SIDEBAR_ACHIEVEMENT_MAX_LOCKED_ICONS, false)}</div>`
 		: '';
 
 	if (isAllUnlocked) {
@@ -134,8 +140,7 @@ function setupDynamicGrid(summary: HTMLElement, data: LocalAchievementData): () 
 	let currentColumns = NATIVE_SIDEBAR_ACHIEVEMENT_MAX_CELLS;
 	const earned = data.achievements.filter(item => item.earned).sort(compareEarnedAchievementsForDisplay);
 	const locked = data.achievements.filter(item => !item.earned).sort(compareLockedAchievementsForDisplay);
-	const highlightedNames = highlightedAchievementNames(earned);
-	const otherEarned = earned.length > 2 ? earned.slice(1) : [];
+	const otherEarned = earned.slice(1);
 
 	const availableRowWidth = (): number => {
 		const earnedWrap = summary.querySelector<HTMLElement>('.gdl-la-earned-row-wrap');
@@ -166,7 +171,7 @@ function setupDynamicGrid(summary: HTMLElement, data: LocalAchievementData): () 
 				columns,
 				false,
 				NATIVE_SIDEBAR_ACHIEVEMENT_MAX_EARNED_ICONS,
-				highlightedNames,
+				false,
 			);
 		}
 		const lockedWrap = summary.querySelector<HTMLElement>('.gdl-la-locked-row-wrap');
@@ -176,7 +181,7 @@ function setupDynamicGrid(summary: HTMLElement, data: LocalAchievementData): () 
 				columns,
 				true,
 				NATIVE_SIDEBAR_ACHIEVEMENT_MAX_LOCKED_ICONS,
-				highlightedNames,
+				false,
 			);
 		}
 	};

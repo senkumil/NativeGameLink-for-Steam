@@ -1,7 +1,7 @@
 import type { LocalAchievementItem } from '../../domain/types';
 
 export const RARE_ACHIEVEMENT_MAX_PERCENT = 10;
-export const MAX_HIGHLIGHTED_ACHIEVEMENTS = 2;
+export const MAX_HIGHLIGHTED_ACHIEVEMENTS = 1;
 
 function safePercent(item: LocalAchievementItem): number {
 	const value = Number(item.global_percent);

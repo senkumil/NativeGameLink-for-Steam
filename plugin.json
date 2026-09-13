@@ -3,7 +3,7 @@
 	"name": "NativeGameLinkForSteam",
 	"common_name": "NativeGameLink for Steam",
 	"description": "Complemento para Steam que vincula accesos directos externos con ilustraciones, noticias, logros, tiempo de juego, comunidad y Big Picture.",
-	"version": "4.0.0",
+	"version": "4.0.1",
 	"author": "David Miranda (Davidjarod11)",
 	"useBackend": true,
 	"backendType": "lua",

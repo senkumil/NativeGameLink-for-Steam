@@ -29,8 +29,8 @@
 		"check:ui-mode-runtime": "node scripts/check-ui-mode-runtime.mjs",
 		"check:webpack-runtime": "node scripts/check-webpack-runtime.mjs",
 		"check:big-picture-lifecycle": "node scripts/check-big-picture-lifecycle.mjs",
-        "check:news-runtime": "node scripts/check-news-runtime.mjs",
-        "check:link-reliability": "node scripts/check-link-reliability.mjs"
+		"check:news-runtime": "node scripts/check-news-runtime.mjs",
+		"check:link-reliability": "node scripts/check-link-reliability.mjs"
 	},
 	"devDependencies": {
 		"@babel/preset-env": "^7.28.3",
@@ -44,7 +44,7 @@
 	},
 	"type": "module",
 	"name": "nativegamelink-for-steam",
-	"version": "4.0.0",
+	"version": "4.0.1",
 	"description": "Vincula juegos no-Steam con metadatos oficiales de Steam para mostrar datos reales en la biblioteca.",
 	"main": "./frontend/index.tsx",
 	"author": "David Miranda (Davidjarod11)",

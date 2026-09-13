@@ -1,3 +1,9 @@
+## v4.0.1 - Playbar Stability & Parity Polish (2026-09-12)
+
+- **Persistent Playbar Cloud Status**: Cloud synchronization status is permanently anchored and maintained across transitions and loading states for linked shortcuts.
+- **Unified Playbar Typography**: Normalized font sizing, line-height, and weight across Last Played, Playtime, Cloud Status, and Achievements for seamless Steam store parity.
+- **Scroll & Links Bar Reliability**: Fixed scroll retention on game transitions and ensured bounded fallback visibility for primary action links.
+
 ## v4.0.0 - Major Release: Game Editions Catalog, Permanent Playtime Preservation, Deep Storage Purge & Native Route Isolation (2026-09-12)
 
 - **Curated Game Editions Catalog & Dedicated Artwork**:

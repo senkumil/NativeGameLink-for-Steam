@@ -281,58 +281,6 @@ Si la detección es incierta o no aparece:
 
 ---
 
-## 🛠️ Compilación desde el código fuente
-
-El repositorio incluye el bundle de producción en `.millennium/Dist/index.js`. `plugin.source.json` es el manifiesto canónico; cada compilación regenera `plugin.json` desde ese archivo para impedir que la versión o los metadatos generados queden desactualizados.
-
-```bash
-# Instalar exactamente las dependencias bloqueadas en package-lock.json
-npm ci
-
-# Comprobar TypeScript, arquitectura, localización, detección y Lua
-npm run check
-
-# Generar el bundle de producción
-npm run build
-
-# Ejecutar todas las comprobaciones y validar el bundle
-npm run verify
-
-# Preparar las carpetas de release limpio y código fuente
-npm run package:prepare
-```
-
-Los cambios dentro de `backend/` se aplican después de reiniciar Steam.
-
-### GitHub Actions / releases automáticos
-
-El repositorio queda preparado para CI/CD dentro de `.github/workflows/`:
-
-- `ci.yml` se ejecuta en pull requests y pushes a `main`: instala con `npm ci`, ejecuta el build limpio completo mediante `npm run verify`, sube el frontend generado como artifact y, en pushes confiables a `main`, sincroniza automáticamente `plugin.json` y `.millennium/Dist/index.js` en el repositorio si cambiaron.
-- `release.yml` se ejecuta al publicar tags semánticos como `v3.0.2`. Comprueba que el tag coincida con `package.json`, `plugin.source.json` y `plugin.json`, recompila todo desde cero, genera un paquete limpio de runtime y otro con el código fuente, calcula SHA-256 y crea o actualiza automáticamente el GitHub Release.
-
-Para publicar una versión nueva:
-
-```bash
-# Sincronizar package.json, package-lock.json y ambos manifiestos del plugin
-npm run version:set -- 3.0.2
-
-# Primero subir los cambios de código
-git add .
-git commit -m "release: v3.0.2"
-git push origin main
-
-# Cuando CI termine correctamente, etiquetar el commit que quieres publicar
-git tag v3.0.2
-git push origin v3.0.2
-```
-
-El workflow del tag publica `NativeGameLinkForSteam-v3.0.2-CLEAN-INSTALL.zip`, `NativeGameLinkForSteam-v3.0.2-SOURCE.zip` y `SHA256SUMS.txt`. El usuario final no necesita Node ni compilar manualmente el frontend.
-
-Si la sincronización de archivos generados o la publicación del release recibe un error de permisos, activa **Settings → Actions → General → Workflow permissions → Read and write permissions** en el repositorio. Una regla de protección de `main` que prohíba pushes desde GitHub Actions también puede bloquear únicamente la sincronización automática; la verificación y el empaquetado por tag siguen siendo independientes.
-
----
-
 ## ☕ Apoya el proyecto
 
 Si NativeGameLink for Steam ha mejorado tu Biblioteca, puedes apoyar su desarrollo, pruebas, traducción y mantenimiento en Ko-fi. Cada contribución ayuda a que el proyecto siga avanzando.

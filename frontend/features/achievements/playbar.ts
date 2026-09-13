@@ -44,20 +44,11 @@ function achievementMedalSvg(extraClass = '', isComplete = false): string {
 }
 
 function insertAchievementInNativeOrder(stats: HTMLElement, element: HTMLElement): void {
-	const nextStat = stats.querySelector<HTMLElement>(
-		'[data-gdl-playtime="1"], [class*="LastPlayed"]:not([data-gdl-cloud-status]):not([data-gdl-playbar-achievements]), [class*="Playtime"]:not([data-gdl-cloud-status]):not([data-gdl-playbar-achievements]), #gdl-bp-playbar-controller, [data-gdl-playbar-controller="1"]'
-	);
-	if (nextStat && nextStat.parentElement === stats && nextStat !== element) {
-		stats.insertBefore(element, nextStat);
-		return;
+	// In native Steam, achievements is positioned at the end of GameStatsSection
+	// after Cloud Status, Last Played, and Playtime.
+	if (element.parentElement !== stats || stats.lastElementChild !== element) {
+		stats.appendChild(element);
 	}
-	const afterCloud = stats.querySelector<HTMLElement>('[data-gdl-cloud-status="1"], [class*="PlayBarCloudStatusContainer"]');
-	if (afterCloud && afterCloud.parentElement === stats && afterCloud.nextSibling !== element) {
-		if (afterCloud.nextSibling) stats.insertBefore(element, afterCloud.nextSibling);
-		else stats.appendChild(element);
-		return;
-	}
-	if (element.parentElement !== stats) stats.appendChild(element);
 }
 
 function updateAchievementMedal(

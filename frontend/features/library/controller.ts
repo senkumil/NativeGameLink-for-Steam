@@ -5,6 +5,7 @@ import { AppStoreAdapter } from '../../steam/gamepad/stores/AppStoreAdapter';
 import { gdlText, loc, steamLanguageSync } from '../../steam/localization';
 import { ensureControllerStyles } from './styles/controller';
 import { buildNativeSidebarSection, type NativeLibraryLayout } from './layout';
+import { getSteamStore } from '../../steam/modules/SteamModuleResolver';
 import {
 	NATIVE_SVG_XBOX,
 	NATIVE_SVG_XBOX_PARTIAL,
@@ -31,6 +32,9 @@ export function isSteamControllerConnected(ctrl: any): boolean {
 	if (ctrl.bConnected === false || ctrl.connected === false || ctrl.bIsConnected === false || ctrl.m_bConnected === false || ctrl.is_connected === false) {
 		return false;
 	}
+	if (ctrl.bActive === false || ctrl.m_bActive === false) {
+		return false;
+	}
 	if (ctrl.bConnected === true || ctrl.connected === true || ctrl.bIsConnected === true || ctrl.m_bConnected === true || ctrl.is_connected === true) {
 		return true;
 	}
@@ -45,6 +49,8 @@ export function isSteamControllerConnected(ctrl: any): boolean {
 
 function getSteamControllerStore(doc?: Document): any {
 	try {
+		const fromResolver = getSteamStore('ControllerStore') || getSteamStore('controllerStore');
+		if (fromResolver) return fromResolver;
 		const win = doc?.defaultView || (typeof window !== 'undefined' ? window : null);
 		const candidates = [
 			typeof window !== 'undefined' ? window : null,
@@ -175,28 +181,6 @@ export function detectConnectedController(doc?: Document): ConnectedControllerIn
 
 	if (connectedList.length === 0) {
 		g_primaryController = null;
-
-		// Generic Steam fallback indicators
-		try {
-			const store = getSteamControllerStore(doc);
-			if (typeof store?.BHasExternalGamepadConnected === 'function' && store.BHasExternalGamepadConnected()) {
-				return { connected: true, name: 'Controller', type: 'xbox' };
-			}
-			const win = doc?.defaultView || (typeof window !== 'undefined' ? window : null);
-			const steamInput = (win as any)?.SteamClient?.Input || (typeof window !== 'undefined' ? (window as any).SteamClient?.Input : null);
-			if (steamInput) {
-				if (typeof steamInput.GetConnectedGamepadCount === 'function' && steamInput.GetConnectedGamepadCount() > 0) {
-					return { connected: true, name: 'Controller', type: 'xbox' };
-				}
-				if (typeof steamInput.BHasGamepad === 'function' && steamInput.BHasGamepad()) {
-					return { connected: true, name: 'Controller', type: 'xbox' };
-				}
-				if (typeof steamInput.BHasController === 'function' && steamInput.BHasController()) {
-					return { connected: true, name: 'Controller', type: 'xbox' };
-				}
-			}
-		} catch {}
-
 		return { connected: false, name: '', type: 'generic' };
 	}
 
@@ -235,6 +219,9 @@ export function subscribeControllerChanges(doc: Document, onChange: (info: Conne
 
 	const check = () => {
 		const current = detectConnectedController(doc);
+		if (!current.connected) {
+			doc.querySelectorAll('#gdl-controller-section').forEach(s => s.remove());
+		}
 		if (current.connected !== lastState.connected || current.type !== lastState.type || current.name !== lastState.name) {
 			lastState = current;
 			onChange(current);
@@ -452,6 +439,7 @@ export function syncControllerSidebarSection(
 		if (section) {
 			section.remove();
 		}
+		doc.querySelectorAll('#gdl-controller-section').forEach(s => s.remove());
 		return null;
 	}
 

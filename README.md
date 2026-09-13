@@ -264,58 +264,6 @@ If automatic detection is uncertain or unavailable:
 
 ---
 
-## 🛠️ Building from Source
-
-The repository includes the production bundle at `.millennium/Dist/index.js`. `plugin.source.json` is the canonical manifest; every build regenerates `plugin.json` from it so the generated plugin metadata cannot drift from the source configuration.
-
-```bash
-# Install the exact locked dependency set
-npm ci
-
-# Run TypeScript, architecture, localization, detection, and Lua checks
-npm run check
-
-# Build the production bundle
-npm run build
-
-# Run every check and validate the generated bundle
-npm run verify
-
-# Prepare clean-install and source release staging folders
-npm run package:prepare
-```
-
-Backend changes under `backend/` take effect after restarting Steam.
-
-### GitHub Actions / automated releases
-
-The repository is ready for CI/CD under `.github/workflows/`:
-
-- `ci.yml` runs on pull requests and pushes to `main`, installs dependencies with `npm ci`, executes the full `npm run verify` clean build, uploads the generated frontend for inspection, and on trusted `main` pushes synchronizes `plugin.json` plus `.millennium/Dist/index.js` back to the repository when they changed.
-- `release.yml` runs for semantic-version tags such as `v3.0.2`. It checks that the tag matches `package.json`, `plugin.source.json`, and `plugin.json`, rebuilds everything from source, stages a runtime-only clean package and a full source package, creates SHA-256 checksums, and creates or updates the GitHub Release automatically.
-
-To publish a new version:
-
-```bash
-# Synchronize package.json, package-lock.json and both plugin manifests
-npm run version:set -- 3.0.2
-
-# Commit and push the source changes first
-git add .
-git commit -m "release: v3.0.2"
-git push origin main
-
-# After CI passes, tag the commit you want to release
-git tag v3.0.2
-git push origin v3.0.2
-```
-
-The tag workflow publishes `NativeGameLinkForSteam-v3.0.2-CLEAN-INSTALL.zip`, `NativeGameLinkForSteam-v3.0.2-SOURCE.zip`, and `SHA256SUMS.txt`. No local Node installation or manual frontend compilation is required on the end user's PC.
-
-If the generated-file synchronization or release job receives a GitHub permission error, enable **Settings → Actions → General → Workflow permissions → Read and write permissions** for the repository. A branch-protection rule that forbids GitHub Actions from pushing to `main` can also block only the generated-file sync step; verification and tag packaging remain independent.
-
----
-
 ## ☕ Support the Project
 
 If NativeGameLink for Steam has improved your library, you can support its continued development, testing, localization, and maintenance on Ko-fi. Every contribution is appreciated and helps keep the project moving forward.

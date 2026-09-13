@@ -48,9 +48,9 @@ export function ensureNativeGameChrome(doc: Document, model: NativeGameInfo): vo
 	catch (error) { backendLog('Game info button injection error: ' + error); }
 }
 
-export function removeNativeGameChrome(doc: Document, clearModel = false): void {
+export function removeNativeGameChrome(doc: Document, clearModel = false, preserveCloudStatus = false): void {
 	restoreLinkedPlaybarVisibility(doc);
-	removeCloudStatus(doc);
+	if (!preserveCloudStatus) removeCloudStatus(doc);
 	removeNativeInfoButton(doc);
 	removeNativeInfoPanel(doc);
 	doc.querySelectorAll('[data-gdl-playbar-achievements="1"], #gdl-playbar-achievements').forEach(element => element.remove());

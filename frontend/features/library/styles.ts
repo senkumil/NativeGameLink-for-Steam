@@ -24,16 +24,18 @@ export function ensureNativeGameInfoStyles(doc: Document): void {
 			min-width: 0 !important;
 			overflow: visible !important;
 		}
-		[class*="PlayBarLabel"], [class*="playBarLabel"], [class*="GameStat"] [class*="PlayBarLabel"] {
+		[class*="PlayBarLabel"], [class*="playBarLabel"], [class*="LastPlayedLabel"], [class*="lastPlayedLabel"], [class*="GameStat"] [class*="PlayBarLabel"] {
 			white-space: nowrap !important;
 			overflow: visible !important;
 			text-overflow: clip !important;
 			font-size: 11px !important;
 			letter-spacing: 0.3px !important;
 		}
-		[class*="PlayBarDetailLabel"], [class*="playBarDetailLabel"] {
+		[class*="PlayBarDetailLabel"], [class*="playBarDetailLabel"], [class*="LastPlayedInfo"], [class*="lastPlayedInfo"], [class*="GameStat"] [class*="PlayBarDetailLabel"] {
 			white-space: nowrap !important;
 			overflow: visible !important;
+			font-size: 13px !important;
+			font-weight: 600 !important;
 		}
 	`);
 	ensureInfoPanelStyles(doc);

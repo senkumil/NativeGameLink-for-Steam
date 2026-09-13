@@ -52,7 +52,7 @@ const controllerWatchers = new WeakMap<Document, () => void>();
 function cleanupPreviousRender(doc: Document, preserveLinkBar = false): void {
 	controllerWatchers.get(doc)?.();
 	controllerWatchers.delete(doc);
-	removeNativeGameChrome(doc);
+	removeNativeGameChrome(doc, false, true);
 	disposeTradingCardPreview(doc);
 	const community = doc.getElementById('gdl-community-content');
 	if (community instanceof HTMLElement) disposeCommunitySection(community);

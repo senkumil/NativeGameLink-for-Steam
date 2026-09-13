@@ -91,11 +91,11 @@ function renderLinkedPage(
 }
 
 /** Remove GDL desktop-Library UI and restore Steam's original shortcut notice. */
-export function cleanupInjection(doc: Document, preserveLinkBar = false): void {
+export function cleanupInjection(doc: Document, preserveLinkBar = false, preserveCloudStatus = false): void {
 	cancelLinkedShortcutLoading(doc);
 	linkedRenderRetryState.delete(doc); routeMismatchRetryState.delete(doc);
 	navigationController.cancelCleanup(doc); finishLibraryRouteExit(doc);
-	removeNativeGameChrome(doc, true); removePlaytimeFallbackStats(doc);
+	removeNativeGameChrome(doc, true, preserveCloudStatus); removePlaytimeFallbackStats(doc);
 	disposeStatusPostBox(doc); disposeActivityFeedInteractions(doc);
 	disposeTradingCardPreview(doc); disposeResponsiveTradingCardGrids(doc);
 	const community = doc.getElementById('gdl-community-content');
@@ -379,7 +379,7 @@ export async function tryInjectLibraryData(doc: Document): Promise<void> {
 
 	if (existing) {
 		clearCurrentInjection(doc);
-		cleanupInjection(doc);
+		cleanupInjection(doc, false, Boolean(steamAppId));
 	}
 	if (currentInjectedDocument && currentInjectedDocument !== doc) {
 		const previousDoc = currentInjectedDocument;
@@ -387,7 +387,7 @@ export async function tryInjectLibraryData(doc: Document): Promise<void> {
 		if (isUsableLibraryDocument(previousDoc)) cleanupInjection(previousDoc);
 	} else if (currentInjectedDocument === doc && ((currentInjectedAppId && currentInjectedAppId !== steamAppId) || shortcutIdentityChanged)) {
 		clearCurrentInjection(doc);
-		cleanupInjection(doc);
+		cleanupInjection(doc, false, Boolean(steamAppId));
 	}
 	const generation = setCurrentInjection(doc, steamAppId, resolvedShortcutAppId);
 	removeManualLinkNoticeButton(doc);

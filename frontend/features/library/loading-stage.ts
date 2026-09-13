@@ -1,4 +1,6 @@
 import { restoreNativeLibraryStyles } from './layout';
+import { ensureCloudStatus } from './cloud-status';
+import { ensureNativeGameInfoStyles } from './styles';
 
 // Kept as stable cleanup identifiers for pages injected by earlier plugin
 // versions. New linked-game navigations deliberately do not render a loading
@@ -18,7 +20,8 @@ export function stageLinkedShortcutLoading(doc: Document, _notice: Element, gene
 	loadingGenerations.set(doc, generation);
 	doc.getElementById(LINKED_LOADING_MAIN_ID)?.remove();
 	doc.getElementById(LINKED_LOADING_SIDEBAR_ID)?.remove();
-	restoreNativeLibraryStyles(doc);
+	ensureNativeGameInfoStyles(doc);
+	ensureCloudStatus(doc);
 }
 
 /** Cancel the no-op stage and restore any old native visibility snapshot. */

@@ -73,6 +73,11 @@ copy_def.cjs
 export_schema.cjs
 _*.py
 _*.ps1
+*_FIX*.md
+*_REVIEW*.md
+REPAIR_NOTES*.md
+*_BENCHMARK*.json
+RESOURCE_*.md
 capturas*/
 *DESCONTINUADO*/
 *descontinuado*/

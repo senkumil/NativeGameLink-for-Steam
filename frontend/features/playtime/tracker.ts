@@ -14,6 +14,7 @@ import {
 	NATIVE_UI_BLUEPRINT_KEYS,
 } from '../../steam/native-dom';
 import { preserveLinkedPlaybarVisibility } from '../../steam/playbar-visibility';
+import { ensureCloudStatus } from '../library/cloud-status';
 import { getMappedShortcuts, getShortcutAppById } from '../../steam/shortcuts';
 import { clearPlaytimeStatsCache, fetchPlaytimeStats, getInstantPlaytimeStats, type PlaytimeStats } from './service';
 import { formatLastPlayedDate, formatPlaytimeMinutes } from './format';
@@ -177,6 +178,7 @@ function applyPlaytimeStatsToDom(
 				detail.textContent = playtimeFormatted;
 				hasNativePlaytime = true;
 			}
+			applyNativePlaybarTypography(nativePlaytime, NATIVE_UI_BLUEPRINT_KEYS.playbarPlaytime);
 		}
 	}
 
@@ -188,6 +190,7 @@ function applyPlaytimeStatsToDom(
 				detail.textContent = lastPlayedFormatted;
 				hasNativeLastPlayed = true;
 			}
+			applyNativePlaybarTypography(nativeLastPlayed, NATIVE_UI_BLUEPRINT_KEYS.playbarLastPlayed);
 		}
 	}
 
@@ -265,9 +268,24 @@ export async function injectPlaytimeFallbackStats(
 		return;
 	}
 
+	if (steamAppId) {
+		ensureCloudStatus(doc);
+	}
+
 	const instant = getInstantPlaytimeStats(shortcutAppId);
 	if (instant) {
 		applyPlaytimeStatsToDom(doc, shortcutAppId, instant, isCurrent);
+	} else {
+		const app = getShortcutAppById(shortcutAppId);
+		const nativeMinutes = Number(app?.minutes_playtime_forever ?? app?.m_nPlaytimeForever ?? 0);
+		const nativeLastPlayed = Number(app?.rt_last_time_played ?? 0);
+		if (nativeMinutes > 0 || nativeLastPlayed > 0) {
+			applyPlaytimeStatsToDom(doc, shortcutAppId, {
+				minutesForever: nativeMinutes,
+				minutesLastTwoWeeks: 0,
+				lastPlayedAt: nativeLastPlayed,
+			}, isCurrent);
+		}
 	}
 
 	const statsData = await fetchPlaytimeStats(shortcutAppId, title, steamAppId);

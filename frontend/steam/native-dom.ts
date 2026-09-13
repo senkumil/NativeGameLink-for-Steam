@@ -88,10 +88,18 @@ export function applyNativePlaybarTypography(
 		|| nativeUiBlueprintTypography.get(blueprintKey(NATIVE_UI_BLUEPRINT_KEYS.playbarPlaytime))
 		|| nativeUiBlueprintTypography.get(blueprintKey(NATIVE_UI_BLUEPRINT_KEYS.playbarLastPlayed));
 	if (!profile) return;
-	for (const label of elementsWithCssModuleClass(root, ps.PlayBarLabel)) {
+	const labels = new Set([
+		...elementsWithCssModuleClass(root, ps.PlayBarLabel),
+		...elementsWithCssModuleClass(root, ps.LastPlayedLabel),
+	]);
+	for (const label of labels) {
 		applyTypographyValues(label, profile.label);
 	}
-	for (const detail of elementsWithCssModuleClass(root, ps.PlayBarDetailLabel)) {
+	const details = new Set([
+		...elementsWithCssModuleClass(root, ps.PlayBarDetailLabel),
+		...elementsWithCssModuleClass(root, ps.LastPlayedInfo),
+	]);
+	for (const detail of details) {
 		applyTypographyValues(detail, profile.detail);
 	}
 }

@@ -12,17 +12,6 @@ Once linked, an external game no longer feels like an empty shortcut: it receive
 
 ---
 
-## ✨ Highlights & What's New in v3.0.0
-
-- **Delisted & Removed Steam Games Support:** Full support for delisted, retired, or unlisted Steam games (e.g. *Mortal Kombat Komplete Edition*, *Pro Evolution Soccer 2013*) with resilient metadata and official artwork resolution.
-- **Direct Artwork Management in Game Properties:** Choose, preview, and apply custom hero backgrounds, logos, capsules, and icons directly from the *Customization* tab in Properties.
-- **Steam Achievement Management Tools:** Inspect, unlock, lock, or modify achievement progress for your official Steam games directly from your library interface.
-- **Steam Trading Card Farming & Simulation:** Interactive trading card showcase with 3D animated cards, foil holographic reflection, badge level progression, and remaining card tracking.
-- **Simplified Non-Steam Achievement Simulation:** Easily configure achievement simulation per-game (100% instant completion, progressive simulation, or manual tracking) with local file compatibility.
-- **Big Picture Mode Integration:** Renders official hero backgrounds, logos, gamepad navigation, and synced playtime natively in Big Picture mode.
-
----
-
 ## 🎮 A Native-Style Steam Library Experience
 
 NativeGameLink reconstructs the useful surfaces normally missing from a non-Steam shortcut:

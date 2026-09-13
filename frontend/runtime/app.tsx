@@ -18,6 +18,7 @@ import { configureShortcutRuntimeHost, disposeCustomizationArtwork, mutationMayC
 import { GDL_INJECTED } from '../features/library/constants';
 import { activateBigPicture, deactivateBigPicture, getBigPictureDocument, isBigPictureActive, refreshBigPicture } from '../features/big-picture/runtime';
 import { captureNativeUiBlueprints, clearNativeUiBlueprints } from '../steam/native-dom';
+import { syncEarlyLinkedCloudStatus } from '../features/library/cloud-status';
 import { resetResolvedCssClassModules } from '../steam/css';
 import {
 	clearLocalAchievementCache, configureAchievementRuntimeHost, disposeAchievementRuntime,
@@ -169,6 +170,7 @@ function windowCreated(context: any): void {
 	if (isMainWindow) {
 		mainWindowDoc = popupDoc;
 		syncDesktopLibraryHomePlaytimeDom(popupDoc);
+		syncEarlyLinkedCloudStatus(popupDoc);
 		void processPendingLinkJobs(mainWindowDoc);
 		installLocalAchievementUI(popupDoc);
 		scheduleCopiedFeedbackCleanup(popupDoc);
@@ -268,7 +270,10 @@ function windowCreated(context: any): void {
 		if (currentUrl && currentUrl !== lastNavUrl) {
 			lastNavUrl = currentUrl;
 			if (mutationTimer) { clearTimeout(mutationTimer); mutationTimer = null; }
-			if (isMainWindow) handleLibraryNavigation(popupDoc);
+			if (isMainWindow) {
+				handleLibraryNavigation(popupDoc);
+				syncEarlyLinkedCloudStatus(popupDoc);
+			}
 			runInjection('navigation');
 			return;
 		}
@@ -278,14 +283,13 @@ function windowCreated(context: any): void {
 			runInjection('mutation');
 			return;
 		}
-		// Library Home cards can mount after the document callback. Patch their
-		// text from the persistent snapshot in this same mutation turn; this does
-		// no I/O and is bypassed above for native game-detail routes.
+		// Synchronously mount Cloud Status at 0ms as soon as Steam renders
+		// GameStatsSection with LastPlayed/Playtime for a linked shortcut,
+		// eliminating late pop-in and layout shift on the first frame.
 		if (isMainWindow) {
+			syncEarlyLinkedCloudStatus(popupDoc);
 			const playtimeRoots = records.flatMap(record => [record.target, ...Array.from(record.addedNodes)]);
 			if (mutationMayContainDesktopPlaytime(playtimeRoots)) syncDesktopLibraryHomePlaytimeDom(popupDoc);
-		}
-		if (isMainWindow) {
 			const roots = records.flatMap(record => Array.from(record.addedNodes));
 			if (roots.length > 0) scheduleCopiedFeedbackCleanup(popupDoc, roots);
 		}
@@ -299,18 +303,10 @@ function windowCreated(context: any): void {
 			runInjection('mutation');
 			return;
 		}
-		// Steam emits a burst of separate mutations while rebuilding its first
-		// library route. Coalesce that burst into one pass instead of mounting,
-		// cleaning and mounting our chrome several times in the first second.
 		if (mutationTimer) return;
 		const bigPictureSurface = isBigPictureSurface();
-		const mutationCooldown = bigPictureSurface ? 500 : 350;
-		const delay = Math.max(bigPictureSurface ? 250 : 140,
-			mutationCooldown - (Date.now() - lastMutationInjectionAt));
-		mutationTimer = setTimeout(() => {
-			mutationTimer = null;
-			runInjection('mutation');
-		}, delay);
+		const delay = Math.max(bigPictureSurface ? 250 : 140, (bigPictureSurface ? 500 : 350) - (Date.now() - lastMutationInjectionAt));
+		mutationTimer = setTimeout(() => { mutationTimer = null; runInjection('mutation'); }, delay);
 	});
 	lifecycle.observe(observer, popupDoc.body, { childList: true, subtree: true });
 	lifecycle.listen(popupDoc, 'visibilitychange', () => {
@@ -319,14 +315,11 @@ function windowCreated(context: any): void {
 			const currentUrl = libraryRouteIdentity(popupDoc);
 			if (currentUrl && currentUrl !== lastNavUrl) {
 				lastNavUrl = currentUrl;
-				if (isMainWindow) handleLibraryNavigation(popupDoc);
+				if (isMainWindow) { handleLibraryNavigation(popupDoc); syncEarlyLinkedCloudStatus(popupDoc); }
 			}
 			runInjection('visibility');
 		} catch {}
 	});
-	// The mutation observer is the primary route signal. This slower fallback
-	// only covers Steam URL changes that arrive before their corresponding DOM
-	// mutation, avoiding a constant high-frequency CEF poll while idle.
 	lifecycle.interval(() => {
 		try {
 			if (popupDoc.hidden) return;
@@ -334,7 +327,7 @@ function windowCreated(context: any): void {
 			if (!currentUrl || currentUrl === lastNavUrl) return;
 			lastNavUrl = currentUrl;
 			if (mutationTimer) { clearTimeout(mutationTimer); mutationTimer = null; }
-			if (isMainWindow) handleLibraryNavigation(popupDoc);
+			if (isMainWindow) { handleLibraryNavigation(popupDoc); syncEarlyLinkedCloudStatus(popupDoc); }
 			runInjection('navigation');
 		} catch {}
 	}, 2500);

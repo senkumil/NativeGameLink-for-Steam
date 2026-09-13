@@ -1,4 +1,5 @@
 import { loc } from '../../steam/localization';
+import { restoreLinkedPlaybarVisibility } from '../../steam/playbar-visibility';
 
 export interface NativeLibraryLayout {
 	anchorRegion: HTMLElement | null;
@@ -60,6 +61,11 @@ function applyNativeSurfaceTokens(target: HTMLElement, samples: Array<HTMLElemen
 
 /** Restore every native inline style GDL changed in this document. */
 export function restoreNativeLibraryStyles(doc: Document): void {
+	restoreLinkedPlaybarVisibility(doc);
+	try {
+		doc.getElementById('gdl-library-style-sentinel')?.remove();
+		doc.getElementById('gdl-achievement-playbar-style')?.remove();
+	} catch {}
 	const elements = managedNativeElements.get(doc);
 	if (elements) {
 		for (const element of elements) {

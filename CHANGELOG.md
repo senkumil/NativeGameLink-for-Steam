@@ -1,3 +1,13 @@
+## v4.0.2 - Strict Native Playbar Isolation & Typography Bugfix (2026-09-13)
+
+- **Strict Native Playbar Isolation**:
+  - Removed un-scoped global CSS rules targeting `GameStatsSection`, `GameStat`, `PlayBarLabel`, and `PlayBarDetailLabel` that previously leaked into and altered native Steam games.
+  - Eliminated inline `!important` typography overrides on Steam's natively rendered DOM elements, preserving 100% of Steam's original fonts, font sizes, line heights, and layout gaps for legitimate games.
+- **Zero-Delay Fixed Cloud Status (0ms Sync & Zero Flicker)**:
+  - Synchronously mounts the fixed Cloud Status control at 0ms within the exact mutation cycle when Steam's React creates `GameStatsSection` for linked shortcuts, rendering alongside Last Played and Playtime on the very first frame.
+  - Resolved structural selector fallbacks to instantly anchor into the playbar container even before dynamic CSS module classes finish resolving.
+  - Preserved Cloud Status across consecutive linked shortcut routes to prevent visual layout shifts, tearing, and late pop-in gaps.
+
 ## v4.0.1 - Playbar Stability & Parity Polish (2026-09-12)
 
 - **Persistent Playbar Cloud Status**: Cloud synchronization status is permanently anchored and maintained across transitions and loading states for linked shortcuts.

@@ -24,7 +24,7 @@ import { injectPlaytimeFallbackStats, removePlaytimeFallbackStats } from '../pla
 import { findNonSteamNotice } from './notice';
 import { restoreNativeLibraryStyles } from './layout';
 import { LibraryNavigationController } from './navigation-controller';
-import { isPublicSteamLibraryRoute, reconcileLibraryNavigation } from './native-route';
+import { isPublicSteamLibraryRoute, reconcileLibraryNavigation, routedSteamAppId } from './native-route';
 import { ensureManualLinkNoticeButton, removeManualLinkNoticeButton } from './manual-link-button';
 import { beginLibraryRouteExit, finishLibraryRouteExit, hasOwnedLibraryChrome, isLibraryRouteExitPending, removeOwnedLibraryChrome } from './route-exit';
 import { cancelLinkedShortcutLoading, completeLinkedShortcutLoading, LINKED_LOADING_SIDEBAR_ID, stageLinkedShortcutLoading } from './loading-stage';
@@ -114,7 +114,9 @@ function cleanupOwnedLibraryChromeAfterRouteExit(doc: Document): void {
 	disposeTradingCardPreview(doc); disposeResponsiveTradingCardGrids(doc);
 	const community = doc.getElementById('gdl-community-content');
 	if (community instanceof HTMLElement) disposeCommunitySection(community);
-	removeNativeGameChrome(doc, true); removeOwnedLibraryChrome(doc);
+	const currentId = routedSteamAppId(doc);
+	const isCurrentLinked = Boolean(currentId && currentId >= 2147483648 && !isShortcutDismissed(currentId) && findMappingForShortcut(String(currentId), ''));
+	removeNativeGameChrome(doc, true, isCurrentLinked); removeOwnedLibraryChrome(doc);
 }
 
 function retireLinkedRouteFromNativePage(doc: Document, generation: number): void {
@@ -133,27 +135,23 @@ export function handleLibraryNavigation(doc: Document): void {
 	const hadCurrentInjection = currentInjectedDocument === doc, hadOwnedChrome = hasOwnedLibraryChrome(doc);
 	doc.getElementById('gdl-game-info-panel')?.remove();
 	if (isPublicSteamLibraryRoute(doc)) {
-		doc.getElementById('gdl-link-bar')?.remove(); doc.getElementById('gdl-game-info-panel')?.remove(); removeNativeGameChrome(doc, true);
+		doc.getElementById('gdl-link-bar')?.remove(); doc.getElementById('gdl-game-info-panel')?.remove(); removeNativeGameChrome(doc, true, false);
 		if (hadCurrentInjection) clearCurrentInjection(doc);
 		if (hadCurrentInjection || hadOwnedChrome) {
 			restoreNativeLibraryStyles(doc);
-			scheduleNavigationCleanup(doc, generation);
+			scheduleNavigationCleanup(doc, generation, false);
 		}
 		return;
 	}
-	// Reconcile against the previous session before clearing it. This preserves
-	// an already-rendered game across harmless query/hash mutations.
+	const nextAppId = routedSteamAppId(doc);
+	const isNextLinked = Boolean(nextAppId && nextAppId >= 2147483648 && !isShortcutDismissed(nextAppId) && findMappingForShortcut(String(nextAppId), ''));
 	reconcileLibraryNavigation(doc, {
-		currentInjectedAppId,
-		currentInjectedShortcutAppId,
-		clearCurrentInjection,
-		scheduleCleanup: () => scheduleNavigationCleanup(doc, generation),
+		currentInjectedAppId, currentInjectedShortcutAppId, clearCurrentInjection,
+		scheduleCleanup: () => scheduleNavigationCleanup(doc, generation, isNextLinked),
 	});
 	const sameLinkedSession = hadCurrentInjection && currentInjectedDocument === doc;
 	if (isUsableLibraryDocument(doc) && (hadCurrentInjection || hadOwnedChrome) && !sameLinkedSession) {
-		clearCurrentInjection(doc);
-		restoreNativeLibraryStyles(doc);
-		scheduleNavigationCleanup(doc, generation);
+		clearCurrentInjection(doc); restoreNativeLibraryStyles(doc); scheduleNavigationCleanup(doc, generation, isNextLinked);
 	}
 }
 function scheduleNavigationRetry(doc: Document, generation: number, delayMs: number): void {
@@ -176,13 +174,13 @@ function scheduleLinkedRenderRetry(doc: Document, generation: number): void {
 	scheduleNavigationRetry(doc, generation, delayMs);
 }
 
-function scheduleNavigationCleanup(doc: Document, generation = navigationController.current(doc)): void {
+function scheduleNavigationCleanup(doc: Document, generation = navigationController.current(doc), preserveCloudStatus = false): void {
 	if (!hasOwnedLibraryChrome(doc) && !isLibraryRouteExitPending(doc)) return;
 	if (isLibraryRouteExitPending(doc, generation)) return;
 	beginLibraryRouteExit(doc, generation);
 	// Stop playbar/info observers immediately; otherwise their closure can
 	// recreate chrome from the previous game during Steam's route commit.
-	removeNativeGameChrome(doc, true);
+	removeNativeGameChrome(doc, true, preserveCloudStatus);
 	navigationController.scheduleCleanup(doc, generation, 350, () => {
 		if (!isCurrentNavigation(doc, generation) || !isLibraryRouteExitPending(doc, generation)) return;
 		cleanupOwnedLibraryChromeAfterRouteExit(doc);

@@ -50,6 +50,10 @@ export function ensureNativeGameChrome(doc: Document, model: NativeGameInfo): vo
 
 export function removeNativeGameChrome(doc: Document, clearModel = false, preserveCloudStatus = false): void {
 	restoreLinkedPlaybarVisibility(doc);
+	try {
+		doc.getElementById('gdl-library-style-sentinel')?.remove();
+		doc.getElementById('gdl-achievement-playbar-style')?.remove();
+	} catch {}
 	if (!preserveCloudStatus) removeCloudStatus(doc);
 	removeNativeInfoButton(doc);
 	removeNativeInfoPanel(doc);

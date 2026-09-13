@@ -9,6 +9,8 @@ import {
 	NATIVE_UI_BLUEPRINT_KEYS,
 } from '../../steam/native-dom';
 import { preserveLinkedPlaybarVisibility } from '../../steam/playbar-visibility';
+import { isPublicSteamLibraryRoute, routedSteamAppId } from './native-route';
+import { findMappingForShortcut, isShortcutDismissed } from '../shortcuts/runtime';
 import { ensureNativeGameInfoStyles } from './styles';
 
 function cloudSynchronizedSvg(extraClass = ''): string {
@@ -18,13 +20,30 @@ function cloudSynchronizedSvg(extraClass = ''): string {
 export function ensureCloudStatus(doc: Document): void {
 	ensureNativeGameInfoStyles(doc);
 	const classes = PLAYBAR_CLASSES();
-	const statsSections = elementsWithCssModuleClass(doc, classes.GameStatsSection).filter(section => section.isConnected);
+	let statsSections = elementsWithCssModuleClass(doc, classes.GameStatsSection).filter(section => section.isConnected);
 	// Steam uses more than one play-bar structure. If its CSS module class is
-	// absent, the achievement slot is still a reliable anchor for the same row.
-	// This keeps the simulated cloud state available to every linked shortcut.
+	// absent or not yet hydrated, locate the row via existing stats or achievement anchors.
+	// This keeps the simulated cloud state available to every linked shortcut from 0ms.
 	if (statsSections.length === 0) {
-		const achievement = doc.querySelector<HTMLElement>('[data-gdl-playbar-achievements="1"], #gdl-playbar-achievements');
-		if (achievement?.parentElement?.isConnected) statsSections.push(achievement.parentElement);
+		const statItem = doc.querySelector<HTMLElement>(
+			'[class*="LastPlayed"], [class*="lastPlayed"], [class*="Playtime"], [class*="playtime"], [data-gdl-playtime="1"], .SVGIcon_PlayTime'
+		);
+		if (statItem) {
+			const candidate = statItem.closest<HTMLElement>(
+				'[class*="GameStatsSection"], [class*="gameStatsSection"], [class*="PlayBarStats"], [class*="playBarStats"]'
+			) || (statItem.parentElement && statItem.parentElement !== doc.body ? statItem.parentElement : null);
+			if (candidate) statsSections.push(candidate);
+		}
+		if (statsSections.length === 0) {
+			const fallback = doc.querySelector<HTMLElement>(
+				'[class*="GameStatsSection"], [class*="gameStatsSection"], [class*="PlayBarStats"], [class*="playBarStats"]'
+			);
+			if (fallback) statsSections.push(fallback);
+		}
+		if (statsSections.length === 0) {
+			const achievement = doc.querySelector<HTMLElement>('[data-gdl-playbar-achievements="1"], #gdl-playbar-achievements');
+			if (achievement?.parentElement?.isConnected) statsSections.push(achievement.parentElement);
+		}
 	}
 	for (const stats of statsSections) {
 		const cloudWrappers = elementsWithCssModuleClass(stats, classes.PlayBarCloudStatusContainer)
@@ -39,6 +58,8 @@ export function ensureCloudStatus(doc: Document): void {
 		}
 		let reference = elementsWithCssModuleClass(stats, classes.LastPlayed).find(element => !element.closest('[data-gdl-cloud-status]'))
 			|| elementsWithCssModuleClass(stats, classes.Playtime).find(element => !element.closest('[data-gdl-cloud-status]'))
+			|| stats.querySelector<HTMLElement>('[class*="LastPlayed"]:not([data-gdl-cloud-status]), [class*="lastPlayed"]:not([data-gdl-cloud-status])')
+			|| stats.querySelector<HTMLElement>('[class*="Playtime"]:not([data-gdl-cloud-status]), [class*="playtime"]:not([data-gdl-cloud-status])')
 			|| null;
 		while (reference && reference.parentElement !== stats) reference = reference.parentElement;
 
@@ -55,7 +76,10 @@ export function ensureCloudStatus(doc: Document): void {
 				}
 			}
 			applyNativePlaybarTypography(wrapper, NATIVE_UI_BLUEPRINT_KEYS.cloudStatus);
-			stats.insertBefore(wrapper, reference || stats.firstChild);
+			const targetReference = reference || stats.firstChild;
+			if (wrapper.nextSibling !== targetReference && wrapper !== targetReference) {
+				stats.insertBefore(wrapper, targetReference);
+			}
 			continue;
 		}
 
@@ -78,9 +102,20 @@ export function ensureCloudStatus(doc: Document): void {
 		const cloudGraphic = wrapper.querySelector<HTMLElement>('.gdl-cloud-icon, svg, img');
 		if (cloudGraphic?.parentElement) cloudGraphic.parentElement.dataset.gdlUiIconHost = 'cloud';
 		applyNativePlaybarTypography(wrapper, NATIVE_UI_BLUEPRINT_KEYS.cloudStatus);
-		stats.insertBefore(wrapper, reference || stats.firstChild);
+		const targetReference = reference || stats.firstChild;
+		if (wrapper.nextSibling !== targetReference && wrapper !== targetReference) {
+			stats.insertBefore(wrapper, targetReference);
+		}
 	}
 	preserveLinkedPlaybarVisibility(doc);
+}
+
+export function syncEarlyLinkedCloudStatus(doc: Document): void {
+	if (isPublicSteamLibraryRoute(doc)) return;
+	const routeId = routedSteamAppId(doc);
+	if (!routeId || routeId < 2147483648 || isShortcutDismissed(routeId)) return;
+	if (!findMappingForShortcut(String(routeId), '')) return;
+	ensureCloudStatus(doc);
 }
 
 export function removeCloudStatus(doc: Document): void {

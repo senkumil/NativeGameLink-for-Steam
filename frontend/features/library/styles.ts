@@ -15,28 +15,6 @@ export function ensureNativeGameInfoStyles(doc: Document): void {
 	if (doc.getElementById('gdl-library-style-sentinel')) return;
 	injectLibraryStyle(doc, 'gdl-library-style-sentinel', `
 		[data-gdl-playbar-achievements="1"] .gdl-lp-fill{background:#2d73ff!important;}
-		[class*="GameStatsSection"], [class*="gameStatsSection"] {
-			min-width: 0 !important;
-			flex-shrink: 1 !important;
-			gap: 8px !important;
-		}
-		[class*="GameStat"], [class*="gameStat"] {
-			min-width: 0 !important;
-			overflow: visible !important;
-		}
-		[class*="PlayBarLabel"], [class*="playBarLabel"], [class*="LastPlayedLabel"], [class*="lastPlayedLabel"], [class*="GameStat"] [class*="PlayBarLabel"] {
-			white-space: nowrap !important;
-			overflow: visible !important;
-			text-overflow: clip !important;
-			font-size: 11px !important;
-			letter-spacing: 0.3px !important;
-		}
-		[class*="PlayBarDetailLabel"], [class*="playBarDetailLabel"], [class*="LastPlayedInfo"], [class*="lastPlayedInfo"], [class*="GameStat"] [class*="PlayBarDetailLabel"] {
-			white-space: nowrap !important;
-			overflow: visible !important;
-			font-size: 13px !important;
-			font-weight: 600 !important;
-		}
 	`);
 	ensureInfoPanelStyles(doc);
 	ensurePrimaryLinksStyles(doc);
@@ -45,4 +23,8 @@ export function ensureNativeGameInfoStyles(doc: Document): void {
 	ensureTradingCardStyles(doc);
 	ensureStatusComposerStyles(doc);
 	ensureHistoricalSidebarStyles(doc);
+}
+
+export function removeNativeGameInfoStyles(doc: Document): void {
+	doc.getElementById('gdl-library-style-sentinel')?.remove();
 }

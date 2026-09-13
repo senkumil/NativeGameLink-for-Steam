@@ -178,7 +178,6 @@ function applyPlaytimeStatsToDom(
 				detail.textContent = playtimeFormatted;
 				hasNativePlaytime = true;
 			}
-			applyNativePlaybarTypography(nativePlaytime, NATIVE_UI_BLUEPRINT_KEYS.playbarPlaytime);
 		}
 	}
 
@@ -190,7 +189,6 @@ function applyPlaytimeStatsToDom(
 				detail.textContent = lastPlayedFormatted;
 				hasNativeLastPlayed = true;
 			}
-			applyNativePlaybarTypography(nativeLastPlayed, NATIVE_UI_BLUEPRINT_KEYS.playbarLastPlayed);
 		}
 	}
 

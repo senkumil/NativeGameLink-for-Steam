@@ -294,7 +294,7 @@ export function prepareNativeLibraryLayout(layout: NativeLibraryLayout): void {
 export function hideLinkedShortcutNotice(noticeElement: Element, layout: NativeLibraryLayout): void {
 	let element: HTMLElement | null = noticeElement as HTMLElement;
 	for (let depth = 0; depth < 4 && element; depth += 1) {
-		if (element === layout.contentColumn || element === layout.twoColumnRow) break;
+		if (element.id?.startsWith('gdl-') || element === layout.contentColumn || element === layout.twoColumnRow) break;
 		if (depth > 0 && element.querySelector('[data-nsp]')) break;
 		hideNativeLibraryElement(element);
 		const parent = element.parentElement;

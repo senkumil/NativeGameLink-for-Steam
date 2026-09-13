@@ -24,7 +24,7 @@ import {
 	SHORTCUT_ICON_STORAGE_PREFIX,
 } from './shortcut-icon';
 import { getShortcutEdition } from '../shortcuts/editions';
-export { getCachedLibraryAssets, getModernLibraryAssets, getResolvedLibraryAssets, refreshModernLibraryAssets } from './library-assets';
+export { getCachedLibraryAssets, getModernLibraryAssets, getResolvedLibraryAssets, refreshModernLibraryAssets, warmupAllMappedLibraryAssets } from './library-assets';
 export type { SteamLibraryAssets } from './library-assets';
 export { imageUrlToBase64, normalizeCommunityArtworkDataUrl, normalizeCommunityLogoDataUrl } from './artwork-image';
 export async function resolveShortcutIdAfterRename(

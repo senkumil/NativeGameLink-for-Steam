@@ -2,14 +2,14 @@ import React from 'react';
 import { Millennium, IconsModule, definePlugin } from '@steambrew/client';
 import { backendLog } from '../api/backend';
 import { mappings, loadMappings } from '../core/mappings';
-import { clearGameDataCache } from '../core/game-data';
+import { clearGameDataCache, warmupAllMappedGameData } from '../core/game-data';
 import { pruneCacheStorage, setProtectedCacheAppIds } from '../core/cache';
 import { getSteamLanguage, subscribeSteamLanguageChange, startSteamLanguageWatcher, stopSteamLanguageWatcher, officialSteamText, setLocalizationDocumentProvider } from '../steam/localization';
 import { steamUIModeService } from '../steam/ui/SteamUIModeService';
 import { steamComponents } from '../steam/modules/SteamComponentResolver';
 import { SettingsContent } from '../settings/SettingsContent';
 import { clearShortcutRuntimeCaches, findActiveShortcutAppId, isSteamLibraryActive } from '../steam/shortcuts';
-import { clearLibraryAssetCaches } from '../features/library/artwork';
+import { clearLibraryAssetCaches, warmupAllMappedLibraryAssets } from '../features/library/artwork';
 import { clearCommunityItemCaches } from '../features/library/community-items';
 import { clearSocialRuntimeCaches, configureSocialRuntimeHost } from '../features/library/social';
 import { configureLibraryRuntimeHost, disposeLibraryRuntime, findNonSteamNotice, getCurrentInjectedAppId, getCurrentInjectedShortcutAppId, handleLibraryNavigation, refreshLibraryArtwork, resetLibraryInjection, tryInjectLibraryData } from '../features/library/runtime';
@@ -222,6 +222,9 @@ function windowCreated(context: any): void {
 		}
 		// This precedes the static main-window branch because Steam reuses that document.
 		if (currentIsBigPicture) {
+			if (isPublicSteamLibraryRoute(popupDoc) && !popupDoc.getElementById('gdl-bp-detail-root') && !popupDoc.getElementById('gdl-bp-playbar-controller')) {
+				return;
+			}
 			activateBigPicture(popupDoc);
 			lastBigPictureRefreshAt = Date.now();
 			void refreshBigPicture(popupDoc).catch(e => backendLog('Big Picture refresh error: ' + e));
@@ -305,6 +308,9 @@ function windowCreated(context: any): void {
 		}
 		if (mutationTimer) return;
 		const bigPictureSurface = isBigPictureSurface();
+		if (bigPictureSurface && isPublicSteamLibraryRoute(popupDoc) && !popupDoc.getElementById('gdl-bp-detail-root') && !popupDoc.getElementById('gdl-bp-playbar-controller')) {
+			return;
+		}
 		const delay = Math.max(bigPictureSurface ? 250 : 140, (bigPictureSurface ? 500 : 350) - (Date.now() - lastMutationInjectionAt));
 		mutationTimer = setTimeout(() => { mutationTimer = null; runInjection('mutation'); }, delay);
 	});
@@ -411,6 +417,8 @@ export default definePlugin(() => {
 	deferStartup('legacy cache cleanup', () => { try { for (let i = localStorage.length - 1; i >= 0; i--) { const k = localStorage.key(i); if (k && (k.startsWith('events8_') || k.startsWith('events7_') || k.startsWith('friends_') || k.startsWith('gdl_cache_friends_') || k === 'gdl_info_panel_expanded' || k === 'gdl_native_info_panel_expanded')) localStorage.removeItem(k); } } catch {} }, 300);
 	const hydrateMappingsAfterMount = (): void => { void loadMappings().then(() => {
 		backendLog('Loaded ' + Object.keys(mappings).length + ' mapping(s)');
+		warmupAllMappedGameData();
+		warmupAllMappedLibraryAssets(Object.values(mappings).filter(v => typeof v === 'string' && /^\d+$/.test(v)));
 		// Keep the first paint cheap. None of these background services is needed
 		// to render the Millennium plugin card, so stagger them after hydration.
 		deferStartup('playtime tracker', () => startPlaytimeTracker(), 700);

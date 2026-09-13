@@ -1,6 +1,7 @@
 import { backendLog } from '../../api/backend';
 import { getMappedShortcuts } from '../../steam/shortcuts';
 import { applyOfficialLogoPosition, applyOfficialShortcutIcon, artworkAlreadySaved, isLogoPositionVerified, spoofArtwork } from './artwork';
+import { shortcutIconMarkerMatches } from './shortcut-icon';
 import { prioritizePendingLinkJob } from '../shortcuts/link-job-queue';
 import { setPriorityShortcut } from '../shortcuts/link-job-priority';
 
@@ -25,6 +26,10 @@ export function prioritizeShortcutArtwork(shortcutId: number, steamAppId: string
 	const key = `${shortcutId}:${steamAppId}`;
 	const isSaved = artworkAlreadySaved(shortcutId, steamAppId);
 	if (verifiedShortcuts.has(key) && isSaved) return;
+	if (isSaved && isLogoPositionVerified(shortcutId, steamAppId) && shortcutIconMarkerMatches(shortcutId, steamAppId)) {
+		verifiedShortcuts.add(key);
+		return;
+	}
 	if (priorityArtworkInFlight.has(key)) return;
 	priorityArtworkInFlight.add(key);
 	const artworkPromise = isSaved

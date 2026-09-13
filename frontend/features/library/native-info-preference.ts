@@ -226,6 +226,7 @@ export function reconcileNativeInfoPreference(doc: Document): void {
 	const route = libraryRouteIdentity(doc);
 	if (!route) return;
 	if (state.route !== route) resetRoute(state, route);
+	if (state.appliedButton?.isConnected && state.route === route && !state.timer) return;
 
 	const preferred = readNativeInfoPreference();
 	const button = findNativeInfoButton(doc);

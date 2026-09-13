@@ -459,6 +459,13 @@ export async function refreshBigPictureShortcutDetails(doc: Document): Promise<v
 		return;
 	}
 	const context = resolveActiveGameContext(doc);
+	if (context.type === 'steam') {
+		detailContextGapSince.delete(doc);
+		const retryTimer = detailRetryTimers.get(doc);
+		if (retryTimer) { clearTimeout(retryTimer); detailRetryTimers.delete(doc); }
+		removeBigPictureDetailsNodes(doc);
+		return;
+	}
 	if (context.type !== 'shortcut-linked') {
 		const liveState = detailStates.get(doc);
 		const canBeTransientGap = Boolean(

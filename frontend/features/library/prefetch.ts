@@ -20,7 +20,7 @@ interface FailureCooldown {
 	retryAt: number;
 }
 
-const START_DELAY_MS = 4_000;
+const START_DELAY_MS = 1_000;
 const LANGUAGE_RETRY_MS = 1_000;
 const CORE_PAUSE_MS = 650;
 const NEWS_PAUSE_MS = 1_200;
@@ -76,7 +76,7 @@ function sortPendingTasks(): void {
 	});
 }
 
-function mappedSteamAppIds(): string[] {
+function mappedSteamAppIds(language?: string): string[] {
 	const unique = new Set<string>();
 	try {
 		for (const shortcut of getMappedShortcuts()) {
@@ -97,14 +97,21 @@ function mappedSteamAppIds(): string[] {
 	}
 	const all = Array.from(unique);
 	const visible = currentVisibleAppId();
+	const uncompleted = language
+		? all.filter(appId => !completedTasks.has(`core:${language}:${appId}`) || !completedTasks.has(`news:${language}:${appId}`))
+		: all;
+	const candidateList = uncompleted.length > 0 ? uncompleted : all;
+	if (visible && candidateList.includes(visible)) {
+		return [visible, ...candidateList.filter(appId => appId !== visible)].slice(0, MAX_PREFETCH_APP_IDS);
+	}
 	if (visible && all.includes(visible)) {
 		return [visible, ...all.filter(appId => appId !== visible)].slice(0, MAX_PREFETCH_APP_IDS);
 	}
-	return all.slice(0, MAX_PREFETCH_APP_IDS);
+	return candidateList.slice(0, MAX_PREFETCH_APP_IDS);
 }
 
 function buildPendingTasks(language: string): void {
-	const appIds = mappedSteamAppIds();
+	const appIds = mappedSteamAppIds(language);
 	pendingTasks = [];
 	let order = 0;
 	for (const phase of ['core', 'news'] as const) {
@@ -155,9 +162,11 @@ function registerFailure(task: PrefetchTask): void {
 
 async function runTask(task: PrefetchTask): Promise<boolean> {
 	if (task.phase === 'core') {
-		// Keep the two relatively expensive sources sequential. getGameData may
-		// already request the exact client language plus an English field fallback;
-		// running steamcmd.net beside it would unnecessarily multiply startup I/O.
+		const cachedData = getCachedGameData(task.appId, task.language);
+		const cachedAssets = getCachedLibraryAssets(task.appId, task.language);
+		if (cachedData?.fresh && cachedAssets?.fresh) {
+			return true;
+		}
 		const data = await getGameData(task.appId, task.language);
 		const assets = await getModernLibraryAssets(task.appId, task.language);
 		return data !== null && assets !== null
@@ -202,6 +211,9 @@ async function runWorker(expectedGeneration: number, language: string): Promise<
 			continue;
 		}
 
+		const wasCached = task.phase === 'core'
+			&& getCachedGameData(task.appId, task.language)?.fresh === true
+			&& getCachedLibraryAssets(task.appId, task.language)?.fresh === true;
 		let succeeded = false;
 		try { succeeded = await runTask(task); }
 		catch (error) {
@@ -224,10 +236,17 @@ async function runWorker(expectedGeneration: number, language: string): Promise<
 			registerFailure(task);
 		}
 
-		await wait(pauseDuration(task.phase));
+		await wait(wasCached && succeeded ? 0 : pauseDuration(task.phase));
 	}
 
-	if (started && expectedGeneration === generation) scheduleFailureRetry(expectedGeneration);
+	if (started && expectedGeneration === generation) {
+		buildPendingTasks(language);
+		if (pendingTasks.length > 0) {
+			scheduleWave(CORE_PAUSE_MS, expectedGeneration);
+			return;
+		}
+		scheduleFailureRetry(expectedGeneration);
+	}
 }
 
 async function launchWave(expectedGeneration: number): Promise<void> {
@@ -278,6 +297,17 @@ export function startLinkedGamePrefetch(getVisibleAppId?: () => string | null): 
 /** Promote the visible game within its current phase without starting I/O. */
 export function reprioritizeLinkedGame(appId: string): void {
 	preferredAppId = normalizedAppId(appId);
+	if (!preferredAppId) return;
+	const language = currentLanguage();
+	if (language) {
+		for (const phase of ['core', 'news'] as const) {
+			const task: PrefetchTask = { appId: preferredAppId, language, phase, order: -1 };
+			const key = taskKey(task);
+			if (!completedTasks.has(key) && !pendingTasks.some(t => taskKey(t) === key)) {
+				pendingTasks.unshift(task);
+			}
+		}
+	}
 	if (pendingTasks.length > 1) sortPendingTasks();
 }
 

@@ -50,6 +50,12 @@ function rebuildMappingIndexes(source: Mappings): void {
 		} else if (key.startsWith('exe_stem:')) {
 			const stem = key.slice('exe_stem:'.length);
 			exeStemToSteamMap.set(stem.trim().toLowerCase(), value);
+		} else if (key.startsWith('title:')) {
+			const titleStr = key.slice('title:'.length).trim();
+			titleToSteamMap.set(titleStr, value);
+			titleToSteamMap.set(titleStr.toLowerCase(), value);
+			const norm = normalizeTitle(titleStr);
+			if (norm) titleToSteamMap.set(norm, value);
 		} else {
 			const trimmed = key.trim();
 			titleToSteamMap.set(trimmed, value);
@@ -355,6 +361,11 @@ export function removeMappingChecked(key: string): Promise<boolean> {
 	});
 }
 
+export function titleMappingKey(title: string): string {
+	const normalized = (title || '').trim();
+	return normalized ? 'title:' + normalized.toLowerCase() : '';
+}
+
 export function shortcutMappingKey(shortcutAppId: string | number): string {
 	return 'shortcut:' + String(shortcutAppId);
 }
@@ -401,8 +412,14 @@ export async function removeShortcutMappingsChecked(identity: ShortcutMappingIde
 	const title = String(identity.title || '').trim();
 	if (title) {
 		candidates.add(title);
+		const tKey = titleMappingKey(title);
+		if (tKey) candidates.add(tKey);
 		const normalized = normalizeTitle(title);
-		if (normalized) candidates.add(normalized);
+		if (normalized) {
+			candidates.add(normalized);
+			const normTKey = titleMappingKey(normalized);
+			if (normTKey) candidates.add(normTKey);
+		}
 	}
 	const exePath = String(identity.exePath || '').trim();
 	if (exePath) {
@@ -485,6 +502,16 @@ export function findMappingForTitle(title: string, shortcutAppId?: string | numb
 	if (normKey) {
 		const indexedNorm = titleToSteamMap.get(normKey);
 		if (indexedNorm && /^\d+$/.test(indexedNorm)) return indexedNorm;
+	}
+	const titleKey = titleMappingKey(trimmedTitle);
+	if (titleKey && mappings[titleKey] && /^\d+$/.test(String(mappings[titleKey]))) {
+		return String(mappings[titleKey]);
+	}
+	if (normKey) {
+		const normTitleKey = titleMappingKey(normKey);
+		if (normTitleKey && mappings[normTitleKey] && /^\d+$/.test(String(mappings[normTitleKey]))) {
+			return String(mappings[normTitleKey]);
+		}
 	}
 	if (mappings[trimmedTitle] && /^\d+$/.test(String(mappings[trimmedTitle]))) {
 		return String(mappings[trimmedTitle]);

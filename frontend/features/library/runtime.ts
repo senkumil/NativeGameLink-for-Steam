@@ -147,11 +147,12 @@ export function handleLibraryNavigation(doc: Document): void {
 	const isNextLinked = Boolean(nextAppId && nextAppId >= 2147483648 && !isShortcutDismissed(nextAppId) && findMappingForShortcut(String(nextAppId), ''));
 	reconcileLibraryNavigation(doc, {
 		currentInjectedAppId, currentInjectedShortcutAppId, clearCurrentInjection,
-		scheduleCleanup: () => scheduleNavigationCleanup(doc, generation, isNextLinked),
+		scheduleCleanup: () => isNextLinked ? undefined : scheduleNavigationCleanup(doc, generation, false),
 	});
 	const sameLinkedSession = hadCurrentInjection && currentInjectedDocument === doc;
 	if (isUsableLibraryDocument(doc) && (hadCurrentInjection || hadOwnedChrome) && !sameLinkedSession) {
-		clearCurrentInjection(doc); restoreNativeLibraryStyles(doc); scheduleNavigationCleanup(doc, generation, isNextLinked);
+		clearCurrentInjection(doc);
+		if (!isNextLinked) { restoreNativeLibraryStyles(doc); scheduleNavigationCleanup(doc, generation, false); }
 	}
 }
 function scheduleNavigationRetry(doc: Document, generation: number, delayMs: number): void {
@@ -222,7 +223,17 @@ export async function tryInjectLibraryData(doc: Document): Promise<void> {
 		retireLinkedRouteFromNativePage(doc, navigationGeneration);
 		return;
 	}
-	const noticeInfo = findNonSteamNotice(doc);
+	let noticeInfo = findNonSteamNotice(doc);
+	if (!noticeInfo) {
+		const nextAppId = routedSteamAppId(doc);
+		if (nextAppId && nextAppId >= 2147483648 && !isShortcutDismissed(nextAppId)) {
+			const app = getShortcutAppById(Number(nextAppId));
+			const title = String(app?.display_name || app?.m_strDisplayName || '').trim();
+			const mapped = findMappingForShortcut(String(nextAppId), title);
+			const existingStack = doc.getElementById('gdl-main-content-stack');
+			if (mapped && existingStack?.isConnected) noticeInfo = { element: existingStack, title: title || '' };
+		}
+	}
 	if (!noticeInfo) {
 		// Absence of the notice is transient while Steam hydrates a native feed.
 		// Only an already-confirmed route exit may renew the quiet-period timer;
@@ -330,21 +341,17 @@ export async function tryInjectLibraryData(doc: Document): Promise<void> {
 		const shortcutExe = String(app?.strShortcutExe || app?.m_strShortcutExe || app?.shortcut_exe || app?.strExePath || '').trim();
 		const shortcutStartDir = String(app?.strShortcutStartDir || app?.m_strShortcutStartDir || app?.shortcut_start_dir || app?.strStartDir || '').trim();
 		if (shortcutExe || shortcutStartDir) {
-			void neutralizeSteamAppIdFileBackend({
-				request_json: JSON.stringify({ exe_path: shortcutExe, start_dir: shortcutStartDir }),
-			}).catch(() => {});
+			void neutralizeSteamAppIdFileBackend({ request_json: JSON.stringify({ exe_path: shortcutExe, start_dir: shortcutStartDir }) }).catch(() => {});
 		}
 		const activeIdNum = Number(activeShortcutAppId), apps = (window as any).SteamClient?.Apps;
 		if (typeof apps?.SetShortcutLaunchOptions === 'function' && !reconciledLaunchOptions.has(activeIdNum)) {
 			reconciledLaunchOptions.add(activeIdNum);
 			const currentOptions = String(app?.strShortcutLaunchOptions || app?.m_strShortcutLaunchOptions || app?.shortcut_launch_options || app?.strArguments || '').trim();
-			if (shouldAutoApplyNoLauncher(steamAppId)) {
-				if (!hasNoLauncherOption(currentOptions)) {
-					const updated = mergeNoLauncherOption(currentOptions, steamAppId);
-					void apps.SetShortcutLaunchOptions(activeIdNum, updated);
-					backendLog(`Auto-reconciled launcher bypass on view for "${gameTitle}" (${activeShortcutAppId}): "${updated}"`);
-				}
-			} else if (hasNoLauncherOption(currentOptions)) {
+			if (shouldAutoApplyNoLauncher(steamAppId) && !hasNoLauncherOption(currentOptions)) {
+				const updated = mergeNoLauncherOption(currentOptions, steamAppId);
+				void apps.SetShortcutLaunchOptions(activeIdNum, updated);
+				backendLog(`Auto-reconciled launcher bypass on view for "${gameTitle}" (${activeShortcutAppId}): "${updated}"`);
+			} else if (!shouldAutoApplyNoLauncher(steamAppId) && hasNoLauncherOption(currentOptions)) {
 				const cleaned = removeIncompatibleLauncherBypass(currentOptions, steamAppId);
 				void apps.SetShortcutLaunchOptions(activeIdNum, cleaned);
 				backendLog(`Cleaned incompatible launcher bypass on view for "${gameTitle}" (${activeShortcutAppId}): "${cleaned}"`);
@@ -375,17 +382,11 @@ export async function tryInjectLibraryData(doc: Document): Promise<void> {
 		return;
 	}
 
-	if (existing) {
-		clearCurrentInjection(doc);
-		cleanupInjection(doc, false, Boolean(steamAppId));
-	}
-	if (currentInjectedDocument && currentInjectedDocument !== doc) {
-		const previousDoc = currentInjectedDocument;
-		clearCurrentInjection(previousDoc);
+	if (existing || (currentInjectedDocument === doc && ((currentInjectedAppId && currentInjectedAppId !== steamAppId) || shortcutIdentityChanged))) {
+		clearCurrentInjection(doc); cleanupInjection(doc, false, Boolean(steamAppId));
+	} else if (currentInjectedDocument && currentInjectedDocument !== doc) {
+		const previousDoc = currentInjectedDocument; clearCurrentInjection(previousDoc);
 		if (isUsableLibraryDocument(previousDoc)) cleanupInjection(previousDoc);
-	} else if (currentInjectedDocument === doc && ((currentInjectedAppId && currentInjectedAppId !== steamAppId) || shortcutIdentityChanged)) {
-		clearCurrentInjection(doc);
-		cleanupInjection(doc, false, Boolean(steamAppId));
 	}
 	const generation = setCurrentInjection(doc, steamAppId, resolvedShortcutAppId);
 	removeManualLinkNoticeButton(doc);

@@ -1,5 +1,6 @@
 import { listShortcutsBackend, backendLog } from '../../api/backend';
-import { findMappingByExe, findMappingForTitle, isMappingSnapshotVerified, mappings, saveMappingChecked, shortcutMappingKey } from '../../core/mappings';
+import { findMappingByExe, findMappingForTitle, isMappingSnapshotVerified, mappings, shortcutMappingKey, titleMappingKey, updateMappingsChecked } from '../../core/mappings';
+import { normalizeTitle } from '../../core/text';
 import { getShortcutAppById, getSteamAppStore, readShortcutOverviewField, replaceFallbackShortcutApps, shortcutExecutableIdentity, shortcutPathBasename, toSignedShortcutAppId } from '../../steam/shortcuts';
 
 export interface ShortcutRecord {
@@ -59,6 +60,7 @@ export function refreshShortcutRecordsFromBackend(): Promise<void> {
 			}
 			backendShortcutRecords = next;
 			replaceFallbackShortcutApps(next.map(record => ({ id: record.id, app: record.app })));
+			scheduleTitleMappingsSync(1200);
 		} catch (error) {
 			backendLog(`Shortcut VDF registry refresh failed: ${String(error)}`);
 		}
@@ -168,9 +170,30 @@ export function findMappingForShortcut(
 		}
 		if (exact && /^\d+$/.test(String(exact))) {
 			const strExact = String(exact);
+			const setPayload: Record<string, string> = {};
 			if (!mappings[shortcutMappingKey(numId)]) {
 				mappings[shortcutMappingKey(numId)] = strExact;
-				void saveMappingChecked(shortcutMappingKey(numId), strExact).catch(() => {});
+				setPayload[shortcutMappingKey(numId)] = strExact;
+			}
+			const app = getShortcutAppById(numId) || getAllShortcutRecords().find(r => r.id === numId)?.app;
+			const appTitle = (title && title.trim()) || (app ? String(app.display_name || app.m_strDisplayName || app.strDisplayName || app.strAppName || app.name || '').trim() : '');
+			if (appTitle) {
+				const tKey = titleMappingKey(appTitle);
+				if (tKey && !mappings[tKey]) {
+					mappings[tKey] = strExact;
+					setPayload[tKey] = strExact;
+				}
+				const norm = normalizeTitle(appTitle);
+				if (norm) {
+					const nKey = titleMappingKey(norm);
+					if (nKey && !mappings[nKey]) {
+						mappings[nKey] = strExact;
+						setPayload[nKey] = strExact;
+					}
+				}
+			}
+			if (Object.keys(setPayload).length > 0) {
+				void updateMappingsChecked({ set: setPayload, remove: [] }).catch(() => {});
 			}
 			return strExact;
 		}
@@ -185,4 +208,37 @@ export function findMappingForShortcut(
 		if (byTitle && /^\d+$/.test(String(byTitle))) return String(byTitle);
 	}
 	return null;
+}
+
+let titleSyncScheduled = false;
+export function syncTitleMappingsForKnownShortcuts(): void {
+	if (!isMappingSnapshotVerified()) return;
+	const records = getAllShortcutRecords();
+	const toSet: Record<string, string> = {};
+	for (const record of records) {
+		const steamAppId = mappings[shortcutMappingKey(record.id)];
+		if (!steamAppId || !/^\d+$/.test(steamAppId)) continue;
+		const title = record.title?.trim();
+		if (title) {
+			const tKey = titleMappingKey(title);
+			if (tKey && !mappings[tKey]) toSet[tKey] = steamAppId;
+			const norm = normalizeTitle(title);
+			if (norm) {
+				const nKey = titleMappingKey(norm);
+				if (nKey && !mappings[nKey]) toSet[nKey] = steamAppId;
+			}
+		}
+	}
+	if (Object.keys(toSet).length > 0) {
+		void updateMappingsChecked({ set: toSet, remove: [] }).catch(() => {});
+	}
+}
+
+export function scheduleTitleMappingsSync(delayMs = 1500): void {
+	if (titleSyncScheduled) return;
+	titleSyncScheduled = true;
+	setTimeout(() => {
+		titleSyncScheduled = false;
+		syncTitleMappingsForKnownShortcuts();
+	}, delayMs);
 }

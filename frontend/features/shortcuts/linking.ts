@@ -1,7 +1,8 @@
 import type { ShortcutLinkResult, SteamGameData } from '../../domain/types';
 import { backendLog, neutralizeSteamAppIdFileBackend } from '../../api/backend';
 import { getCanonicalGameData, getGameData } from '../../core/game-data';
-import { shortcutMappingKey, updateMappingsChecked } from '../../core/mappings';
+import { shortcutMappingKey, titleMappingKey, updateMappingsChecked } from '../../core/mappings';
+import { normalizeTitle } from '../../core/text';
 import { findActiveShortcutAppId, findShortcutAppIdByName, getShortcutAppById, readShortcutOverviewField, shortcutExecutableIdentity } from '../../steam/shortcuts';
 import { applyOfficialShortcutIcon, getModernLibraryAssets, invalidateLibraryAssetCaches, refreshModernLibraryAssets, resolveShortcutIdAfterRename, spoofArtwork, type ArtworkApplyResult } from '../library/artwork';
 import { clearShortcutArtworkForAppIdChange } from '../library/artwork-relink-cleanup';
@@ -363,10 +364,19 @@ export async function synchronizeShortcutOfficialIdentity(options: {
 			// Manual link entry points clear the dismissal before starting; therefore
 			// seeing it here means the user cancelled/unlinked during this operation.
 			if (isShortcutDismissed(shortcutAppId)) throw new Error('link_cancelled_by_unlink');
-			// A concrete shortcut owns exactly one source-of-truth mapping. Title,
-			// executable and launch-fingerprint aliases are deliberately not written:
-			// two different library entries may share any of those values.
+			// A concrete shortcut owns a persistent ID mapping and durable title aliases
+			// so that moving the game to another folder/drive auto-resolves seamlessly.
 			const mappingSet: Record<string, string> = { [shortcutMappingKey(shortcutAppId)]: options.steamAppId };
+			const gameTitle = officialName || options.currentTitle;
+			if (gameTitle && gameTitle.trim()) {
+				const tKey = titleMappingKey(gameTitle);
+				if (tKey) mappingSet[tKey] = options.steamAppId;
+				const norm = normalizeTitle(gameTitle);
+				if (norm) {
+					const nKey = titleMappingKey(norm);
+					if (nKey) mappingSet[nKey] = options.steamAppId;
+				}
+			}
 			const mappingRemove = Array.from(staleIds)
 				.filter(staleId => staleId !== shortcutAppId)
 				.map(staleId => shortcutMappingKey(staleId));

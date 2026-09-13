@@ -47,16 +47,37 @@ function usableLibraryAssetSnapshot(data: SteamLibraryAssets | null | undefined)
 
 export function getCachedLibraryAssets(appId: string, language = steamLanguageSync() || 'english'):
 	{ data: SteamLibraryAssets; fresh: boolean } | null {
-	const entry = cacheRead<SteamLibraryAssets>(storageKey(appId, language),
+	const normalizedLang = String(language || 'english').toLowerCase();
+	const inMemory = requests.peek(requestKey(appId, normalizedLang));
+	if (inMemory && usableLibraryAssetSnapshot(inMemory)) return { data: inMemory, fresh: true };
+	const entry = cacheRead<SteamLibraryAssets>(storageKey(appId, normalizedLang),
 		CACHE_TTL.libraryAssets, CACHE_RETENTION.libraryAssets);
-	if (entry && usableLibraryAssetSnapshot(entry.data)) return { data: entry.data, fresh: entry.fresh };
-	if (entry) cacheDelete(storageKey(appId, language));
-	const fallbackV3 = cacheRead<SteamLibraryAssets>(`library_assets_v3_${language}_${appId}`,
+	if (entry && usableLibraryAssetSnapshot(entry.data)) {
+		if (entry.fresh) void requests.get(requestKey(appId, normalizedLang), () => Promise.resolve(entry.data));
+		return { data: entry.data, fresh: entry.fresh };
+	}
+	if (entry) cacheDelete(storageKey(appId, normalizedLang));
+	const fallbackV3 = cacheRead<SteamLibraryAssets>(`library_assets_v3_${normalizedLang}_${appId}`,
 		CACHE_TTL.libraryAssets, CACHE_RETENTION.libraryAssets);
 	if (fallbackV3 && usableLibraryAssetSnapshot(fallbackV3.data)) return { data: fallbackV3.data, fresh: false };
-	const legacy = cacheRead<SteamLibraryAssets>(`library_assets_v2_${language}_${appId}`,
+	const legacy = cacheRead<SteamLibraryAssets>(`library_assets_v2_${normalizedLang}_${appId}`,
 		CACHE_TTL.libraryAssets, CACHE_RETENTION.libraryAssets);
 	return legacy && usableLibraryAssetSnapshot(legacy.data) ? { data: legacy.data, fresh: false } : null;
+}
+
+export function warmupAllMappedLibraryAssets(appIds: Iterable<string | number>): void {
+	const language = String(steamLanguageSync() || 'english').toLowerCase();
+	try {
+		for (const id of appIds) {
+			const str = String(id || '').trim();
+			if (/^\d+$/.test(str)) {
+				const cached = getCachedLibraryAssets(str, language);
+				if (cached?.fresh && cached.data) {
+					void requests.get(requestKey(str, language), () => Promise.resolve(cached.data));
+				}
+			}
+		}
+	} catch {}
 }
 
 export function getModernLibraryAssets(appId: string, requestedLanguage?: string,

@@ -1,7 +1,8 @@
 import type { ShortcutLinkResult, SteamGameData } from '../../domain/types';
 import { backendLog, neutralizeSteamAppIdFileBackend } from '../../api/backend';
 import { getCanonicalGameData, getGameData } from '../../core/game-data';
-import { shortcutMappingKey, updateMappingsChecked } from '../../core/mappings';
+import { shortcutMappingKey, titleMappingKey, updateMappingsChecked } from '../../core/mappings';
+import { normalizeTitle } from '../../core/text';
 import { gdlText } from '../../steam/localization';
 import { getShortcutAppById, readShortcutOverviewField, shortcutExecutableIdentity } from '../../steam/shortcuts';
 import {
@@ -286,6 +287,16 @@ export class LinkOrchestrator {
 		if (isShortcutDismissed(shortcutAppId)) throw new Error('link_cancelled_by_unlink');
 
 		const mappingSet: Record<string, string> = { [shortcutMappingKey(shortcutAppId)]: tx.targetSteamAppId };
+		const gameTitle = options.title;
+		if (gameTitle && gameTitle.trim()) {
+			const tKey = titleMappingKey(gameTitle);
+			if (tKey) mappingSet[tKey] = tx.targetSteamAppId;
+			const norm = normalizeTitle(gameTitle);
+			if (norm) {
+				const nKey = titleMappingKey(norm);
+				if (nKey) mappingSet[nKey] = tx.targetSteamAppId;
+			}
+		}
 		const mappingRemove = Array.from(staleIds)
 			.filter(staleId => staleId !== shortcutAppId)
 			.map(staleId => shortcutMappingKey(staleId));

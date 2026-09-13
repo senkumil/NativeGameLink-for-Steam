@@ -5,16 +5,17 @@ import { GDL_INJECTED } from './constants';
 import { findNonSteamNotice } from './notice';
 
 export function routedSteamAppId(doc: Document): number | null {
+	const routePattern = /(?:games\/details|library\/app|routes\/library\/app|appdetails|app|game)\/(\d+)|[?&#]appid=(\d+)/i;
 	for (const url of [String(doc.defaultView?.location?.href || ''), String(doc.location?.href || '')]) {
-		const match = url.match(/(?:games\/details|library\/app|app)\/(\d+)/i);
-		if (match) return Number(match[1]);
+		const match = url.match(routePattern);
+		if (match) return Number(match[1] || match[2]);
 	}
 	try {
 		const view = (doc.defaultView as any) || (typeof window !== 'undefined' ? (window as any) : null);
 		const history = view?.g_History || view?.g_AppHistory || (typeof window !== 'undefined' ? (window as any).g_History || (window as any).g_AppHistory : null);
 		const path = String(history?.location?.pathname || history?.location?.hash || '');
-		const historyMatch = path.match(/(?:games\/details|library\/app|app)\/(\d+)/i);
-		if (historyMatch) return Number(historyMatch[1]);
+		const historyMatch = path.match(routePattern);
+		if (historyMatch) return Number(historyMatch[1] || historyMatch[2]);
 	} catch {}
 	try {
 		const selected = doc.querySelectorAll<HTMLElement>(

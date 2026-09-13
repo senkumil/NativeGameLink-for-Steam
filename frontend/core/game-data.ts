@@ -179,7 +179,8 @@ export async function getGameData(steamAppId: string, requestedLanguage?: string
 			: englishData;
 		const data = normalizeSteamGameData(merged);
 		if (!data) return null;
-		if (language !== 'english' && (!preferredData || !englishData)) {
+		const isPartialLocalization = language !== 'english' && (!preferredData || (!englishData && !preferredData.short_description && !preferredData.detailed_description));
+		if (isPartialLocalization && (!preferredData || !englishData)) {
 			// Render the available language immediately, but retry the missing half
 			// instead of persisting a partial localization for thirty days.
 			transientLocalizedGameData.add(data);

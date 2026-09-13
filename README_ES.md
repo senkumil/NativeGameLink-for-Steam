@@ -12,18 +12,6 @@ Una vez vinculado, el juego deja de sentirse como un acceso directo vacío: reci
 
 ---
 
-## ✨ Novedades de la v3.0.0 y Funciones principales
-
-- **Compatibilidad con Juegos Eliminados y Deslistados de Steam:** Soporte completo para títulos descatalogados o sin página de tienda activa en Steam (como *Mortal Kombat Komplete Edition*, *Pro Evolution Soccer 2013*, etc.), resolviendo metadatos e ilustraciones oficiales sin bloqueos.
-- **Gestión y Cambio de Artworks Directamente desde Propiedades:** Selector visual dentro de la pestaña *Personalización* en Propiedades para previsualizar, cambiar y aplicar fondos hero, logos, cápsulas e iconos en tiempo real.
-- **Gestión de Logros en Juegos Oficiales de Steam:** Consulta, desbloquea, bloquea o edita el progreso de logros de tus juegos oficiales de Steam directamente desde la biblioteca.
-- **Simulación y Farmeo de Cromos de Steam (Trading Cards):** Colección interactiva de tarjetas en 3D, seguimiento de cromos restantes, progreso de insignia y acceso directo a la comunidad.
-- **Simulador de Logros Simplificado para Juegos No-Steam:** Configuración ultra accesible por juego (100% completado, progreso simulado o manual) con compatibilidad de archivos locales.
-- **Detección Automática Inteligente:** Evalúa evidencias reales de ejecutables, rutas de instalación y niveles de confianza con previsualización de carátulas.
-- **Integración con el Modo Big Picture:** Renderizado oficial de fondos hero, logos, navegación con mando y tiempo de juego sincronizado de forma nativa.
-
----
-
 ## 🎮 Una experiencia de Biblioteca de estilo nativo
 
 NativeGameLink reconstruye las superficies que normalmente faltan en un acceso directo externo:

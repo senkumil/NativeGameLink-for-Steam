@@ -29,6 +29,10 @@ const OWNED_LIBRARY_SELECTORS = [
 	'[data-gdl-cloud-status]',
 	'[data-gdl-game-info-button="1"]',
 	'[data-gdl-playtime="1"]',
+	'#gdl-achievement-sidebar-style',
+	'#gdl-achievement-playbar-style',
+	'#gdl-achievement-modal-style',
+	'#gdl-controller-card-style',
 ].join(',');
 
 export function hasOwnedLibraryChrome(doc: Document): boolean {
@@ -40,6 +44,12 @@ export function beginLibraryRouteExit(doc: Document, generation: number): void {
 	pendingExitGenerations.set(doc, generation);
 	try {
 		const isNativeSteamRoute = isPublicSteamLibraryRoute(doc);
+		if (isNativeSteamRoute) {
+			doc.getElementById('gdl-achievement-sidebar-style')?.remove();
+			doc.getElementById('gdl-achievement-playbar-style')?.remove();
+			doc.getElementById('gdl-achievement-modal-style')?.remove();
+			doc.getElementById('gdl-controller-card-style')?.remove();
+		}
 		doc.querySelectorAll<HTMLElement>(OWNED_LIBRARY_SELECTORS).forEach(element => {
 			if (!isNativeSteamRoute && element.id === 'gdl-link-bar') return;
 			// These nodes will be removed after the native route stabilizes, so no

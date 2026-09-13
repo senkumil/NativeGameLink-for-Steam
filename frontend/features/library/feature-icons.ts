@@ -52,7 +52,7 @@ export function nativeFeatureVisual(feature: NativeGameFeature): string {
 	}
 }
 
-// Exact native back-to-top Arrow SVG from Steam library.js (SVGIcon_Arrow, function ge).
+// Exact native back-to-top Arrow SVG from Steam Webpack module 35488 / 50376 (L0X direction="up").
 export function nativeArrowSvg(): string {
-	return '<svg class="SVGIcon_Button SVGIcon_Arrow gdl-scroll-top-icon" viewBox="0 0 256 256" fill="none" aria-hidden="true"><polyline fill="none" stroke="currentColor" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10" points="128,247.688 128,8.313 181.061,61.674"/><polyline fill="none" stroke="currentColor" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10" points="128,247.688 128,8.313 74.939,61.674"/></svg>';
+	return '<svg class="SVGIcon_Button SVGIcon_Arrow gdl-scroll-top-icon" viewBox="0 0 36 36" fill="none" aria-hidden="true"><path d="M26.23 17.31L20.5 11.58V33.54H15.5V11.58L9.76998 17.31L6.22998 13.77L18 2.00001L29.77 13.77L26.23 17.31Z" fill="currentColor"/></svg>';
 }

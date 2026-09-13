@@ -3,7 +3,7 @@ import { escapeHtml } from '../../core/text';
 import { getCachedGameData } from '../../core/game-data';
 import { AppStoreAdapter } from '../../steam/gamepad/stores/AppStoreAdapter';
 import { gdlText, loc, steamLanguageSync } from '../../steam/localization';
-import { ensureAchievementSidebarStyles } from '../achievements/styles/sidebar';
+import { ensureControllerStyles } from './styles/controller';
 import { buildNativeSidebarSection, type NativeLibraryLayout } from './layout';
 import {
 	NATIVE_SVG_XBOX,
@@ -31,13 +31,13 @@ export function isSteamControllerConnected(ctrl: any): boolean {
 	if (ctrl.bConnected === false || ctrl.connected === false || ctrl.bIsConnected === false || ctrl.m_bConnected === false || ctrl.is_connected === false) {
 		return false;
 	}
-	if (ctrl.bActive === false || ctrl.m_bActive === false) {
-		return false;
-	}
 	if (ctrl.bConnected === true || ctrl.connected === true || ctrl.bIsConnected === true || ctrl.m_bConnected === true || ctrl.is_connected === true) {
 		return true;
 	}
 	if (ctrl.bActive === true || ctrl.m_bActive === true) {
+		return true;
+	}
+	if (typeof ctrl.nControllerIndex === 'number' || typeof ctrl.eControllerType === 'number') {
 		return true;
 	}
 	return false;
@@ -364,7 +364,7 @@ export function syncControllerSidebarSection(
 	}
 
 	const supportState = detectGameControllerSupportState(steamAppId, controllerInfo.type, doc);
-	ensureAchievementSidebarStyles(doc);
+	ensureControllerStyles(doc);
 
 	if (section) {
 		const inner = doc.getElementById('gdl-controller-content');

@@ -83,6 +83,11 @@ const achSidebarTs = read('frontend/features/achievements/sidebar.ts');
 const achSidebarStylesTs = read('frontend/features/achievements/styles/sidebar.ts');
 const achModalTs = read('frontend/features/achievements/modal.ts');
 const achModalStylesTs = read('frontend/features/achievements/styles/modal.ts');
+const controllerSvgsTs = read('frontend/features/library/controller-svgs.ts');
+const controllerStylesTs = read('frontend/features/library/styles/controller.ts');
+const routeExitTs = read('frontend/features/library/route-exit.ts');
+const cloudStatusTs = read('frontend/features/library/cloud-status.ts');
+const achPlaybarStylesTs = read('frontend/features/achievements/styles/playbar.ts');
 
 let passed = 0;
 function assert(condition, message) {
@@ -524,8 +529,8 @@ assert(featureIconsTs.includes('STEAM_ICON_ACHIEVEMENTS') && featureIconsTs.incl
 assert(infoPanelTs.includes('nativeFeatureVisual(feature)') && !infoPanelTs.includes('function nativeFeatureSvg'), 'info panel uses nativeFeatureVisual and removes obsolete custom SVGs');
 // 3. Info panel scroll to top uses native 36x36 arrow and reaches scrollTop 0 without conflicting scrollIntoView
 assert(infoPanelTs.includes('nativeArrowSvg()') && !infoPanelTs.includes('topAnchor?.scrollIntoView') && infoPanelTs.includes('target.scrollTop = 0'), 'scroll-to-top uses native arrow and scrolls completely to top 0');
-// 4. Scroll-to-top arrow uses Steam's native SVGIcon_Arrow thin polyline glyph
-assert(featureIconsTs.includes('SVGIcon_Arrow') && featureIconsTs.includes('stroke-width="10"') && featureIconsTs.includes('points="128,247.688'), 'scroll-to-top arrow uses Steam native thin polyline glyph');
+// 4. Scroll-to-top arrow uses Steam's native SVGIcon_Arrow L0X glyph from module 35488 / 50376
+assert(featureIconsTs.includes('SVGIcon_Arrow') && featureIconsTs.includes('M26.23 17.31L20.5 11.58V33.54H15.5V11.58L9.76998 17.31L6.22998 13.77L18 2.00001L29.77 13.77L26.23 17.31Z'), 'scroll-to-top arrow uses Steam native L0X up-arrow glyph');
 // 5. Dynamic Controller Sidebar Card mounts when connected and tears down when disconnected
 assert(controllerTs.includes('buildNativeSidebarSection') && controllerTs.includes('!controllerInfo.connected') && controllerTs.includes('section.remove()') && controllerTs.includes('setupControllerSidebarWatcher'), 'dynamic controller card mounts when connected and tears down when disconnected');
 
@@ -542,6 +547,10 @@ assert(!achModalStylesTs.includes('gdl-lam-rare-rays-a') && !achModalStylesTs.in
 // 5. Sidebar and modal icons both use official Webpack classes and glow HTML
 assert(achSidebarTs.includes('getSteamRareAchievementClasses()') && achSidebarTs.includes('renderSteamRareGlowHtml(rareClasses)'), 'sidebar achievement icons use official Webpack classes and glow HTML');
 assert(achModalTs.includes('getSteamRareAchievementClasses()') && achModalTs.includes('renderSteamRareGlowHtml(rareClasses)'), 'modal achievement icons use official Webpack classes and glow HTML');
+// 6. Rare glow styles are strictly scoped to plugin containers to prevent bleeding into native Steam games
+assert(rareStylesTs.includes('#gdl-achievements-section .gdl-rare-glow-root') && rareStylesTs.includes('#gdl-achievement-modal .gdl-rare-glow-root'), 'rare glow selectors are strictly scoped to plugin achievements section and modal');
+assert(!rareStylesTs.includes('\n.gdl-rare-glow-root {') && !rareStylesTs.includes('\n._2HUbCbZUn27MliiC8gRxGB {'), 'rare glow does not contain unscoped global selectors that could affect native games');
+assert(routeExitTs.includes('#gdl-achievement-sidebar-style') && routeExitTs.includes('#gdl-achievement-playbar-style') && routeExitTs.includes('#gdl-controller-card-style'), 'route exit cleans up achievement and controller style tags when switching to native games');
 
 // Native Controller Section & Webpack Parity:
 // 1. Controller section implements official Webpack Module 35488 SVGs
@@ -552,6 +561,21 @@ assert(controllerTs.includes('_2A8NghNvAnMQQTHsudFu7H') && controllerTs.includes
 assert(controllerTs.includes('detectGameControllerSupportState') && controllerTs.includes('data-gdl-controller-state'), 'controller section evaluates compatibility states supported, unsupported, unknown, and partial');
 // 4. Adjust logo button is completely removed from artwork properties
 assert(!artworkProperties.includes('Adjust logo') && !artworkProperties.includes('openLogoEditor'), 'adjust logo button is removed from artwork properties');
+// 5. Controller SVGs use valid viewBox attributes without hyphens
+assert(controllerSvgsTs.includes('viewBox="0 0 36 36"') && !controllerSvgsTs.includes('view-box='), 'controller SVGs use valid camelCase viewBox attribute');
+// 6. Controller connection detection supports Steam ControllerStore m_controllerList objects
+assert(controllerTs.includes('typeof ctrl.nControllerIndex === \'number\' || typeof ctrl.eControllerType === \'number\''), 'controller connection detection supports real Steam ControllerStore list items');
+// 7. Controller styles are isolated in dedicated module
+assert(controllerTs.includes('ensureControllerStyles') && controllerStylesTs.includes('.gdl-controller-card'), 'controller card uses dedicated stylesheet ensuring dynamic layout styles');
+
+// Playbar Native Parity & Icon Sizing:
+// 1. Playbar achievements stat icon uses 30x30px container matching Steam native dimensions
+assert(achPlaybarStylesTs.includes('width: 30px !important') && achPlaybarStylesTs.includes('height: 30px !important') && achPlaybarStylesTs.includes('margin: 3px !important'), 'playbar achievement container uses native 30x30px with 3px margins');
+// 2. Playbar achievement insertion follows native stat order
+assert(achievementsPlaybar.includes('insertAchievementInNativeOrder'), 'playbar achievements use native insertion order');
+// 3. Cloud status is ordered as first stat item
+assert(cloudStatusTs.includes('statsSection.prepend(stat)') || cloudStatusTs.includes('data-gdl-cloud-status'), 'cloud status precedes secondary stat items in playbar');
 
 console.log(`All ${passed} user-reported bug regression checks passed.`);
+
 

@@ -21,9 +21,11 @@ export function steamRareAchievementStyles(): string {
 			to { transform: rotate(1turn); }
 		}
 
-		/* Static root mask container */
-		.gdl-rare-glow-root,
-		._2HUbCbZUn27MliiC8gRxGB {
+		/* Static root mask container - strictly scoped to GDL containers */
+		#gdl-achievements-section .gdl-rare-glow-root,
+		#gdl-achievements-section ._2HUbCbZUn27MliiC8gRxGB,
+		#gdl-achievement-modal .gdl-rare-glow-root,
+		#gdl-achievement-modal ._2HUbCbZUn27MliiC8gRxGB {
 			position: absolute;
 			top: -20%;
 			right: -20%;
@@ -41,8 +43,10 @@ export function steamRareAchievementStyles(): string {
 		}
 
 		/* Counter-clockwise rotating inner mask container */
-		.gdl-rare-glow-container,
-		._2D_EJk8-jCnfqiwoKkOMVh {
+		#gdl-achievements-section .gdl-rare-glow-container,
+		#gdl-achievements-section ._2D_EJk8-jCnfqiwoKkOMVh,
+		#gdl-achievement-modal .gdl-rare-glow-container,
+		#gdl-achievement-modal ._2D_EJk8-jCnfqiwoKkOMVh {
 			position: absolute;
 			top: -20%;
 			right: -20%;
@@ -64,8 +68,10 @@ export function steamRareAchievementStyles(): string {
 		}
 
 		/* Clockwise rotating conic-gradient glow layer with overlay blend mode */
-		.gdl-rare-glow,
-		._1Z2eJs9-zNTKcWKy4M-oDE {
+		#gdl-achievements-section .gdl-rare-glow,
+		#gdl-achievements-section ._1Z2eJs9-zNTKcWKy4M-oDE,
+		#gdl-achievement-modal .gdl-rare-glow,
+		#gdl-achievement-modal ._1Z2eJs9-zNTKcWKy4M-oDE {
 			position: absolute;
 			top: -10px;
 			right: -10px;
@@ -92,28 +98,42 @@ export function steamRareAchievementStyles(): string {
 		}
 
 		/* Official Steam gold aura box-shadow on the icon */
-		.is-rare-glow,
-		._3s4Rq3jnntBVP7HbJj1RMQ {
+		#gdl-achievements-section .is-rare-glow,
+		#gdl-achievements-section ._3s4Rq3jnntBVP7HbJj1RMQ,
+		#gdl-achievement-modal .is-rare-glow,
+		#gdl-achievement-modal ._3s4Rq3jnntBVP7HbJj1RMQ {
 			box-shadow: 0px 0px 2px 1px rgba(255, 184, 78, .6), 0px 0px 16px 1px rgba(255, 184, 78, .4) !important;
 		}
 
 		/* Low perf mode / paused animation */
-		.gdl-rare-no-animation .gdl-rare-glow-container,
-		.gdl-rare-no-animation .gdl-rare-glow,
-		._1a4bwiE4yUR3XXBKI6mKqt ._2D_EJk8-jCnfqiwoKkOMVh,
-		._1a4bwiE4yUR3XXBKI6mKqt ._1Z2eJs9-zNTKcWKy4M-oDE,
-		.LowPerfMode .gdl-rare-glow-container,
-		.LowPerfMode .gdl-rare-glow,
-		.LowPerfMode ._2D_EJk8-jCnfqiwoKkOMVh,
-		.LowPerfMode ._1Z2eJs9-zNTKcWKy4M-oDE {
+		#gdl-achievements-section .gdl-rare-no-animation .gdl-rare-glow-container,
+		#gdl-achievements-section .gdl-rare-no-animation .gdl-rare-glow,
+		#gdl-achievements-section._1a4bwiE4yUR3XXBKI6mKqt ._2D_EJk8-jCnfqiwoKkOMVh,
+		#gdl-achievements-section._1a4bwiE4yUR3XXBKI6mKqt ._1Z2eJs9-zNTKcWKy4M-oDE,
+		.LowPerfMode #gdl-achievements-section .gdl-rare-glow-container,
+		.LowPerfMode #gdl-achievements-section .gdl-rare-glow,
+		.LowPerfMode #gdl-achievements-section ._2D_EJk8-jCnfqiwoKkOMVh,
+		.LowPerfMode #gdl-achievements-section ._1Z2eJs9-zNTKcWKy4M-oDE,
+		#gdl-achievement-modal .gdl-rare-no-animation .gdl-rare-glow-container,
+		#gdl-achievement-modal .gdl-rare-no-animation .gdl-rare-glow,
+		#gdl-achievement-modal._1a4bwiE4yUR3XXBKI6mKqt ._2D_EJk8-jCnfqiwoKkOMVh,
+		#gdl-achievement-modal._1a4bwiE4yUR3XXBKI6mKqt ._1Z2eJs9-zNTKcWKy4M-oDE,
+		.LowPerfMode #gdl-achievement-modal .gdl-rare-glow-container,
+		.LowPerfMode #gdl-achievement-modal .gdl-rare-glow,
+		.LowPerfMode #gdl-achievement-modal ._2D_EJk8-jCnfqiwoKkOMVh,
+		.LowPerfMode #gdl-achievement-modal ._1Z2eJs9-zNTKcWKy4M-oDE {
 			animation-play-state: paused !important;
 		}
 
 		@media (prefers-reduced-motion: reduce) {
-			.gdl-rare-glow-container,
-			.gdl-rare-glow,
-			._2D_EJk8-jCnfqiwoKkOMVh,
-			._1Z2eJs9-zNTKcWKy4M-oDE {
+			#gdl-achievements-section .gdl-rare-glow-container,
+			#gdl-achievements-section .gdl-rare-glow,
+			#gdl-achievements-section ._2D_EJk8-jCnfqiwoKkOMVh,
+			#gdl-achievements-section ._1Z2eJs9-zNTKcWKy4M-oDE,
+			#gdl-achievement-modal .gdl-rare-glow-container,
+			#gdl-achievement-modal .gdl-rare-glow,
+			#gdl-achievement-modal ._2D_EJk8-jCnfqiwoKkOMVh,
+			#gdl-achievement-modal ._1Z2eJs9-zNTKcWKy4M-oDE {
 				animation-play-state: paused !important;
 			}
 		}

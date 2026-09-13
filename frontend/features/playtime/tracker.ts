@@ -224,9 +224,17 @@ function applyPlaytimeStatsToDom(
 			container.dataset.gdlPlaytime = '1';
 			container.style.display = 'contents';
 		}
-		const achievement = stats.querySelector<HTMLElement>('[data-gdl-playbar-achievements="1"], #gdl-playbar-achievements');
-		if (achievement?.parentElement === stats) stats.insertBefore(container, achievement);
-		else if (container.parentElement !== stats) stats.appendChild(container);
+		const controller = stats.querySelector<HTMLElement>('#gdl-bp-playbar-controller, [data-gdl-playbar-controller="1"]');
+		const achievement = stats.querySelector<HTMLElement>('[data-gdl-playbar-achievements="1"], #gdl-playbar-achievements, [class*="MiniAchievements"]');
+		if (achievement?.parentElement === stats && achievement.nextSibling && achievement.nextSibling !== container) {
+			stats.insertBefore(container, achievement.nextSibling);
+		} else if (achievement?.parentElement === stats) {
+			stats.insertBefore(container, achievement);
+		} else if (controller?.parentElement === stats && controller !== container) {
+			stats.insertBefore(container, controller);
+		} else if (container.parentElement !== stats) {
+			stats.appendChild(container);
+		}
 		container.dataset.gdlPlaytimeShortcutId = String(shortcutAppId);
 
 		const nativeStats: HTMLElement[] = [];

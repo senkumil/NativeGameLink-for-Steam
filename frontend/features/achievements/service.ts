@@ -43,7 +43,7 @@ function trimRequestCache(): void {
 	}
 }
 
-function publishAchievementUpdate(update: LocalAchievementUpdate): void {
+export function publishAchievementUpdate(update: LocalAchievementUpdate): void {
 	if (update.data && typeof update.data.total === 'number') {
 		syncNativeAchievementProgressCache(update.steamAppId, update.data.unlocked, update.data.total);
 		if (update.stateAppId) {

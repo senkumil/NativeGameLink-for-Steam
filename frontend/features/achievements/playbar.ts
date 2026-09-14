@@ -13,6 +13,7 @@ import {
 } from '../../steam/native-dom';
 import { preserveLinkedPlaybarVisibility } from '../../steam/playbar-visibility';
 import { localAchievementPercent } from './format';
+import { getCachedLocalAchievementsForGame } from './cache';
 import { openLocalAchievementsModal } from './modal';
 
 export function findVisibleTextElement(doc: Document, wanted: string, root?: Node): HTMLElement | null {
@@ -101,7 +102,8 @@ export function ensureLocalPlaybarStat(doc: Document, data: LocalAchievementData
 		const open = (event: Event) => {
 			event.preventDefault();
 			event.stopPropagation();
-			void openLocalAchievementsModal(doc, data).catch(error => backendLog('Achievements modal error: ' + error));
+			const current = (data?.appid ? getCachedLocalAchievementsForGame(data.appid, data.state_appid) : null) || data;
+			void openLocalAchievementsModal(doc, current).catch(error => backendLog('Achievements modal error: ' + error));
 		};
 		let stat = stats.querySelector<HTMLElement>('[data-gdl-playbar-achievements="1"], #gdl-playbar-achievements');
 		if (stat) {

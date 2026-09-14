@@ -14,14 +14,14 @@ export function ensureAchievementModalStyles(doc: Document): void {
 			width: 0;
 			height: 0;
 			z-index: 2147483600 !important;
-			background: rgba(7, 11, 18, 0.45) !important;
+			background: rgba(7, 11, 18, 0.34) !important;
 			backdrop-filter: blur(8px) !important;
 			display: flex !important;
 			align-items: flex-start !important;
 			justify-content: center !important;
-			padding: 46px 34px 20px !important;
+			padding: 46px 34px 0 !important;
 			box-sizing: border-box !important;
-			overflow: visible;
+			overflow: visible !important;
 			font-family: "Motiva Sans", Arial, Helvetica, sans-serif !important;
 			color: #d6d7d8 !important;
 			animation: gdl-lam-fadein 0.15s ease-out;
@@ -43,27 +43,27 @@ ${steamRareAchievementStyles()}
 		.gdl-lam-window {
 			width: min(840px, calc(100% - 96px)) !important;
 			height: 100% !important;
-			max-height: calc(100% - 20px) !important;
-			background: rgba(18, 24, 32, 0.92) !important;
-			border: 1px solid rgba(255, 255, 255, 0.08) !important;
-			box-shadow: 0 18px 48px rgba(0, 0, 0, 0.65) !important;
-			border-radius: 4px !important;
+			background: rgba(18, 24, 32, 0.72) !important;
+			border: 1px solid rgba(255, 255, 255, 0.06) !important;
+			box-shadow: 0 18px 48px rgba(0, 0, 0, 0.58) !important;
+			border-radius: 2px !important;
 			position: relative !important;
 			display: flex !important;
 			flex-direction: column !important;
-			overflow: hidden !important;
+			overflow: visible !important;
 			animation: gdl-lam-popin 0.15s ease-out;
 		}
 		.BasicUI .gdl-lam-head,
 		.gdl-lam-head {
 			padding: 24px 28px 16px !important;
-			background: linear-gradient(180deg, rgba(55, 36, 24, 0.28) 0%, rgba(19, 24, 31, 0.45) 100%) !important;
+			background: linear-gradient(180deg, rgba(55, 36, 24, 0.20) 0%, rgba(19, 24, 31, 0.18) 100%) !important;
 			backdrop-filter: blur(18px) !important;
 			position: relative !important;
-			border-bottom: 1px solid rgba(255, 255, 255, 0.06) !important;
+			border-bottom: 1px solid rgba(255, 255, 255, 0.04) !important;
 			overflow: hidden !important;
 			flex-shrink: 0 !important;
 		}
+		.BasicUI .gdl-lam-head::before,
 		.gdl-lam-head::before {
 			content: '';
 			position: absolute;
@@ -76,16 +76,18 @@ ${steamRareAchievementStyles()}
 			opacity: 0.92;
 			pointer-events: none;
 		}
+		.BasicUI .gdl-lam-head::after,
 		.gdl-lam-head::after {
 			content: '';
 			position: absolute;
 			inset: 0;
-			background: linear-gradient(180deg, rgba(25, 15, 10, 0.22) 0%, rgba(17, 22, 29, 0.55) 100%);
+			background: linear-gradient(180deg, rgba(25, 15, 10, 0.18) 0%, rgba(17, 22, 29, 0.36) 100%);
 			pointer-events: none;
 		}
+		.BasicUI .gdl-lam-head > *,
 		.gdl-lam-head > * {
-			position: relative;
-			z-index: 1;
+			position: relative !important;
+			z-index: 1 !important;
 		}
 		.BasicUI .gdl-lam-title,
 		.gdl-lam-title {
@@ -112,26 +114,26 @@ ${steamRareAchievementStyles()}
 		.BasicUI .gdl-lam-close,
 		.gdl-lam-close {
 			position: absolute !important;
-			right: 18px !important;
-			top: 18px !important;
+			right: -4px !important;
+			top: -8px !important;
 			z-index: 30 !important;
-			width: 36px !important;
-			height: 36px !important;
+			width: 60px !important;
+			height: 60px !important;
 			border-radius: 50% !important;
 			padding: 0 !important;
 			border: 1px solid rgba(176, 190, 207, 0.28) !important;
 			background: rgba(55, 63, 75, 0.88) !important;
 			color: #c5c9ce !important;
-			font-size: 24px !important;
+			font-size: 50px !important;
 			font-weight: 300 !important;
 			line-height: 1 !important;
 			display: flex !important;
 			align-items: center !important;
 			justify-content: center !important;
 			cursor: pointer !important;
-			box-shadow: 0 4px 12px rgba(0, 0, 0, 0.42) !important;
-			transition: background 0.15s ease, color 0.15s ease !important;
 			outline: none !important;
+			box-shadow: 0 10px 22px rgba(0, 0, 0, 0.42) !important;
+			transition: background 0.15s ease, color 0.15s ease !important;
 		}
 		.gdl-lam-close:hover {
 			background: rgba(74, 84, 98, 0.96) !important;
@@ -220,7 +222,7 @@ ${steamRareAchievementStyles()}
 		}
 		.BasicUI .gdl-lam-tab.active,
 		.gdl-lam-tab.active {
-			background: rgba(106, 54, 34, 0.85) !important;
+			background: rgba(106, 54, 34, 0.78) !important;
 			color: #ffffff !important;
 			box-shadow: 0 2px 8px rgba(0, 0, 0, 0.24) !important;
 		}
@@ -253,7 +255,7 @@ ${steamRareAchievementStyles()}
 		.gdl-lam-list {
 			flex: 1 !important;
 			overflow-y: auto !important;
-			padding: 8px 28px 16px !important;
+			padding: 8px 28px 8px !important;
 			background: rgba(18, 24, 32, 0.72) !important;
 		}
 		.BasicUI .gdl-lam-row,

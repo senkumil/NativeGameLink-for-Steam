@@ -13,9 +13,14 @@ import { getCachedGameData } from '../../core/game-data';
 import { getPreferences } from '../../core/preferences';
 import { escapeHtml } from '../../core/text';
 import {
+	broadcastOptimisticAchievementUpdate,
+	cacheLocalAchievements,
+	ensureLocalPlaybarStat,
+	getCachedLocalAchievementsForGame,
 	refreshLocalAchievementUI,
 	resetLocalAchievementToastBaseline,
 	setNextLaunchAchievementReplayEnabled,
+	syncNativeAchievementProgressCache,
 } from '../achievements/runtime';
 import { gdlText, steamLanguageSync } from '../../steam/localization';
 import { openAchievementPickerModal } from './achievement-picker-modal';
@@ -393,6 +398,95 @@ export function bindShortcutAchievementSettings(context: ShortcutAchievementSett
 		render();
 	};
 
+	const optimisticSyncAchievements = (offlineCount: number, onlineCount: number): void => {
+		const targetSteamAppId = context.steamAppId();
+		if (!targetSteamAppId || !/^\d+$/.test(targetSteamAppId)) return;
+		const targetShortcutAppId = context.shortcutAppId() || targetSteamAppId;
+		const totalUnlocked = Math.max(0, offlineCount) + Math.max(0, onlineCount);
+		const base = getCachedLocalAchievementsForGame(targetSteamAppId, targetShortcutAppId);
+		const total = base?.total || totalAchievements || (offlineAchievementsCount + onlineAchievementsCount) || 1;
+
+		let offEarned = 0;
+		let onEarned = 0;
+		const items = (base?.achievements && base.achievements.length > 0)
+			? base.achievements.map(item => {
+				const isOnline = Boolean(item.is_online);
+				let earned = false;
+				if (isOnline) {
+					earned = onEarned < onlineCount;
+					if (earned) onEarned++;
+				} else {
+					earned = offEarned < offlineCount;
+					if (earned) offEarned++;
+				}
+				return { ...item, earned };
+			})
+			: [];
+
+		const nextData: LocalAchievementData = {
+			...(base || {}),
+			found: true,
+			appid: targetSteamAppId,
+			state_appid: targetShortcutAppId || undefined,
+			simulation_enabled: totalUnlocked > 0,
+			simulate_count: offlineCount,
+			simulate_online_count: onlineCount,
+			unlocked: Math.min(total, totalUnlocked),
+			total,
+			achievements: items.length > 0 ? items : (base?.achievements || []),
+		};
+
+		cacheLocalAchievements(nextData, targetSteamAppId, targetShortcutAppId);
+		syncNativeAchievementProgressCache(targetSteamAppId, nextData.unlocked, nextData.total, section.ownerDocument);
+		if (targetShortcutAppId && targetShortcutAppId !== targetSteamAppId) {
+			syncNativeAchievementProgressCache(targetShortcutAppId, nextData.unlocked, nextData.total, section.ownerDocument);
+		}
+		broadcastOptimisticAchievementUpdate({
+			steamAppId: targetSteamAppId,
+			stateAppId: targetShortcutAppId,
+			data: nextData,
+		});
+
+		const targetDocs = new Set<Document>();
+		if (section.ownerDocument) targetDocs.add(section.ownerDocument);
+		try { if (window.top?.document) targetDocs.add(window.top.document); } catch {}
+		try { if (window.opener?.document) targetDocs.add(window.opener.document); } catch {}
+		for (const doc of targetDocs) {
+			ensureLocalPlaybarStat(doc, nextData);
+		}
+	};
+
+	let pendingSave: { next: Partial<typeof options>; reset: boolean } | null = null;
+	let debounceSaveTimer: number | null = null;
+
+	const queueSaveOptions = (next: Partial<typeof options>, delayMs = 0, reset = false): void => {
+		if (debounceSaveTimer !== null) {
+			window.clearTimeout(debounceSaveTimer);
+			debounceSaveTimer = null;
+		}
+		if (delayMs > 0) {
+			debounceSaveTimer = window.setTimeout(() => {
+				debounceSaveTimer = null;
+				void executeSave(next, reset);
+			}, delayMs);
+		} else {
+			void executeSave(next, reset);
+		}
+	};
+
+	const executeSave = async (next: Partial<typeof options>, reset = false): Promise<void> => {
+		if (saving) {
+			pendingSave = { next, reset };
+			return;
+		}
+		await saveOptions(next, reset);
+		if (pendingSave) {
+			const queued = pendingSave;
+			pendingSave = null;
+			void executeSave(queued.next, queued.reset);
+		}
+	};
+
 	const saveOptions = async (next: Partial<typeof options>, reset = false): Promise<void> => {
 		if (loading || saving) return;
 		const candidate = { ...options, ...next };
@@ -446,6 +540,8 @@ export function bindShortcutAchievementSettings(context: ShortcutAchievementSett
 			render();
 			optionsStatus.textContent = gdlText('game_achievement_options_failed', 'Achievement options could not be saved.');
 			optionsStatus.style.color = '#d94126';
+		} finally {
+			saving = false;
 		}
 	};
 
@@ -458,12 +554,15 @@ export function bindShortcutAchievementSettings(context: ShortcutAchievementSett
 			countDisplay.textContent = formatCountText(val);
 		}
 		updateSliderFill(countSlider);
+		optimisticSyncAchievements(val, options.simulate_online_count);
+		queueSaveOptions({ simulate_count: val, simulate: val > 0 || options.simulate_online_count > 0, unlocked_names: undefined }, 250);
 	});
 	countSlider?.addEventListener('change', () => {
 		isSlidingOffline = false;
 		const val = Number(countSlider.value);
 		updateSliderFill(countSlider);
-		void saveOptions({ simulate_count: val, simulate: val > 0 || options.simulate_online_count > 0, unlocked_names: undefined });
+		optimisticSyncAchievements(val, options.simulate_online_count);
+		queueSaveOptions({ simulate_count: val, simulate: val > 0 || options.simulate_online_count > 0, unlocked_names: undefined }, 0);
 	});
 	onlineCountSlider?.addEventListener('pointerdown', () => { isSlidingOnline = true; });
 	onlineCountSlider?.addEventListener('pointerup', () => { isSlidingOnline = false; });
@@ -474,12 +573,15 @@ export function bindShortcutAchievementSettings(context: ShortcutAchievementSett
 			onlineCountDisplay.textContent = formatOnlineCountText(val);
 		}
 		updateSliderFill(onlineCountSlider);
+		optimisticSyncAchievements(options.simulate_count, val);
+		queueSaveOptions({ simulate_online_count: val, simulate: val > 0 || options.simulate_count > 0, unlock_online: val > 0, unlocked_names: undefined }, 250);
 	});
 	onlineCountSlider?.addEventListener('change', () => {
 		isSlidingOnline = false;
 		const val = Number(onlineCountSlider.value);
 		updateSliderFill(onlineCountSlider);
-		void saveOptions({ simulate_online_count: val, simulate: val > 0 || options.simulate_count > 0, unlock_online: val > 0, unlocked_names: undefined });
+		optimisticSyncAchievements(options.simulate_count, val);
+		queueSaveOptions({ simulate_online_count: val, simulate: val > 0 || options.simulate_count > 0, unlock_online: val > 0, unlocked_names: undefined }, 0);
 	});
 	pickerBtn?.addEventListener('click', async () => {
 		if (loading || saving) return;

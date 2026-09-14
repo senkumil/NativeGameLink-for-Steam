@@ -6,7 +6,13 @@ import { openLocalAchievementsModal } from './modal';
 import { detectLinkedSteamAppId } from './navigation';
 import { disposeAchievementNotifications } from './notifications';
 import { ensureLocalPlaybarStat } from './playbar';
-import { clearLocalAchievementRequestCache, fetchLocalAchievementData, subscribeLocalAchievementData } from './service';
+import {
+	clearLocalAchievementRequestCache,
+	fetchLocalAchievementData,
+	publishAchievementUpdate,
+	subscribeLocalAchievementData,
+	type LocalAchievementUpdate,
+} from './service';
 import { renderLocalAchievementSidebar } from './sidebar';
 import { ensureLocalAchievementStyles } from './styles';
 import { clearLocalAchievementGameInfoCache } from './game-info';
@@ -32,6 +38,7 @@ export interface LocalAchievementRefreshTarget {
 const localAchievementDocState = new WeakMap<Document, LocalAchievementDocumentState>();
 const localAchievementDocuments = new Set<Document>();
 export const ACHIEVEMENT_REFRESH_STORAGE_KEY = 'gdl_achievement_refresh_v1';
+export const OPTIMISTIC_ACHIEVEMENT_STORAGE_KEY = 'gdl_optimistic_achievements_v1';
 let achievementRefreshStorageInstalled = false;
 
 interface AchievementRefreshMessage {
@@ -239,7 +246,9 @@ export function installLocalAchievementUI(doc: Document): void {
  * is published immediately, even when Steam's Properties window is a separate
  * document from the Library surface. */
 function performLocalAchievementRefresh(target?: LocalAchievementRefreshTarget): void {
-	clearLocalAchievementCache();
+	if (!target?.steamAppId) {
+		clearLocalAchievementCache();
+	}
 	clearLocalAchievementRequestCache();
 	for (const doc of Array.from(localAchievementDocuments)) localAchievementDocState.get(doc)?.refreshNow();
 	const steamAppId = String(target?.steamAppId ?? '');
@@ -255,8 +264,20 @@ function installAchievementRefreshStorageListener(): void {
 	if (achievementRefreshStorageInstalled) return;
 	achievementRefreshStorageInstalled = true;
 	window.addEventListener('storage', event => {
-		if (event.key !== ACHIEVEMENT_REFRESH_STORAGE_KEY) return;
-		performLocalAchievementRefresh(parseAchievementRefreshMessage(event.newValue));
+		if (event.key === ACHIEVEMENT_REFRESH_STORAGE_KEY) {
+			performLocalAchievementRefresh(parseAchievementRefreshMessage(event.newValue));
+		} else if (event.key === OPTIMISTIC_ACHIEVEMENT_STORAGE_KEY) {
+			try {
+				const payload = JSON.parse(event.newValue || '') as LocalAchievementUpdate | null;
+				if (payload?.steamAppId && payload?.data) {
+					publishAchievementUpdate({
+						steamAppId: String(payload.steamAppId),
+						stateAppId: payload.stateAppId ? String(payload.stateAppId) : '',
+						data: payload.data,
+					});
+				}
+			} catch {}
+		}
 	});
 }
 
@@ -267,6 +288,16 @@ function broadcastLocalAchievementRefresh(target?: LocalAchievementRefreshTarget
 			stateAppId: target?.stateAppId == null ? '' : String(target.stateAppId),
 			nonce: `${Date.now()}:${Math.random()}`,
 		} satisfies AchievementRefreshMessage));
+	} catch {}
+}
+
+export function broadcastOptimisticAchievementUpdate(update: LocalAchievementUpdate): void {
+	publishAchievementUpdate(update);
+	try {
+		localStorage.setItem(OPTIMISTIC_ACHIEVEMENT_STORAGE_KEY, JSON.stringify({
+			...update,
+			nonce: `${Date.now()}:${Math.random()}`,
+		}));
 	} catch {}
 }
 

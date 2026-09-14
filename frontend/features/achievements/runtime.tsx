@@ -33,4 +33,4 @@ export {
 	cacheLocalAchievements,
 	clearLocalAchievementCache,
 } from './cache';
-export { installLocalAchievementUI, disposeLocalAchievementUI, refreshLocalAchievementUI, disposeAchievementRuntime } from './lifecycle';
+export { installLocalAchievementUI, disposeLocalAchievementUI, refreshLocalAchievementUI, broadcastOptimisticAchievementUpdate, disposeAchievementRuntime } from './lifecycle';

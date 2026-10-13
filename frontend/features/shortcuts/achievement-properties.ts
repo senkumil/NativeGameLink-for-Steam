@@ -20,7 +20,6 @@ import {
 	refreshLocalAchievementUI,
 	resetLocalAchievementToastBaseline,
 	setNextLaunchAchievementReplayEnabled,
-	syncNativeAchievementProgressCache,
 } from '../achievements/runtime';
 import { gdlText, steamLanguageSync } from '../../steam/localization';
 import { openAchievementPickerModal } from './achievement-picker-modal';
@@ -437,10 +436,6 @@ export function bindShortcutAchievementSettings(context: ShortcutAchievementSett
 		};
 
 		cacheLocalAchievements(nextData, targetSteamAppId, targetShortcutAppId);
-		syncNativeAchievementProgressCache(targetSteamAppId, nextData.unlocked, nextData.total, section.ownerDocument);
-		if (targetShortcutAppId && targetShortcutAppId !== targetSteamAppId) {
-			syncNativeAchievementProgressCache(targetShortcutAppId, nextData.unlocked, nextData.total, section.ownerDocument);
-		}
 		broadcastOptimisticAchievementUpdate({
 			steamAppId: targetSteamAppId,
 			stateAppId: targetShortcutAppId,

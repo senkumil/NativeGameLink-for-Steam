@@ -13,6 +13,7 @@ export function setPerfLogging(enabled: boolean): void {
 export function perfMark(name: string): void {
 	try {
 		if (typeof performance !== 'undefined' && typeof performance.mark === 'function') {
+			performance.clearMarks(`ngl:${name}`);
 			performance.mark(`ngl:${name}`);
 		}
 	} catch {}
@@ -25,6 +26,7 @@ export function perfMeasure(metricName: string, startMark?: string): number {
 			const measureName = `ngl:${metricName}`;
 			const entry = performance.measure(measureName, start);
 			const duration = entry ? entry.duration : 0;
+			performance.clearMeasures(measureName);
 			if (perfEnabled && duration >= 0.05) {
 				console.log(`${PERF_PREFIX} ${metricName}: ${duration.toFixed(2)}ms`);
 			}

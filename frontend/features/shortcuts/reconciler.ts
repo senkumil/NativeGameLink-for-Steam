@@ -106,7 +106,7 @@ export async function reconcileShortcut(
 			return 'superseded';
 		}
 
-		const artResult = await spoofArtwork(shortcutAppId, steamAppId, data?.name || '', logoUnverified, legacy).catch((): null => null);
+		const artResult = await spoofArtwork(shortcutAppId, steamAppId, data?.name || '', false, legacy).catch((): null => null);
 		const iconResult = await applyOfficialShortcutIcon(shortcutAppId, steamAppId, false).catch((): boolean => false);
 
 		// Post-async guard: verify mapping still matches

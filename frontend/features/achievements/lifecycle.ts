@@ -1,9 +1,10 @@
 import type { LocalAchievementData } from '../../domain/types';
 import { backendLog } from '../../api/backend';
-import { cacheLocalAchievements, clearLocalAchievementCache, localAchievementDataSignature } from './cache';
-import { achievementRuntimeHost, clearAchievementRuntimeHost } from './context';
+import { mutationIsWithinSelector } from '../../core/dom';
+import { cacheLocalAchievements, clearLocalAchievementCache, getCachedLocalAchievementsForShortcut, localAchievementDataSignature } from './cache';
+import { clearAchievementRuntimeHost } from './context';
 import { openLocalAchievementsModal } from './modal';
-import { detectLinkedSteamAppId } from './navigation';
+import { detectLinkedSteamAppId, isCurrentAchievementTarget, linkedAchievementTarget, ownsAchievementSidebar, type LinkedAchievementTarget } from './navigation';
 import { disposeAchievementNotifications } from './notifications';
 import { ensureLocalPlaybarStat } from './playbar';
 import {
@@ -16,6 +17,8 @@ import {
 import { renderLocalAchievementSidebar } from './sidebar';
 import { ensureLocalAchievementStyles } from './styles';
 import { clearLocalAchievementGameInfoCache } from './game-info';
+import { withoutLibrarySidebarMutations } from '../../steam/library-sidebar';
+import { cancelLibrarySidebarWork, runWhenLibrarySidebarIdle } from '../../steam/sidebar-interaction';
 
 interface LocalAchievementDocumentState {
 	timer: number | null;
@@ -26,6 +29,7 @@ interface LocalAchievementDocumentState {
 	pendingRefresh: boolean;
 	signature: string;
 	data: LocalAchievementData | null;
+	target: LinkedAchievementTarget | null;
 	refreshNow: () => void;
 	cleanup: () => void;
 }
@@ -58,13 +62,7 @@ function parseAchievementRefreshMessage(value: string | null): LocalAchievementR
 }
 
 function currentDocShortcutAppId(doc: Document): string | null {
-	const current = achievementRuntimeHost().getCurrentInjectedShortcutAppId();
-	if (current && /^\d+$/.test(current)) return current;
-	const bpRoot = doc.getElementById('gdl-bp-detail-root') as HTMLElement | null;
-	if (bpRoot?.dataset?.gdlShortcutAppId && /^\d+$/.test(bpRoot.dataset.gdlShortcutAppId)) {
-		return bpRoot.dataset.gdlShortcutAppId;
-	}
-	return null;
+	return linkedAchievementTarget(doc)?.shortcutAppId || null;
 }
 
 function isShortcutRunning(shortcutAppId: string | number | null): boolean {
@@ -94,6 +92,12 @@ export function installLocalAchievementUI(doc: Document): void {
 	ensureLocalAchievementStyles(doc);
 
 	let disposed = false;
+	let requestTarget: LinkedAchievementTarget | null = null;
+	let requestRoot: HTMLElement | null = null;
+	let requestEpoch = 0;
+	let ownershipEpoch = 0;
+	let observedIdentity = '';
+	let observedRoot = doc.getElementById('gdl-library-injected');
 	const state: LocalAchievementDocumentState = {
 		timer: null,
 		initialTimer: null,
@@ -103,58 +107,103 @@ export function installLocalAchievementUI(doc: Document): void {
 		pendingRefresh: false,
 		signature: '',
 		data: null,
+		target: null,
 		refreshNow: () => {},
 		cleanup: () => {},
+	};
+	const syncOwnership = (records: readonly MutationRecord[] = []): number => {
+		const target = linkedAchievementTarget(doc);
+		const identity = target ? `${target.steamAppId}:${target.shortcutAppId}` : '';
+		const root = doc.getElementById('gdl-library-injected');
+		const retiredRoot = records.some(record => Array.from(record.removedNodes).some(node => {
+			if (node === observedRoot || (observedRoot && node.contains(observedRoot))) return true;
+			return node.nodeType === 1 && ((node as Element).id === 'gdl-library-injected'
+				|| Boolean((node as Element).querySelector?.('#gdl-library-injected')));
+		}));
+		if (identity !== observedIdentity || retiredRoot || (observedRoot && observedRoot !== root)) ownershipEpoch += 1;
+		observedIdentity = identity;
+		observedRoot = root;
+		return ownershipEpoch;
 	};
 
 	const stopPolling = (): void => {
 		if (state.timer !== null) window.clearInterval(state.timer);
 		state.timer = null;
 	};
-	const applyData = (appid: string, data: LocalAchievementData | null): void => {
-		if (disposed || !data?.found || !Array.isArray(data.achievements) || data.total <= 0) {
+	const applyData = (target: LinkedAchievementTarget, data: LocalAchievementData | null,
+		root = doc.getElementById('gdl-library-injected'), epoch = syncOwnership()): void => {
+		let ownedRoot = root;
+		const current = (): boolean => {
+			if (disposed || syncOwnership(state.observer?.takeRecords?.() || []) !== epoch || !isCurrentAchievementTarget(doc, target)) return false;
+			const mounted = doc.getElementById('gdl-library-injected');
+			if (ownedRoot) return mounted === ownedRoot && ownedRoot.isConnected;
+			// The native header can precede our first metadata mount. Adopt that
+			// first exact linked root without treating hydration as navigation;
+			// later root retirement/replacement advances the epoch above.
+			if (mounted) {
+				if (!ownsAchievementSidebar(doc, target)) return false;
+				ownedRoot = mounted;
+			}
+			// With no metadata root, ensureLocalPlaybarStat still independently
+			// requires the exact shortcut's currently committed native header.
+			return true;
+		};
+		if (!current()) return;
+		const appid = target.steamAppId;
+		if (!data?.found || String(data.metadata_appid || data.appid) !== appid || !Array.isArray(data.achievements) || data.total <= 0) {
 			if (data && state.signature !== `unavailable:${appid}`) {
 				backendLog(`Local achievements bridge returned no data for ${appid}`);
 				state.signature = `unavailable:${appid}`;
 			}
 			return;
 		}
-		const shortcutAppId = currentDocShortcutAppId(doc);
-		cacheLocalAchievements(data, appid, shortcutAppId);
+		cacheLocalAchievements(data, appid, target.shortcutAppId);
 		state.data = data;
-		const signature = localAchievementDataSignature(data);
-		const host = doc.querySelector('#gdl-achievements-content [data-gdl-local-ach="1"]');
-		// A persisted snapshot may already have painted the exact current result
-		// before the backend round trip finishes. Keep that DOM intact so icons do
-		// not disappear/reappear when validation returns identical data.
-		if (!host || host.getAttribute('data-gdl-achievement-signature') !== signature) {
-			renderLocalAchievementSidebar(doc, data);
-		}
-		state.signature = signature;
-		ensureLocalPlaybarStat(doc, data);
+		state.target = target;
+		void runWhenLibrarySidebarIdle(doc, 'linked-achievements', () => {
+			if (!current()) return;
+			const latest = getCachedLocalAchievementsForShortcut(appid, target.shortcutAppId) || data;
+			state.data = latest;
+			const signature = localAchievementDataSignature(latest);
+			const host = doc.querySelector('#gdl-achievements-content [data-gdl-local-ach="1"]');
+			// The service bus and IPC share one latest commit. An identical cached
+			// sidebar stays intact when backend validation completes during scroll.
+			if (ownsAchievementSidebar(doc, target) && (!host || host.getAttribute('data-gdl-achievement-signature') !== signature)) {
+				renderLocalAchievementSidebar(doc, latest);
+			}
+			state.signature = signature;
+			ensureLocalPlaybarStat(doc, latest);
+		}).catch(error => { if (!disposed) backendLog('Local achievements render error: ' + String(error)); });
 	};
 
 	const refresh = async (force = false): Promise<void> => {
 		if (disposed || (!force && doc.hidden) || !doc.body || doc.defaultView?.closed) return;
 		if (state.inFlight) { state.pendingRefresh = true; return; }
-		const appid = detectLinkedSteamAppId(doc);
-		if (!appid) {
+		const epoch = syncOwnership();
+		const target = linkedAchievementTarget(doc);
+		if (!target) {
 			state.signature = '';
 			state.data = null;
+			state.target = null;
 			stopPolling();
 			return;
 		}
 		state.inFlight = true;
+		requestTarget = target;
+		requestEpoch = epoch;
+		const root = requestRoot = doc.getElementById('gdl-library-injected');
 		try {
-			const data = await fetchLocalAchievementData(appid, {
-				stateAppId: currentDocShortcutAppId(doc),
+			const data = await fetchLocalAchievementData(target.steamAppId, {
+				stateAppId: target.shortcutAppId,
 			});
-			if (disposed || detectLinkedSteamAppId(doc) !== appid) return;
-			applyData(appid, data);
+			if (disposed || !isCurrentAchievementTarget(doc, target)) return;
+			applyData(target, data, root, epoch);
 		} catch (error) {
 			if (!disposed) backendLog('Local achievements bridge error: ' + String(error));
 		} finally {
 			state.inFlight = false;
+			requestTarget = null;
+			requestRoot = null;
 			if (state.pendingRefresh && !disposed) {
 				state.pendingRefresh = false;
 				void refresh(true);
@@ -191,8 +240,8 @@ export function installLocalAchievementUI(doc: Document): void {
 
 	const intercept = (event: Event): void => {
 		const target = event.target as Element | null;
-		if (!target?.closest?.('#gdl-achievements-section') || !state.data) return;
-		if (state.data.appid !== detectLinkedSteamAppId(doc)) return;
+		if (!target?.closest?.('#gdl-achievements-section') || !state.data || !state.target) return;
+		if (!isCurrentAchievementTarget(doc, state.target) || !ownsAchievementSidebar(doc, state.target)) return;
 		event.preventDefault();
 		event.stopPropagation();
 		(event as any).stopImmediatePropagation?.();
@@ -206,27 +255,27 @@ export function installLocalAchievementUI(doc: Document): void {
 	doc.addEventListener('keydown', onKeyDown, true);
 	doc.addEventListener('visibilitychange', syncPolling);
 	state.observer = new MutationObserver(mutations => {
-		const isExternalMutation = mutations.some(m => {
-			const target = m.target as HTMLElement | null;
-			if (target?.closest?.('[data-gdl-playbar-achievements], #gdl-library-injected, #gdl-achievements-content, #gdl-playbar-achievements')) {
-				return false;
-			}
-			return true;
-		});
+		const records = withoutLibrarySidebarMutations(mutations);
+		if (!records.length) return;
+		syncOwnership(records);
+		const isExternalMutation = records.some(record => !mutationIsWithinSelector(record,
+			'[id^="gdl-"], [data-gdl-playbar-achievements], [data-gdl-cloud-status], [data-gdl-playtime], [data-gdl-game-info-button]'));
 		if (isExternalMutation) schedulePollingSync();
 	});
 	state.observer.observe(doc.body, { childList: true, subtree: true });
 	const unsubscribeData = subscribeLocalAchievementData(update => {
-		const appid = detectLinkedSteamAppId(doc);
-		if (!appid || appid !== update.steamAppId) return;
-		const shortcutAppId = currentDocShortcutAppId(doc);
-		if (update.stateAppId && shortcutAppId && update.stateAppId !== String(shortcutAppId)) return;
-		applyData(appid, update.data);
+		const target = linkedAchievementTarget(doc);
+		if (!target || target.steamAppId !== update.steamAppId || target.shortcutAppId !== update.stateAppId) return;
+		const sameRequest = state.inFlight && requestTarget?.steamAppId === target.steamAppId
+			&& requestTarget.shortcutAppId === target.shortcutAppId;
+		applyData(target, update.data, sameRequest ? requestRoot : doc.getElementById('gdl-library-injected'),
+			sameRequest ? requestEpoch : syncOwnership());
 	});
 	syncPolling();
 	state.cleanup = () => {
 		if (disposed) return;
 		disposed = true;
+		cancelLibrarySidebarWork(doc, 'linked-achievements');
 		stopPolling();
 		if (state.syncTimer !== null) window.clearTimeout(state.syncTimer);
 		state.syncTimer = null;

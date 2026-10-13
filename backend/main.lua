@@ -53,6 +53,7 @@ local LAZY_MODULES = {
     store = "store",
     shortcut_detection = "shortcut_detection",
     shortcut_registry = "shortcut_registry",
+    shortcut_logo_inventory = "shortcut_logo_inventory",
     community = "community",
     news = "news",
     social = "social",
@@ -102,6 +103,7 @@ function get_all_mappings() return module("mappings").get_all_mappings() end
 function fetch_game_data(steam_app_id, language) return module("store").fetch_game_data(steam_app_id, language) end
 function get_shortcut_details(shortcut_app_id, title) return module("shortcut_detection").get_shortcut_details(shortcut_app_id, title) end
 function list_shortcuts() return module("shortcut_registry").list() end
+function read_shortcut_logo_inventory(request_json) return module("shortcut_logo_inventory").read(request_json) end
 function detect_game_candidates(request_json) return module("shortcut_detection").detect_game_candidates(request_json) end
 function detect_game_candidates_local(request_json) return module("shortcut_detection").detect_game_candidates_local(request_json) end
 function fetch_news(steam_app_id, language) return module("news").fetch_news(steam_app_id, language) end

@@ -21,6 +21,7 @@ const app = new App(3000000000), native = new App(570);
 const method = App.prototype.BIsShortcut;
 const getter = Object.getOwnPropertyDescriptor(App.prototype, 'controller_support').get;
 const doc = { body: { isConnected: true }, defaultView: {}, querySelector: () => null, getElementById: () => null };
+doc.defaultView.document = doc;
 let completeBatch;
 const mocks = {
   PropertyPatches: patchContext.exports.PropertyPatches, backendLog: () => {},
@@ -30,9 +31,13 @@ const mocks = {
   getSteamAppStore: () => ({ m_mapApps: new Map([[app.appid, app], [native.appid, native]]) }),
   getBigPictureMappedShortcuts: () => [{ id: app.appid, title: app.display_name, steamAppId: '10' }],
   collectMappedShortcutApps: () => [app], toSignedShortcutAppId: id => id | 0,
+  steamUIModeService: { isGamepadUI: () => true }, isPublicSteamLibraryRoute: () => false, libraryRouteIdentity: () => 'bp-home',
   findMappingForTitle: () => null, getShortcutAppById: () => app,
   fetchPlaytimeStatsBatch: () => new Promise(resolve => { completeBatch = resolve; }),
 };
+const schedulerContext = vm.createContext({ exports: {}, require: () => mocks, setTimeout, clearTimeout });
+vm.runInContext(compile('frontend/features/big-picture/rerender-scheduler.ts'), schedulerContext);
+mocks.GamepadRerenderScheduler = schedulerContext.exports.GamepadRerenderScheduler;
 const context = vm.createContext({ exports: {}, require: () => mocks, window: {}, setTimeout, clearTimeout });
 vm.runInContext(compile('frontend/features/big-picture/runtime.ts'), context);
 const runtime = context.exports;

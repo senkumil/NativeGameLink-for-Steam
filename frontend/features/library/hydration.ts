@@ -6,10 +6,12 @@ import {
 	getFriendData,
 	hydrateFriendPersonas,
 	populateActivityFeed,
+	activityFeedContentSignature,
 	applyUnifiedActivityFeed,
 	setupPostDeleteHandlers,
 } from './social';
 import { GDL_INJECTED } from './constants';
+import { runWhenLibrarySidebarIdle } from '../../steam/sidebar-interaction';
 
 export interface LinkedRenderSession {
 	doc: Document;
@@ -19,51 +21,60 @@ export interface LinkedRenderSession {
 	isCurrent: () => boolean;
 }
 
+const HYDRATION_QUIET_MS = 30_000;
+type MountedHydration = { key: string; input: string; checkedAt: number; session: LinkedRenderSession };
+const mountedHydrations = new WeakMap<HTMLElement, MountedHydration>();
+
 function ownedActivityFeed(session: LinkedRenderSession): HTMLElement | null {
 	const root = session.doc.getElementById(GDL_INJECTED) as HTMLElement | null;
 	const feed = session.doc.getElementById('gdl-activity-feed') as HTMLElement | null;
 	if (!root || !feed || !root.contains(feed) || root.dataset.gdlSteamAppId !== session.steamAppId) return null;
-	if (session.shortcutAppId && root.dataset.gdlShortcutAppId !== session.shortcutAppId) return null;
-	if (session.isCurrent()) return feed;
-	// Generation may have advanced while staying on the exact same game/route
-	// (e.g. mapping refresh debounce, modal dismiss, or sidebar navigation click).
-	// If the current root is still connected and belongs to this game, allow hydration.
-	const liveAppId = root.dataset.gdlSteamAppId;
-	if (liveAppId === session.steamAppId && root.isConnected) return feed;
-	return null;
+	if ((root.dataset.gdlShortcutAppId || null) !== session.shortcutAppId) return null;
+	return root.isConnected && session.isCurrent() ? feed : null;
+}
+
+/** Only fields consumed by secondary surfaces. Fresh core metadata may change
+ * these without replacing the mounted root, and must still reach the feed. */
+function hydrationInput(data: SteamGameData): string {
+	return JSON.stringify([data.name, data.header_image, data.is_delisted === true,
+		data.release_date?.date, data.release_date?.coming_soon,
+		data.screenshots?.slice(0, 30).map(item => [item.path_thumbnail, item.path_full])]);
 }
 
 /** Hydrate every non-core surface independently. None of these requests is
  * allowed to delay or rebuild the metadata page, and every DOM write is owned
  * by the exact document/AppID/shortcut/generation captured by the caller. */
 export function hydrateLinkedSecondaryResources(session: LinkedRenderSession, data: SteamGameData): void {
-	const activityGuard = {
-		isCurrent: () => {
-			if (session.isCurrent()) return true;
-			const root = session.doc.getElementById(GDL_INJECTED) as HTMLElement | null;
-			return Boolean(root?.isConnected && root.dataset.gdlSteamAppId === session.steamAppId);
-		},
-		shortcutAppId: session.shortcutAppId,
-	};
+	const initialFeed = ownedActivityFeed(session);
+	const root = session.doc.getElementById(GDL_INJECTED) as HTMLElement | null;
+	if (!root || !initialFeed) return;
+	const key = JSON.stringify([session.steamAppId, session.shortcutAppId, session.language.toLowerCase()]);
+	const input = hydrationInput(data);
+	const previous = mountedHydrations.get(root);
+	if (previous?.key === key && previous.input === input && Date.now() - previous.checkedAt < HYDRATION_QUIET_MS) {
+		// Observer passes can advance a generation on this exact mount. Keep the
+		// newest guard while sharing the original network work and DOM callbacks.
+		previous.session = session;
+		return;
+	}
+	const state: MountedHydration = { key, input, checkedAt: Date.now(), session };
+	mountedHydrations.set(root, state);
+	const isCurrent = (): boolean => mountedHydrations.get(root) === state
+		&& session.doc.getElementById(GDL_INJECTED) === root
+		&& ownedActivityFeed(state.session) === initialFeed;
+	const activityGuard = { isCurrent, shortcutAppId: session.shortcutAppId };
 	void getNews(session.steamAppId, session.language, data).then(newsItems => {
-		const feed = ownedActivityFeed(session);
-		if (!feed) return;
-		const signature = newsItemsSignature(newsItems);
-		applyUnifiedActivityFeed(
-			feed,
-			session.steamAppId,
-			session.shortcutAppId,
-			newsItems,
-			data.header_image || '',
-		);
-		feed.dataset.gdlNewsSignature = signature;
-		setupPostDeleteHandlers(
-			session.doc,
-			session.steamAppId,
-			session.shortcutAppId,
-			newsItems,
-			data.header_image || '',
-		);
+		if (!isCurrent()) return;
+		void runWhenLibrarySidebarIdle(session.doc, 'secondary-news', () => {
+			if (!isCurrent()) return;
+			const signature = newsItemsSignature(newsItems);
+			const header = data.header_image || '';
+			if (initialFeed.dataset.gdlFeedSignature !== activityFeedContentSignature(session.steamAppId, session.shortcutAppId, newsItems, header)) {
+				applyUnifiedActivityFeed(initialFeed, session.steamAppId, session.shortcutAppId, newsItems, header);
+			}
+			initialFeed.dataset.gdlNewsSignature = signature;
+			setupPostDeleteHandlers(session.doc, session.steamAppId, session.shortcutAppId, newsItems, header);
+		}).catch(error => backendLog('News render error: ' + String(error)));
 		void populateActivityFeed(
 			session.doc,
 			session.steamAppId,
@@ -75,13 +86,13 @@ export function hydrateLinkedSecondaryResources(session: LinkedRenderSession, da
 	}).catch(error => backendLog('News hydration error: ' + String(error)));
 
 	void getFriendData(session.steamAppId).then(async (friendResult): Promise<void> => {
-		if (!session.isCurrent()) return;
+		if (!isCurrent()) return;
 		await hydrateFriendPersonas(
 			session.doc,
 			friendResult.data,
 			session.steamAppId,
 			data.name || '',
-			{ isCurrent: session.isCurrent, shortcutAppId: session.shortcutAppId },
+			{ isCurrent, shortcutAppId: session.shortcutAppId },
 		);
 	}).catch(error => backendLog('Friends hydration error: ' + String(error)));
 
@@ -89,7 +100,7 @@ export function hydrateLinkedSecondaryResources(session: LinkedRenderSession, da
 		session.doc,
 		data,
 		() => getCommunityContent(session.steamAppId, session.language).catch((): CommunityContentItem[] => []),
-		session.isCurrent,
+		isCurrent,
 	);
 }
 

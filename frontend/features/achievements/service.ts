@@ -2,7 +2,6 @@ import { fetchLocalAchievementsBackend } from '../../api/backend';
 import { getPreferences, simulatedAchievementsEnabled } from '../../core/preferences';
 import type { LocalAchievementData } from '../../domain/types';
 import { steamLanguageSync } from '../../steam/localization';
-import { syncNativeAchievementProgressCache } from './progress';
 
 export interface LocalAchievementRequestOptions {
 	stateAppId?: string | number | null;
@@ -44,12 +43,8 @@ function trimRequestCache(): void {
 }
 
 export function publishAchievementUpdate(update: LocalAchievementUpdate): void {
-	if (update.data && typeof update.data.total === 'number') {
-		syncNativeAchievementProgressCache(update.steamAppId, update.data.unlocked, update.data.total);
-		if (update.stateAppId) {
-			syncNativeAchievementProgressCache(update.stateAppId, update.data.unlocked, update.data.total);
-		}
-	}
+	// Local progress belongs to plugin-owned controls. Steam's shared progress
+	// cache also feeds its virtual game list, including its initial hydration.
 	for (const listener of Array.from(updateListeners)) {
 		try { listener(update); } catch {}
 	}

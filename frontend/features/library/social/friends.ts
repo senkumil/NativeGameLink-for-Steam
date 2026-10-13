@@ -7,10 +7,18 @@ import { backendLog, fetchFriendPersonasBackend } from '../../../api/backend';
 import { extractSteamIdFromValue, fetchFriendsGameplayInfo } from '../../../steam/social';
 import { cachePersona, getCachedPersona, hasCachedPersona } from './personas';
 import { buildNativeSidebarSection, discoverNativeLibraryLayout } from '../layout';
+import { runWhenLibrarySidebarIdle } from '../../../steam/sidebar-interaction';
 
 const DEFAULT_AVATAR = 'https://avatars.cloudflare.steamstatic.com/fef49e7fa7e1997310d705b2a6158ff8dc1cdfeb_medium.jpg';
 
 const friendRequests = new Map<string, Promise<{ html: string; data: FriendCategories | null }>>();
+const emptyFriendResults = new Map<string, { expiresAt: number; data: FriendCategories | null }>();
+let friendCacheGeneration = 0;
+
+export function clearEmptyFriendResults(): void {
+	friendCacheGeneration += 1;
+	emptyFriendResults.clear();
+}
 
 function getSteamClient(): any {
 	return (window as any).SteamClient
@@ -38,10 +46,23 @@ export function friendDataSignature(data: FriendCategories | null | undefined): 
 
 export async function getFriendData(steamAppId: string): Promise<{ html: string; data: FriendCategories | null }> {
 	const cachedFriends = cacheGet<FriendCategories>('friends_' + steamAppId, CACHE_TTL.friends);
-	if (cachedFriends) return { html: '', data: cachedFriends };
+	if (cachedFriends) { emptyFriendResults.delete(steamAppId); return { html: '', data: cachedFriends }; }
+	const empty = emptyFriendResults.get(steamAppId);
+	if (empty && empty.expiresAt > Date.now()) return { html: '', data: empty.data };
+	emptyFriendResults.delete(steamAppId);
 	const active = friendRequests.get(steamAppId);
 	if (active) return active;
-	const request = loadFriendData(steamAppId).finally(() => {
+	const generation = friendCacheGeneration;
+	const request = loadFriendData(steamAppId).then(result => {
+		if (generation === friendCacheGeneration && (!result.data || result.data.totalCount === 0)) {
+			// Steam can legitimately have no friends for this app, or temporarily
+			// lack its social store. Neither case should restart RPC/module scans
+			// for every mutation of a newly selected shortcut.
+			emptyFriendResults.set(steamAppId, { data: result.data, expiresAt: Date.now() + (result.data ? 30_000 : 10_000) });
+			while (emptyFriendResults.size > 128) emptyFriendResults.delete(emptyFriendResults.keys().next().value!);
+		}
+		return result;
+	}).finally(() => {
 		if (friendRequests.get(steamAppId) === request) friendRequests.delete(steamAppId);
 	});
 	friendRequests.set(steamAppId, request);
@@ -285,10 +306,11 @@ export async function hydrateFriendPersonas(
 	if (!guard.isCurrent()) return;
 
 	if (!friendData || friendData.totalCount <= 0) {
-		const section = doc.getElementById('gdl-friends-section');
-		if (section && (section.dataset.gdlSteamAppId === steamAppId || !section.dataset.gdlSteamAppId)) {
-			section.remove();
-		}
+		await runWhenLibrarySidebarIdle(doc, 'secondary-friends', () => {
+			if (!guard.isCurrent()) return;
+			const section = doc.getElementById('gdl-friends-section');
+			if (section && (section.dataset.gdlSteamAppId === steamAppId || !section.dataset.gdlSteamAppId)) section.remove();
+		});
 		return;
 	}
 
@@ -315,43 +337,46 @@ export async function hydrateFriendPersonas(
 
 	if (!guard.isCurrent()) return;
 
-	const renderedHtml = renderFriendsSection(friendData, steamAppId, gameName, personas);
-	let section = doc.getElementById('gdl-friends-section');
-	let target = doc.getElementById('gdl-friends-content');
-	const root = doc.getElementById('gdl-library-injected');
+	await runWhenLibrarySidebarIdle(doc, 'secondary-friends', () => {
+		if (!guard.isCurrent()) return;
+		const renderedHtml = renderFriendsSection(friendData, steamAppId, gameName, personas);
+		let section = doc.getElementById('gdl-friends-section');
+		let target = doc.getElementById('gdl-friends-content');
+		const root = doc.getElementById('gdl-library-injected');
 
-	if (!section) {
-		const notice = root || doc.querySelector('[data-gdl-notice]') || doc.getElementById('gdl-main-content-stack');
-		if (!notice) return;
-		const layout = discoverNativeLibraryLayout(doc, notice);
-		if (layout.sidebarColumn) {
-			section = buildNativeSidebarSection(doc, layout, {
-				sectionId: 'gdl-friends-section',
-				headerText: loc('AppDetails_SectionTitle_Friends', 'Friends who play'),
-				innerId: 'gdl-friends-content',
-				innerHtml: renderedHtml,
-				cloneInnerClass: false,
-			});
-			if (section) {
-				section.dataset.gdlSteamAppId = steamAppId;
-				const achievementsNode = doc.getElementById('gdl-achievements-section');
-				const tradingCardsNode = doc.getElementById('gdl-trading-cards-section');
-				const dlcNode = doc.getElementById('gdl-dlc-section');
-				const nextNode = achievementsNode || tradingCardsNode || dlcNode;
-				if (nextNode && nextNode.parentElement === layout.sidebarColumn) {
-					layout.sidebarColumn.insertBefore(section, nextNode);
-				} else {
-					layout.sidebarColumn.insertBefore(section, layout.sidebarColumn.firstChild);
+		if (!section) {
+			const notice = root || doc.querySelector('[data-gdl-notice]') || doc.getElementById('gdl-main-content-stack');
+			if (!notice) return;
+			const layout = discoverNativeLibraryLayout(doc, notice);
+			if (layout.sidebarColumn) {
+				section = buildNativeSidebarSection(doc, layout, {
+					sectionId: 'gdl-friends-section',
+					headerText: loc('AppDetails_SectionTitle_Friends', 'Friends who play'),
+					innerId: 'gdl-friends-content',
+					innerHtml: renderedHtml,
+					cloneInnerClass: false,
+				});
+				if (section) {
+					section.dataset.gdlSteamAppId = steamAppId;
+					const achievementsNode = doc.getElementById('gdl-achievements-section');
+					const tradingCardsNode = doc.getElementById('gdl-trading-cards-section');
+					const dlcNode = doc.getElementById('gdl-dlc-section');
+					const nextNode = achievementsNode || tradingCardsNode || dlcNode;
+					if (nextNode && nextNode.parentElement === layout.sidebarColumn) {
+						layout.sidebarColumn.insertBefore(section, nextNode);
+					} else {
+						layout.sidebarColumn.insertBefore(section, layout.sidebarColumn.firstChild);
+					}
+					target = doc.getElementById('gdl-friends-content');
 				}
-				target = doc.getElementById('gdl-friends-content');
 			}
 		}
-	}
 
-	if (!target || !section || !root) return;
-	if (section.dataset.gdlSteamAppId !== steamAppId || root.dataset.gdlSteamAppId !== steamAppId) return;
-	if (guard.shortcutAppId && root.dataset.gdlShortcutAppId && root.dataset.gdlShortcutAppId !== guard.shortcutAppId) return;
+		if (!target || !section || !root) return;
+		if (section.dataset.gdlSteamAppId !== steamAppId || root.dataset.gdlSteamAppId !== steamAppId) return;
+		if (guard.shortcutAppId && root.dataset.gdlShortcutAppId && root.dataset.gdlShortcutAppId !== guard.shortcutAppId) return;
 
-	target.innerHTML = renderedHtml;
-	section.style.display = '';
+		target.innerHTML = renderedHtml;
+		section.style.display = '';
+	});
 }

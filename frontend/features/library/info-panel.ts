@@ -1,10 +1,12 @@
 import type { NativeGameInfo } from '../../domain/types';
 import { escapeHtml } from '../../core/text';
+import { mutationIsWithinSelector } from '../../core/dom';
 import {
 	GAME_INFO_CLASS_MODULE,
 	GAME_INFO_OUTER_CLASS_MODULE,
 	PLAYBAR_CLASS_MODULE,
 	PLAYBAR_CLASSES,
+	LIBRARY_SIDEBAR_CLASSES,
 } from '../../steam/css';
 import type { CssClasses } from '../../steam/css';
 import { gdlText, loc } from '../../steam/localization';
@@ -16,8 +18,11 @@ import {
 	isRenderedElement,
 	removeCssModuleClass,
 } from '../../steam/native-dom';
-import { isPublicSteamLibraryRoute } from './native-route';
+import { isPublicSteamLibraryRoute, routedSteamAppId } from './native-route';
+import { isCurrentInfoShortcut, nativeInfoButtonContainers } from './info-button-target';
+import { syncAchievementPlaybarSpace } from '../../steam/achievement-playbar-space';
 import { nativeArrowSvg, nativeFeatureVisual } from './feature-icons';
+import { withoutLibrarySidebarMutations, isLibrarySidebarNode } from '../../steam/library-sidebar';
 
 const GDL_INFO_PANEL_EXPANDED_KEY = 'gdl_info_panel_expanded';
 
@@ -48,6 +53,7 @@ function scrollToTopSvg(): string {
 }
 
 const infoScrollCleanups = new WeakMap<Document, () => void>();
+const infoButtonSessions = new WeakMap<Document, { shortcutId: number; key: string; sync: () => void }>();
 const infoKnownScrollTargets = new WeakMap<Document, Set<HTMLElement>>();
 const SCROLL_TOP_BUTTON_THRESHOLD = 120;
 
@@ -93,10 +99,14 @@ function collectMainScrollTargets(doc: Document, knownTargets?: Iterable<HTMLEle
 	const view = doc.defaultView;
 	const targets = new Set<HTMLElement>();
 	const anchors = mainScrollAnchors(doc);
-	const detailsLeft = rightDetailsLeftFromAnchors(doc, anchors);
+	const sidebarRoots = elementsWithCssModuleClass(doc, LIBRARY_SIDEBAR_CLASSES().Container);
 
 	const consider = (current: HTMLElement): void => {
-		if (!current.isConnected) return;
+		if (!current.isConnected || isLibrarySidebarNode(current)
+			|| sidebarRoots.some(sidebar => current.contains(sidebar))) return;
+		// Geometry alone can mistake the left list or a common Library ancestor
+		// for the details scroller. Require a real current linked-page anchor.
+		if (!anchors.some(anchor => current === anchor || current.contains(anchor))) return;
 		const style = view?.getComputedStyle(current);
 		const overflowY = style?.overflowY || '';
 		const hasScrollableRange = current.scrollHeight > current.clientHeight + 8;
@@ -104,9 +114,7 @@ function collectMainScrollTargets(doc: Document, knownTargets?: Iterable<HTMLEle
 		if (!hasScrollableRange || (!permitsScroll && current.scrollTop <= 0)) return;
 		const rect = current.getBoundingClientRect();
 		if (rect.width <= 0 || rect.height <= 0) return;
-		const containsRightAnchor = anchors.some(anchor => current === anchor || current.contains(anchor));
-		const belongsToRightPane = rect.right > detailsLeft + 80 && rect.width >= 360 && rect.height >= 180;
-		if (containsRightAnchor || belongsToRightPane) targets.add(current);
+		targets.add(current);
 	};
 
 	for (const anchor of anchors) {
@@ -122,7 +130,7 @@ function collectMainScrollTargets(doc: Document, knownTargets?: Iterable<HTMLEle
 	}
 
 	const scrolling = doc.scrollingElement;
-	if (scrolling instanceof HTMLElement && scrolling.scrollHeight > scrolling.clientHeight + 8) targets.add(scrolling);
+	if (scrolling instanceof HTMLElement) consider(scrolling);
 	return Array.from(targets);
 }
 
@@ -230,61 +238,30 @@ function shouldShowScrollTopButton(doc: Document, knownTargets?: Iterable<HTMLEl
 export function resetMainScrollToTop(doc: Document): void {
 	try {
 		for (const target of collectMainScrollTargets(doc)) target.scrollTop = 0;
-		const scrolling = doc.scrollingElement;
-		if (scrolling instanceof HTMLElement) scrolling.scrollTop = 0;
-		doc.defaultView?.scrollTo(0, 0);
 	} catch {}
 }
 
-function scrollMainContentToTop(doc: Document, knownTargets?: Iterable<HTMLElement>): void {
+function scrollMainContentToTop(doc: Document, knownTargets?: Iterable<HTMLElement>, isCurrent: () => boolean = () => true): void {
 	const learnedTargets = knownTargets || infoKnownScrollTargets.get(doc);
 	const view = doc.defaultView;
-
-	const allTargets = new Set<HTMLElement>();
-	for (const scroller of Array.from(doc.querySelectorAll<HTMLElement>('[class*="ScrollContainer"], [class*="scrollContainer"], [class*="appDetailsPage"], [class*="Body"], [class*="_3lDczhulqraStjCitLYJ1K"]'))) {
-		allTargets.add(scroller);
-	}
+	const routeId = routedSteamAppId(doc);
+	const current = (): boolean => isCurrent() && doc.defaultView === view && !view?.closed
+		&& routedSteamAppId(doc) === routeId && !isPublicSteamLibraryRoute(doc);
+	if (!current()) return;
 	for (const target of collectMainScrollTargets(doc, learnedTargets)) {
-		allTargets.add(target);
-	}
-	for (const el of Array.from(doc.querySelectorAll<HTMLElement>('*'))) {
-		if (el.scrollTop > 0) allTargets.add(el);
-	}
-	const scrolling = doc.scrollingElement;
-	if (scrolling instanceof HTMLElement) allTargets.add(scrolling);
-
-	for (const target of allTargets) {
 		try {
 			target.scrollTo({ top: 0, behavior: 'smooth' });
 		} catch {
 			target.scrollTop = 0;
 		}
 	}
-	try {
-		view?.scrollTo({ top: 0, behavior: 'smooth' });
-	} catch {}
-
 	if (!view) return;
-
-	// Follow-up passes ensure any remaining offset is cleanly cleared so it reaches the very top (0).
-	view.setTimeout(() => {
-		for (const target of allTargets) target.scrollTop = 0;
-		for (const el of Array.from(doc.querySelectorAll<HTMLElement>('*'))) {
-			if (el.scrollTop > 0) el.scrollTop = 0;
-		}
-		if (scrolling instanceof HTMLElement) scrolling.scrollTop = 0;
-		view.scrollTo(0, 0);
-	}, 280);
-
-	view.setTimeout(() => {
-		for (const target of allTargets) target.scrollTop = 0;
+	const settle = (): void => {
+		if (!current()) return;
 		for (const target of collectMainScrollTargets(doc, learnedTargets)) target.scrollTop = 0;
-		for (const el of Array.from(doc.querySelectorAll<HTMLElement>('*'))) {
-			if (el.scrollTop > 0) el.scrollTop = 0;
-		}
-		if (scrolling instanceof HTMLElement) scrolling.scrollTop = 0;
-		view.scrollTo(0, 0);
-	}, 520);
+	};
+	view.setTimeout(settle, 280);
+	view.setTimeout(settle, 520);
 }
 
 
@@ -320,6 +297,7 @@ function installInfoButtonScrollBehavior(
 	doc: Document,
 	nativeWrapperClass = '',
 	ensureButtons?: () => void,
+	isCurrent: () => boolean = () => true,
 ): void {
 	// Steam rebuilds the sticky playbar while scrolling. Keep both the scroll
 	// detector and our injected Info/Back-to-top control synchronized with the
@@ -336,10 +314,11 @@ function installInfoButtonScrollBehavior(
 		// A sticky-playbar rebuild can leave the old button connected in an
 		// offscreen container while creating a new visible AppButtonsContainer.
 		// Always resync the current containers; syncButtons() is idempotent.
-		ensureButtons?.();
+		if (isCurrent()) ensureButtons?.();
 	};
 
 	const applyMode = (active: boolean): void => {
+		if (!isCurrent()) return;
 		ensureButtonNodes();
 		const topCapsule = doc.querySelector<HTMLElement>('[class*="TopCapsule"], [class*="topCapsule"], [class*="HeroContainer"], [class*="HeroAndLogo"]');
 		const heroVisible = topCapsule && isRenderedElement(doc, topCapsule) && topCapsule.getBoundingClientRect().bottom > 80;
@@ -359,6 +338,7 @@ function installInfoButtonScrollBehavior(
 
 	const update = (): void => {
 		frame = 0;
+		if (!isCurrent()) return;
 		for (const target of Array.from(knownScrollTargets)) {
 			if (!target.isConnected) knownScrollTargets.delete(target);
 		}
@@ -366,6 +346,7 @@ function installInfoButtonScrollBehavior(
 		applyMode(active);
 	};
 	const queueUpdate = (): void => {
+		if (!isCurrent()) return;
 		if (frame || !view) {
 			if (!view) update();
 			return;
@@ -373,6 +354,7 @@ function installInfoButtonScrollBehavior(
 		frame = view.requestAnimationFrame(update);
 	};
 	const queueSettledUpdate = (): void => {
+		if (!isCurrent()) return;
 		queueUpdate();
 		if (!view) return;
 		if (settleTimer) view.clearTimeout(settleTimer);
@@ -382,7 +364,7 @@ function installInfoButtonScrollBehavior(
 		}, 140);
 	};
 	const scheduleEnsureButtons = (): void => {
-		if (!view || ensureTimer) return;
+		if (!isCurrent() || !view || ensureTimer) return;
 		ensureTimer = view.setTimeout(() => {
 			ensureTimer = 0;
 			ensureButtonNodes();
@@ -391,7 +373,9 @@ function installInfoButtonScrollBehavior(
 	};
 
 	const onScroll = (rawEvent: Event): void => {
+		if (!isCurrent()) return;
 		const target = rawEvent.target;
+		if (isLibrarySidebarNode(target)) return;
 		if (target instanceof HTMLElement) {
 			const anchors = mainScrollAnchors(doc);
 			const rect = target.getBoundingClientRect();
@@ -402,7 +386,9 @@ function installInfoButtonScrollBehavior(
 	};
 
 	const onWheel = (rawEvent: Event): void => {
+		if (!isCurrent()) return;
 		const event = rawEvent as WheelEvent;
+		if (isLibrarySidebarNode(event.target)) return;
 		// Ignore the left library list. The sticky playbar belongs to the right
 		// details pane, so a wheel gesture left of its content boundary must not
 		// affect the Info/Back-to-top state.
@@ -420,30 +406,16 @@ function installInfoButtonScrollBehavior(
 	const MutationObserverCtor = view?.MutationObserver;
 	const mutationObserver = typeof MutationObserverCtor === 'function'
 		? new MutationObserverCtor((mutations) => {
+			const records = withoutLibrarySidebarMutations(mutations)
+				.filter(record => !mutationIsWithinSelector(record, '[id^="gdl-"], [data-gdl-game-info-button], [data-gdl-injected]'));
+			if (records.length === 0) return;
 			if (isPublicSteamLibraryRoute(doc)) {
 				cleanup();
 				removeNativeInfoButton(doc);
 				removeNativeInfoPanel(doc);
 				return;
 			}
-			const hasExternalMutations = mutations.some(m => {
-				const target = m.target as HTMLElement | null;
-				if (target?.closest?.('[data-gdl-game-info-button], #gdl-game-info-panel, [data-gdl-injected]')) return false;
-				for (let i = 0; i < m.addedNodes.length; i++) {
-					const node = m.addedNodes[i] as HTMLElement;
-					if (node.nodeType === 1 && !node.closest?.('[data-gdl-game-info-button], #gdl-game-info-panel, [data-gdl-injected]')) {
-						return true;
-					}
-				}
-				for (let i = 0; i < m.removedNodes.length; i++) {
-					const node = m.removedNodes[i] as HTMLElement;
-					if (node.nodeType === 1 && !node.closest?.('[data-gdl-game-info-button], #gdl-game-info-panel, [data-gdl-injected]')) {
-						return true;
-					}
-				}
-				return false;
-			});
-			if (!hasExternalMutations) return;
+			if (!isCurrent()) return;
 			scheduleEnsureButtons();
 			queueUpdate();
 		})
@@ -713,14 +685,17 @@ export function ensureNativeInfoPanel(doc: Document, model: NativeGameInfo): HTM
 		return null;
 	}
 	let panel = doc.getElementById('gdl-game-info-panel') as HTMLElement | null;
+	const shortcutId = String(routedSteamAppId(doc) || '');
+	let created = false;
 	const signature = nativeInfoSignature(model);
-	if (panel && panel.dataset.gameKey !== model.key) {
+	if (panel && (panel.dataset.gameKey !== model.key || panel.dataset.gdlShortcutAppId !== shortcutId)) {
 		removeNativeInfoPanel(doc, true);
 		panel = null;
 	} else if (panel && panel.dataset.signature !== signature) {
 		updateNativeInfoPanelInPlace(doc, panel, model, signature);
 	}
 	if (!panel) {
+		created = true;
 		const infoModule = GAME_INFO_CLASS_MODULE();
 		const outerModule = GAME_INFO_OUTER_CLASS_MODULE();
 		const nativeLayout = infoModule.native && outerModule.native;
@@ -733,6 +708,7 @@ export function ensureNativeInfoPanel(doc: Document, model: NativeGameInfo): HTM
 			: 'gdl-game-info-fallback';
 		panel.innerHTML = nativeInfoPanelHtml(model, nativeLayout);
 		panel.dataset.gameKey = model.key;
+		panel.dataset.gdlShortcutAppId = shortcutId;
 		panel.dataset.signature = signature;
 		panel.setAttribute('role', 'region');
 		panel.setAttribute('aria-label', loc('AppDetails_GameInfo', gdlText('game_information', 'Game information')));
@@ -760,7 +736,7 @@ export function ensureNativeInfoPanel(doc: Document, model: NativeGameInfo): HTM
 	}
 	const linkBar = doc.getElementById('gdl-link-bar');
 	if (linkBar?.parentElement && panel.nextElementSibling !== linkBar) linkBar.parentElement.insertBefore(panel, linkBar);
-	setNativeInfoExpanded(doc, model.key, false, false, false);
+	if (created) setNativeInfoExpanded(doc, model.key, false, false, false);
 	return panel;
 }
 
@@ -769,6 +745,13 @@ export function ensureNativeInfoButton(doc: Document, model: NativeGameInfo): vo
 		removeNativeInfoButton(doc);
 		return;
 	}
+	const shortcutId = routedSteamAppId(doc);
+	if (!shortcutId || !isCurrentInfoShortcut(doc, shortcutId, model.key)) return;
+	const session = infoButtonSessions.get(doc);
+	if (session?.shortcutId === shortcutId && session.key === model.key) { session.sync(); return; }
+	if (session) removeNativeInfoButton(doc);
+	const isCurrent = (): boolean => isCurrentInfoShortcut(doc, shortcutId, model.key)
+		&& infoButtonSessions.get(doc)?.sync === syncButtons;
 	const playbarModule = PLAYBAR_CLASS_MODULE();
 	const classes = playbarModule.classes;
 	const syncButtons = (): void => {
@@ -776,7 +759,8 @@ export function ensureNativeInfoButton(doc: Document, model: NativeGameInfo): vo
 			removeNativeInfoButton(doc);
 			return;
 		}
-		const containers = elementsWithCssModuleClass(doc, classes.AppButtonsContainer).filter(container => container.isConnected);
+		if (!isCurrent()) return;
+		const containers = nativeInfoButtonContainers(doc, classes, shortcutId);
 		const viewportHeight = Math.max(0, doc.defaultView?.innerHeight || doc.documentElement.clientHeight || 0);
 		const isViewportRendered = (container: HTMLElement): boolean => {
 			if (!isRenderedElement(doc, container)) return false;
@@ -825,12 +809,15 @@ export function ensureNativeInfoButton(doc: Document, model: NativeGameInfo): vo
 					normalizeInformationButtonIcon(button, playbarModule.native ? (classes.DotDotDot || '') : '');
 				}
 				button.setAttribute('type', 'button');
-				button.setAttribute('aria-label', gdlText('show_game_details', 'Show game details'));
+				const expanded = doc.getElementById('gdl-game-info-panel')?.dataset.expanded === '1';
+				button.setAttribute('aria-label', infoButtonLabel(expanded));
+				button.setAttribute('aria-expanded', String(expanded));
 				button.addEventListener('click', event => {
+					if (!isCurrent() || !button?.isConnected) return;
 					event.preventDefault();
 					event.stopPropagation();
 					if (button!.dataset.gdlScrollTopActive === '1') {
-						scrollMainContentToTop(doc);
+						scrollMainContentToTop(doc, undefined, isCurrent);
 						return;
 					}
 					const key = button!.dataset.gameKey || '';
@@ -845,18 +832,22 @@ export function ensureNativeInfoButton(doc: Document, model: NativeGameInfo): vo
 			} else if (button.dataset.gdlScrollTopActive !== '1' && !button.querySelector('.SVGIcon_Information')) {
 				normalizeInformationButtonIcon(button, playbarModule.native ? (classes.DotDotDot || '') : '');
 			}
-			button.dataset.gameKey = model.key;
+			if (button.dataset.gameKey !== model.key) button.dataset.gameKey = model.key;
 		}
+		syncAchievementPlaybarSpace(doc);
 	};
 
+	infoButtonSessions.set(doc, { shortcutId, key: model.key, sync: syncButtons });
 	syncButtons();
-	installInfoButtonScrollBehavior(doc, playbarModule.native ? (classes.DotDotDot || '') : '', syncButtons);
-	setNativeInfoExpanded(doc, model.key, false, false, false);
+	installInfoButtonScrollBehavior(doc, playbarModule.native ? (classes.DotDotDot || '') : '', syncButtons, isCurrent);
+	setNativeInfoExpanded(doc, model.key, doc.getElementById('gdl-game-info-panel')?.dataset.expanded === '1', false, false);
 }
 
 export function removeNativeInfoButton(doc: Document): void {
+	infoButtonSessions.delete(doc);
 	infoScrollCleanups.get(doc)?.();
 	doc.querySelectorAll('[data-gdl-game-info-button="1"]').forEach(element => element.remove());
+	syncAchievementPlaybarSpace(doc);
 }
 
 export function clearNativeInfoSessionState(): void {

@@ -1,3 +1,4 @@
+// Frozen negative control: this former app callback used reconcileNativeInfoPreference(popupDoc). Never load this fixture in production.
 import { GAME_INFO_OUTER_CLASS_MODULE, PLAYBAR_CLASS_MODULE } from '../../steam/css';
 import { elementsWithCssModuleClass, findNativeInfoButton, hasCssModuleClass, normalizedUiText } from '../../steam/native-dom';
 import { gdlText, loc } from '../../steam/localization';

@@ -23,7 +23,10 @@ export function ensurePrimaryLinksStyles(doc: Document): void {
 			align-items: center !important;
 			justify-content: flex-start !important;
 			container-type: inline-size !important;
-			height: 39px !important;
+			height: 36px !important;
+			min-height: 36px !important;
+			max-height: 36px !important;
+			flex: 0 0 auto !important;
 			padding: 0 14px 0 22px !important;
 			gap: 52px !important;
 			overflow: visible !important;
@@ -69,7 +72,7 @@ export function ensurePrimaryLinksStyles(doc: Document): void {
 		}
 		#gdl-link-bar .gdl-primary-link:first-child {
 			margin-left: 0 !important;
-			padding-left: 0 !important;
+			transform: translateX(-10px) !important;
 		}
 		#gdl-link-bar .gdl-primary-link:hover {
 			color: #ffffff !important;

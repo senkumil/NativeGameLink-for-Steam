@@ -24,6 +24,7 @@ import {
 	SHORTCUT_ICON_STORAGE_PREFIX,
 } from './shortcut-icon';
 import { getShortcutEdition } from '../shortcuts/editions';
+import { layoutFingerprint } from './logo-layout';
 export { getCachedLibraryAssets, getModernLibraryAssets, getResolvedLibraryAssets, refreshModernLibraryAssets, warmupAllMappedLibraryAssets } from './library-assets';
 export type { SteamLibraryAssets } from './library-assets';
 export { imageUrlToBase64, normalizeCommunityArtworkDataUrl, normalizeCommunityLogoDataUrl } from './artwork-image';
@@ -330,10 +331,27 @@ export { isLogoPositionVerified } from './artwork-logo-position';
 export async function applyOfficialLogoPosition(
 	shortcutAppId: number, steamAppId: string, rawPosition: unknown, force = false,
 	fallbackPin: SteamLogoPinPosition = 'BottomLeft', source = 'none',
+	layout?: { logo: string; hero: string; key: string },
 ): Promise<boolean> {
+	if (!Number.isInteger(shortcutAppId) || shortcutAppId < 2147483648 || !/^\d+$/.test(steamAppId)) return false;
 	const generation = artworkGeneration(shortcutAppId);
+	const isCurrent = (): boolean => artworkGenerationIsCurrent(shortcutAppId, generation)
+		&& (!artworkTargetReservations.has(shortcutAppId) || artworkTargetReservations.get(shortcutAppId) === steamAppId);
+	if (!isCurrent()) return false;
+	if (!force && nativeArtworkCustomizationActive(shortcutAppId, steamAppId)) return true;
+	if (!force && isLogoPositionVerified(shortcutAppId, steamAppId)) return true;
+	const provider = String((readArtworkMarker(shortcutAppId, steamAppId)?.provenance?.logo as any)?.provider || '');
+	const communityLogo = source === 'community' || Boolean(getSavedCommunityArtworkSelection(shortcutAppId, steamAppId)?.logo)
+		|| provider === 'steamgriddb' || provider === 'user';
+	if (!rawPosition && !communityLogo) {
+		const modern = await getModernLibraryAssets(steamAppId).catch((): null => null);
+		if (!isCurrent()) return false;
+		rawPosition = modern?.logo_position || null;
+		fallbackPin = ((rawPosition as any)?.pinned_position || (rawPosition as any)?.pinnedPosition || fallbackPin) as SteamLogoPinPosition;
+		if (rawPosition) source = modern?.logo_position_source || source;
+	}
 	return applyLogoPosition(shortcutAppId, steamAppId, rawPosition, force, fallbackPin, source,
-		() => artworkGenerationIsCurrent(shortcutAppId, generation));
+		isCurrent, layout);
 }
 /** Set ALL artwork for a shortcut using SetCustomArtworkForApp.
  *  Signature: SteamClient.Apps.SetCustomArtworkForApp(appId, base64Data, fileExtension, imageType)
@@ -363,9 +381,9 @@ export function reserveShortcutArtworkTarget(shortcutAppId: number, steamAppId: 
 const ARTWORK_SLOT_NAMES: Record<number, string> = {
 	0: 'portrait', 1: 'hero', 2: 'logo', 3: 'header',
 };
-export function recordUserArtworkApplication(shortcutAppId: number, steamAppId: string, slots: number[], selection: CommunityArtworkSelection): void {
+export function recordUserArtworkApplication(shortcutAppId: number, steamAppId: string, slots: number[], selection: CommunityArtworkSelection, positionSettled = false): void {
 	clearNativeArtworkCustomization(shortcutAppId);
-	invalidateLogoPosition(shortcutAppId);
+	if (!positionSettled && (slots.includes(1) || slots.includes(2))) invalidateLogoPosition(shortcutAppId);
 	const existingMarker = readArtworkMarker(shortcutAppId, steamAppId);
 	const existingSlots = existingMarker?.slots || [];
 	markArtworkSaved(shortcutAppId, steamAppId, [...existingSlots, ...slots], false, Object.fromEntries(
@@ -409,13 +427,8 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, _game
 	if (!force && artworkAlreadySaved(shortcutAppId, steamAppId)) {
 		artworkSpoofed.add(key);
 		backendLog('Artwork already saved for ' + shortcutAppId + ' -> ' + steamAppId);
-		if (!isLogoPositionVerified(shortcutAppId, steamAppId)) {
-			const modern = await getModernLibraryAssets(steamAppId);
-			const officialPin = ((modern?.logo_position as any)?.pinned_position || (modern?.logo_position as any)?.pinnedPosition || 'BottomLeft') as SteamLogoPinPosition;
-			const targetLogoPos = !userCommunity?.logo && modern?.logo_position ? modern.logo_position : null;
-			await applyOfficialLogoPosition(shortcutAppId, steamAppId, targetLogoPos, false, officialPin, modern?.logo_position_source || 'none');
-		}
-		return { complete: true, slots: [0, 1, 2, 3], missing: [], communitySlots: [] };
+		const positionReady = await applyOfficialLogoPosition(shortcutAppId, steamAppId, null);
+		return { complete: positionReady, slots: positionReady ? [0, 1, 2, 3] : [0, 1, 3], missing: positionReady ? [] : ['logo'], communitySlots: [] };
 	}
 
 	const sc = (window as any).SteamClient;
@@ -556,6 +569,7 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, _game
 			imageType: number;
 			label: string;
 			community: boolean;
+			prepared?: boolean;
 		}
 		const resolveSource = async ({ urls, imageType, label }: { urls: string[]; imageType: number; label: string }): Promise<ArtworkDownloadCandidate> => {
 			const candidateList = Array.from(new Set(urls.filter(Boolean)));
@@ -654,7 +668,7 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, _game
 			let { community, url } = download;
 			let slotApplied = false;
 			let preparedDataUrl: string | null = dataUrl;
-			if (dataUrl && (community || imageType === 2)) {
+			if (dataUrl && community && !download.prepared) {
 				try { preparedDataUrl = await normalizeCommunityArtworkDataUrl(dataUrl, imageType) || dataUrl; }
 				catch (e) { preparedDataUrl = dataUrl; backendLog('Artwork normalization fallback (' + label + '): ' + e); }
 			}
@@ -684,7 +698,8 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, _game
 					const base64Data = commaIdx >= 0 ? preparedDataUrl.substring(commaIdx + 1) : preparedDataUrl;
 					const mime = preparedDataUrl.match(/^data:image\/(png|jpe?g)/i)?.[1]?.toLowerCase();
 					const ext = mime === 'png' ? 'png' : 'jpg';
-					const result = await waitForSteamBridge(sc.Apps.SetCustomArtworkForApp(shortcutAppId, base64Data, ext, imageType), 5000);
+					const result = await waitForSteamBridge(Promise.resolve(sc.Apps.SetCustomArtworkForApp(shortcutAppId, base64Data, ext, imageType))
+						.then(accepted => { if (accepted === false) throw new Error('Steam rejected the artwork'); }), 5000);
 					if (result) { slotApplied = true; backendLog('Artwork set through Steam fallback: ' + label + ' (type ' + imageType + ') for ' + shortcutAppId); }
 				} catch (e) { backendLog('Artwork Steam fallback error (' + label + '): ' + e); }
 			}
@@ -731,7 +746,32 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, _game
 		await enrichWithCommunity(priorityDownloads);
 		recordResolvedProvenance(priorityDownloads);
 		allDownloads.push(...priorityDownloads);
-		await applyResolvedDownloads(priorityDownloads);
+		const incomingLogo = priorityDownloads.find(item => item.imageType === 2 && item.dataUrl);
+		const incomingHero = priorityDownloads.find(item => item.imageType === 1 && item.dataUrl);
+		if (incomingLogo) invalidateLogoPosition(shortcutAppId);
+		if (incomingLogo?.community && incomingLogo.dataUrl) {
+			try { incomingLogo.dataUrl = await normalizeCommunityArtworkDataUrl(incomingLogo.dataUrl, 2) || incomingLogo.dataUrl; }
+			catch (error) { backendLog('Logo normalization fallback: ' + String(error)); }
+			incomingLogo.prepared = true;
+		}
+		const officialPin = ((modern?.logo_position as any)?.pinned_position || (modern?.logo_position as any)?.pinnedPosition || defaultLogoPin) as SteamLogoPinPosition;
+		const retainedLogoProvider = String((existingMarker?.provenance?.logo as any)?.provider || '');
+		const communityLogo = Boolean(userCommunity?.logo || incomingLogo?.community || (!incomingLogo
+			&& (retainedLogoProvider === 'steamgriddb' || retainedLogoProvider === 'user')));
+		const targetLogoPos = !communityLogo && modern?.logo_position ? modern.logo_position : null;
+		const logoLayout = incomingLogo?.dataUrl || incomingHero?.dataUrl ? {
+			logo: incomingLogo?.dataUrl || '', hero: incomingHero?.dataUrl || '',
+			key: incomingLogo?.dataUrl && incomingHero?.dataUrl ? layoutFingerprint(incomingLogo.dataUrl, incomingHero.dataUrl) : '',
+		} : undefined;
+		const positionReady = !(incomingLogo || reusableSlots.has(2)) || await applyOfficialLogoPosition(shortcutAppId, steamAppId,
+			targetLogoPos, force, officialPin, communityLogo ? 'community' : modern?.logo_position_source || 'none', logoLayout);
+		if (!isCurrent()) return { complete: false, slots: [], missing: ['superseded'], communitySlots: [] };
+		if (!positionReady) {
+			const retainedLogo = successfulSlots.indexOf(2);
+			if (retainedLogo >= 0) successfulSlots.splice(retainedLogo, 1);
+		}
+		await applyResolvedDownloads(priorityDownloads.filter(item => item.imageType !== 2 || positionReady));
+		if (incomingLogo && !appliedSlots.includes(2)) invalidateLogoPosition(shortcutAppId);
 		if (!isCurrent()) return { complete: false, slots: [], missing: ['superseded'], communitySlots: [] };
 
 		// Only now resolve secondary artwork (currently the wide capsule). This is
@@ -772,9 +812,6 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, _game
 		const allSlotsApplied = [0, 1, 2, 3].every(slot => successfulSlotSet.has(slot));
 		const needsCommunityUpgrade = retrySlots.size > 0;
 		const complete = allSlotsApplied && missing.length === 0;
-		const officialPin = ((modern?.logo_position as any)?.pinned_position || (modern?.logo_position as any)?.pinnedPosition || defaultLogoPin) as SteamLogoPinPosition;
-		const targetLogoPos = !userCommunity?.logo && modern?.logo_position ? modern.logo_position : null;
-		if (logoApplied) await applyOfficialLogoPosition(shortcutAppId, steamAppId, targetLogoPos, force, officialPin, modern?.logo_position_source || 'none');
 		if (!isCurrent()) return { complete: false, slots: [], missing: ['superseded'], communitySlots: [] };
 		if (successfulSlots.length > 0) {
 			markArtworkSaved(shortcutAppId, steamAppId, Array.from(successfulSlotSet), needsCommunityUpgrade,

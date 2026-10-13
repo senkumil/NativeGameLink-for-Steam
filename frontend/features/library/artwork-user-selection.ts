@@ -1,8 +1,9 @@
-import { applyLogoPosition, type SteamLogoPinPosition } from './artwork-logo-position';
-import { getModernLibraryAssets } from './library-assets';
+import { invalidateLogoPosition } from './artwork-logo-position';
+import { layoutFingerprint } from './logo-layout';
 import { backendLog, saveShortcutArtworkBackend, saveShortcutIconBackend } from '../../api/backend';
 import {
 	imageUrlToBase64,
+	applyOfficialLogoPosition,
 	normalizeCommunityArtworkDataUrl,
 	recordUserArtworkApplication,
 	type ArtworkApplyResult,
@@ -22,7 +23,7 @@ export async function applyCommunityArtworkSelection(
 	steamAppId: string,
 	selection: CommunityArtworkSelection,
 ): Promise<ArtworkApplyResult> {
-	if (!Number.isInteger(targetAppId) || targetAppId <= 0 || !/^\d+$/.test(steamAppId)) {
+	if (!Number.isInteger(targetAppId) || targetAppId < 2147483648 || targetAppId > 4294967295 || !/^\d+$/.test(steamAppId)) {
 		return { complete: false, slots: [], missing: ['invalid_shortcut'], communitySlots: [] };
 	}
 	const apps = (window as any).SteamClient?.Apps;
@@ -34,6 +35,7 @@ export async function applyCommunityArtworkSelection(
 
 	const successfulSlots: number[] = [];
 	const missingSlots: string[] = [];
+	let positionReady = true;
 
 	// 1. Apply standard library slots (portrait, hero, logo, wide)
 	const standardSlots = (Object.keys(SLOT_TYPES) as Array<'portrait' | 'hero' | 'logo' | 'wide'>).filter(slot => Boolean(selection?.[slot]));
@@ -44,14 +46,23 @@ export async function applyCommunityArtworkSelection(
 			const dataUrl = await imageUrlToBase64(url);
 			return { slot, imageType, url, dataUrl: dataUrl ? await normalizeCommunityArtworkDataUrl(dataUrl, imageType) || dataUrl : null };
 		}));
+		if (selection.logo || selection.hero) {
+			invalidateLogoPosition(targetAppId);
+			const logo = prepared.find(item => item.slot === 'logo')?.dataUrl;
+			const hero = prepared.find(item => item.slot === 'hero')?.dataUrl;
+			const layout = logo || hero ? { logo: logo || '', hero: hero || '', key: logo && hero ? layoutFingerprint(logo, hero) : '' } : undefined;
+			positionReady = await applyOfficialLogoPosition(targetAppId, steamAppId, null, true, 'BottomLeft', selection.logo ? 'community' : 'user_selection', layout);
+			if (!positionReady && !selection.logo) missingSlots.push('logo_position');
+		}
 		for (const item of prepared) {
+			if (item.slot === 'logo' && !positionReady) { missingSlots.push('logo'); continue; }
 			let saved = false;
 			if (item.dataUrl) {
 				const base64 = item.dataUrl.slice(item.dataUrl.indexOf(',') + 1);
 				if (typeof apps?.SetCustomArtworkForApp === 'function') {
 					try {
-						await Promise.resolve(apps.SetCustomArtworkForApp(targetAppId, base64, 'png', item.imageType));
-						saved = true;
+						const accepted = await Promise.resolve(apps.SetCustomArtworkForApp(targetAppId, base64, 'png', item.imageType));
+						saved = accepted !== false;
 					} catch (error) {
 						backendLog(`Steam artwork API failed (${item.slot}) for ${steamAppId}; trying grid-file fallback: ${String(error)}`);
 					}
@@ -88,6 +99,7 @@ export async function applyCommunityArtworkSelection(
 			if (saved) successfulSlots.push(item.imageType);
 			else missingSlots.push(item.slot);
 		}
+		if ((selection.logo && !successfulSlots.includes(2)) || (selection.hero && !successfulSlots.includes(1))) invalidateLogoPosition(targetAppId);
 	}
 
 	// 2. Apply icon slot if chosen
@@ -134,12 +146,7 @@ export async function applyCommunityArtworkSelection(
 	const complete = missingSlots.length === 0;
 	if (complete) {
 		saveCommunityArtworkSelection(targetAppId, steamAppId, selection);
-		recordUserArtworkApplication(targetAppId, steamAppId, successfulSlots, selection);
-		if (targetAppId >= 2147483648 && (selection.logo || selection.hero)) {
-			const modern = await getModernLibraryAssets(steamAppId).catch((): null => null);
-			const officialPin = ((modern?.logo_position as any)?.pinned_position || (modern?.logo_position as any)?.pinnedPosition || 'BottomLeft') as SteamLogoPinPosition;
-			await applyLogoPosition(targetAppId, steamAppId, modern?.logo_position || null, false, officialPin, 'community', () => true);
-		}
+		recordUserArtworkApplication(targetAppId, steamAppId, successfulSlots, selection, true);
 		try { window.dispatchEvent(new CustomEvent('gdl:artwork-changed', { detail: { shortcutAppId: targetAppId, steamAppId, user_action: true } })); } catch {}
 	}
 	return { complete, slots: successfulSlots, missing: missingSlots, communitySlots: complete ? [...chosenSlots] : [] };

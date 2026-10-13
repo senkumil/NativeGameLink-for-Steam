@@ -1,12 +1,17 @@
 import type { CommunityContentItem, SteamGameData } from '../../domain/types';
 import { escapeHtml } from '../../core/text';
+import { backendLog } from '../../api/backend';
 import { gdlText, loc, steamLanguageSync } from '../../steam/localization';
 import { extractCommunityYoutubeId } from '../../steam/navigation';
+import { runWhenLibrarySidebarIdle } from '../../steam/sidebar-interaction';
 import type { NativeLibraryLayout } from './layout';
+import { orderCommunityItems } from './community-order';
 
 const progressiveRevealCleanup = new WeakMap<HTMLElement, () => void>();
 const deferredHydrationCleanup = new WeakMap<HTMLElement, () => void>();
 const adaptiveWidthCleanup = new WeakMap<HTMLElement, () => void>();
+const columnLayoutCleanup = new WeakMap<HTMLElement, () => void>();
+const communityLayoutRequests = new WeakMap<HTMLElement, () => void>();
 
 function createCommunityHeader(doc: Document): HTMLElement {
 	const header = doc.createElement('div');
@@ -26,6 +31,90 @@ export function disposeCommunityProgressiveReveal(root: HTMLElement): void {
 export function disposeCommunitySection(root: HTMLElement): void {
 	disposeCommunityProgressiveReveal(root);
 	adaptiveWidthCleanup.get(root)?.();
+	columnLayoutCleanup.get(root)?.();
+}
+
+/** Pack the stable feed nodes into the shortest available column. Images and
+ * guide text can finish loading later, so observe real card sizes as well as
+ * width. Only geometry changes; cards, focused controls and media stay mounted. */
+function setupCommunityColumns(doc: Document, root: HTMLElement): void {
+	columnLayoutCleanup.get(root)?.();
+	const grid = root.querySelector<HTMLElement>('.gdl-community-grid');
+	if (!grid) return;
+	const view = doc.defaultView;
+	let disposed = false;
+	let frame = 0;
+	const pixels = (value: number): string => `${Math.round(value * 1000) / 1000}px`;
+	const cards = Array.from(grid.querySelectorAll<HTMLElement>('[data-gdl-community-card]'))
+		.sort((a, b) => Number(a.dataset.gdlCommunityCard) - Number(b.dataset.gdlCommunityCard));
+	const setStyle = (element: HTMLElement, key: string, value: string): void => {
+		if (element.style.getPropertyValue(key) !== value) element.style.setProperty(key, value);
+	};
+	const syncMedia = (card: HTMLElement, width: number): void => {
+		const media = card.querySelector<HTMLElement>('.gdl-community-media,.gdl-community-video-thumb');
+		const image = media?.querySelector<HTMLImageElement>('.gdl-community-preview');
+		if (!image || !media) return;
+		const loaded = image.complete && image.naturalWidth > 0 && image.naturalHeight > 0;
+		const failed = image.complete && image.naturalWidth === 0 && Boolean(image.currentSrc || image.getAttribute('src'));
+		const state = loaded ? 'loaded' : failed ? 'error' : 'pending';
+		if (media.dataset.gdlMediaState !== state) media.dataset.gdlMediaState = state;
+		const height = loaded && !card.classList.contains('gdl-community-card-video')
+			? Math.min(800, width * image.naturalHeight / image.naturalWidth) : width * 9 / 16;
+		setStyle(media, '--gdl-community-media-ratio', `${width} / ${height}`);
+	};
+	const layout = (): void => {
+		if (disposed || !root.isConnected || !grid.isConnected) return;
+		// Computed dimensions are CSS pixels even when Steam uses a zoom factor.
+		const width = Number.parseFloat(view?.getComputedStyle(grid).width || '') || grid.clientWidth;
+		if (!(width > 0)) return;
+		const count = Math.max(1, Math.min(10, Math.floor((width + 24) / 280)));
+		const cardWidth = (width - (count - 1) * 24) / count;
+		setStyle(grid, '--gdl-community-columns', String(count));
+		const visible = cards.filter(card => !card.hidden);
+		// Batch all dimension writes before reading heights: one layout pass,
+		// rather than forcing a layout for every individual community card.
+		for (const card of visible) {
+			setStyle(card, 'width', pixels(cardWidth));
+			syncMedia(card, cardWidth);
+		}
+		const heights = visible.map(card => Number.parseFloat(view?.getComputedStyle(card).height || '') || card.offsetHeight);
+		const bottoms = Array.from({ length: count }, () => 0);
+		visible.forEach((card, index) => {
+			const column = bottoms.indexOf(Math.min(...bottoms));
+			setStyle(card, 'left', pixels(column * (cardWidth + 24)));
+			setStyle(card, 'top', pixels(bottoms[column]));
+			bottoms[column] += heights[index] + 32;
+		});
+		setStyle(grid, 'height', pixels(Math.max(0, ...bottoms) - (visible.length ? 32 : 0)));
+	};
+	const queue = (): void => {
+		if (disposed || frame) return;
+		frame = view?.requestAnimationFrame(() => {
+			frame = 0;
+			void runWhenLibrarySidebarIdle(doc, 'secondary-community-columns', layout)
+				.catch(error => backendLog('Community column layout error: ' + String(error)));
+		}) || 0;
+		if (!frame) layout();
+	};
+	const Observer = view?.ResizeObserver;
+	const observer = typeof Observer === 'function' ? new Observer(queue) : null;
+	observer?.observe(grid);
+	for (const card of cards) observer?.observe(card);
+	grid.addEventListener('load', queue, true);
+	grid.addEventListener('error', queue, true);
+	view?.addEventListener('resize', queue, { passive: true });
+	communityLayoutRequests.set(root, layout);
+	columnLayoutCleanup.set(root, () => {
+		disposed = true;
+		if (frame) view?.cancelAnimationFrame(frame);
+		observer?.disconnect();
+		grid.removeEventListener('load', queue, true);
+		grid.removeEventListener('error', queue, true);
+		view?.removeEventListener('resize', queue);
+		columnLayoutCleanup.delete(root);
+		communityLayoutRequests.delete(root);
+	});
+	layout();
 }
 
 /**
@@ -86,10 +175,12 @@ function setupCommunityAdaptiveWidth(
 /** Progressive reveal that owns and disposes every listener/observer it installs. */
 export function setupCommunityProgressiveReveal(doc: Document, root: HTMLElement): () => void {
 	disposeCommunityProgressiveReveal(root);
+	setupCommunityColumns(doc, root);
 	const sentinel = root.querySelector('.gdl-community-sentinel') as HTMLElement | null;
 	if (!sentinel) return () => {};
 
-	const hiddenCards = (): HTMLElement[] => Array.from(root.querySelectorAll<HTMLElement>('.gdl-community-card[hidden]'));
+	const hiddenCards = (): HTMLElement[] => Array.from(root.querySelectorAll<HTMLElement>('.gdl-community-card[hidden]'))
+		.sort((a, b) => Number(a.dataset.gdlCommunityCard) - Number(b.dataset.gdlCommunityCard));
 	if (hiddenCards().length === 0) {
 		sentinel.style.display = 'none';
 		return () => {};
@@ -98,6 +189,7 @@ export function setupCommunityProgressiveReveal(doc: Document, root: HTMLElement
 	let disposed = false;
 	const revealNext = (): void => {
 		for (const card of hiddenCards().slice(0, 8)) card.removeAttribute('hidden');
+		communityLayoutRequests.get(root)?.();
 		if (hiddenCards().length === 0) sentinel.style.display = 'none';
 	};
 	const checkScrollPosition = (): void => {
@@ -177,7 +269,7 @@ export function scheduleCommunityHydration(
 		if (started || disposed) return;
 		started = true;
 		observer?.disconnect();
-		void pendingLoad.then(items => {
+		void pendingLoad.then(items => runWhenLibrarySidebarIdle(doc, 'secondary-community', () => {
 			if (disposed || !root.isConnected || !isCurrent()) return;
 			onHydrated?.(items);
 			const inner = root.querySelector<HTMLElement>('#gdl-community-inner');
@@ -193,7 +285,7 @@ export function scheduleCommunityHydration(
 			} else if (!inner.querySelector('.gdl-community-card')) {
 				root.style.display = 'none';
 			}
-		}).finally(cleanup);
+		})).catch(error => backendLog('Community render error: ' + String(error))).finally(cleanup);
 	};
 
 	// If inner is empty or has only placeholder screenshots, trigger start as soon as pendingLoad settles
@@ -220,7 +312,15 @@ export function scheduleCommunityHydration(
 }
 
 export function communityItemsSignature(items: CommunityContentItem[]): string {
-	return `${items.length}:` + items.map(item => `${item.type}|${item.image}|${item.link || ''}`).join('|');
+	let hash = 2166136261;
+	for (const item of items) {
+		const value = JSON.stringify([item.type, item.image, item.link, item.youtube_id,
+			item.title, item.description, item.author_name, item.author_avatar]);
+		for (let index = 0; index < value.length; index++) {
+			hash = Math.imul(hash ^ value.charCodeAt(index), 16777619);
+		}
+	}
+	return `${items.length}:${(hash >>> 0).toString(16)}`;
 }
 
 function hasForeignScript(text: string): boolean {
@@ -263,47 +363,28 @@ export function renderCommunityContentHtml(data: SteamGameData, communityItems: 
 		});
 	};
 
-	const videos = sortByLanguage(filteredItems.filter(item => item.type === 'video'));
-	const guides = sortByLanguage(filteredItems.filter(item => item.type === 'guide'));
-	const artworks = sortByLanguage(filteredItems.filter(item => item.type === 'artwork'));
-	const screenshots = sortByLanguage(filteredItems.filter(item => item.type === 'screenshot' || (item.type !== 'video' && item.type !== 'guide' && item.type !== 'artwork')));
-
-	const ordered: CommunityContentItem[] = [];
-	const vList = [...videos];
-	const gList = [...guides];
-	const aList = [...artworks];
-	const sList = [...screenshots];
-
-	while (vList.length > 0 || gList.length > 0 || aList.length > 0 || sList.length > 0) {
-		if (vList.length > 0) ordered.push(vList.shift()!);
-		if (aList.length > 0) ordered.push(aList.shift()!);
-		else if (sList.length > 0) ordered.push(sList.shift()!);
-		if (sList.length > 0) ordered.push(sList.shift()!);
-		else if (aList.length > 0) ordered.push(aList.shift()!);
-		if (gList.length > 0) ordered.push(gList.shift()!);
-		if (gList.length > 0) ordered.push(gList.shift()!);
-		if (aList.length > 0) ordered.push(aList.shift()!);
-		if (sList.length > 0) ordered.push(sList.shift()!);
-	}
+	const ordered = orderCommunityItems(sortByLanguage(filteredItems));
 
 	const authorBar = (item: CommunityContentItem): string => {
 		if (!item.author_name && !item.author_avatar) return '';
-		return `<div style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:rgba(0,0,0,.25);margin-top:auto;min-height:32px;">
-			${item.author_avatar ? `<img src="${escapeHtml(item.author_avatar)}" style="width:32px;height:32px;flex-shrink:0;object-fit:cover;" data-gdl-hide-on-error="1" />` : ''}
-			<span class="gdl-community-author" style="font-size:13px;color:#8f98a0;">${escapeHtml(item.author_name || '')}</span>
+		return `<div class="gdl-community-author-bar">
+			${item.author_avatar ? `<img class="gdl-community-avatar" src="${escapeHtml(item.author_avatar)}" alt="" loading="lazy" decoding="async" data-gdl-hide-on-error="1" />` : ''}
+			<span class="gdl-community-author">${escapeHtml(item.author_name || '')}</span>
 		</div>`;
 	};
+	const caption = (item: CommunityContentItem): string => item.title
+		? `<div class="gdl-community-caption"><div class="gdl-community-card-title">${escapeHtml(item.title)}</div></div>` : '';
 
 	const card = (item: CommunityContentItem, index: number): string => {
 		const click = item.link ? ` data-gdl-open-url="${escapeHtml(item.link)}"` : '';
 		if (item.type === 'guide') {
 			return `<div class="gdl-community-card gdl-community-card-guide" data-gdl-community-card="${index}"${click}>
-				<div style="padding:8px 12px;background:rgba(0,0,0,.25);font-size:11px;letter-spacing:.5px;font-weight:500;color:#9da4ab;text-transform:uppercase;">${escapeHtml(gdlText('community_guide', 'Community guide').toUpperCase())}</div>
-				<div style="display:flex;gap:12px;padding:12px;align-items:flex-start;">
-					<img src="${escapeHtml(item.image || '')}" loading="lazy" decoding="async" style="width:92px;height:92px;object-fit:cover;flex-shrink:0;" data-gdl-hide-on-error="1" />
-					<div class="gdl-community-card-title" style="font-size:15px;font-weight:500;color:#dcdedf;line-height:1.35;min-width:0;">${escapeHtml(item.title || '')}</div>
+				<div class="gdl-community-guide-kind">${escapeHtml(gdlText('community_guide', 'Community guide').toUpperCase())}</div>
+				<div class="gdl-community-guide-header">
+					<img class="gdl-community-guide-preview" src="${escapeHtml(item.image || '')}" alt="" loading="lazy" decoding="async" data-gdl-hide-on-error="1" />
+					<div class="gdl-community-card-title">${escapeHtml(item.title || '')}</div>
 				</div>
-				${item.description ? `<div class="gdl-community-card-description" style="font-size:13px;color:#9da4ab;line-height:1.5;padding:0 12px 12px;">${escapeHtml(item.description)}</div>` : ''}
+				${item.description ? `<div class="gdl-community-description-body"><div class="gdl-community-card-description">${escapeHtml(item.description)}</div></div>` : ''}
 				${authorBar(item)}
 			</div>`;
 		}
@@ -313,24 +394,23 @@ export function renderCommunityContentHtml(data: SteamGameData, communityItems: 
 			const ytAttr = resolvedYtId ? ` data-gdl-youtube-id="${escapeHtml(resolvedYtId)}"` : '';
 			const click = resolvedYtId ? '' : (item.link ? ` data-gdl-open-url="${escapeHtml(item.link)}"` : '');
 			return `<div class="gdl-community-card gdl-community-card-video" data-gdl-community-card="${index}"${ytAttr}${click}>
-				<div class="gdl-community-video-thumb" style="position:relative;width:100%;max-width:100%;aspect-ratio:16/9;overflow:hidden;background:#000;">
-					<img src="${escapeHtml(item.image || '')}" loading="lazy" decoding="async" style="width:100%;height:100%;object-fit:cover;display:block;" data-gdl-hide-on-error="1" />
+				<div class="gdl-community-video-thumb">
+					<img class="gdl-community-preview" src="${escapeHtml(item.image || '')}" alt="" loading="lazy" decoding="async" />
 					<div class="gdl-community-play-button">
 						<svg viewBox="0 0 24 24" style="width:26px;height:26px;fill:#fff;margin-left:3px;"><path d="M8 5v14l11-7z"/></svg>
 					</div>
+					${caption(item)}
 				</div>
-				${item.title ? `<div class="gdl-community-card-title" style="padding:8px 12px 4px;font-size:13px;color:#dcdedf;line-height:1.35;">${escapeHtml(item.title)}</div>` : ''}
 				${authorBar(item)}
 			</div>`;
 		}
 		return `<div class="gdl-community-card" data-gdl-community-card="${index}"${click}>
-			<img src="${escapeHtml(item.image || '')}" loading="lazy" decoding="async" style="width:100%;max-width:100%;aspect-ratio:16/9;object-fit:cover;display:block;" data-gdl-hide-on-error="1" />
-			${item.title ? `<div class="gdl-community-card-title" style="padding:8px 12px 4px;font-size:13px;color:#dcdedf;line-height:1.35;">${escapeHtml(item.title)}</div>` : ''}
+			<div class="gdl-community-media"><img class="gdl-community-preview" src="${escapeHtml(item.image || '')}" alt="" loading="lazy" decoding="async" />${caption(item)}</div>
 			${authorBar(item)}
 		</div>`;
 	};
 
-	return `<div class="gdl-community-grid">${ordered.map(card).join('')}<div class="gdl-community-sentinel" aria-hidden="true"></div></div>`;
+	return `<div class="gdl-community-grid">${ordered.map(card).join('')}</div><div class="gdl-community-sentinel" aria-hidden="true"></div>`;
 }
 
 export function insertCommunitySection(

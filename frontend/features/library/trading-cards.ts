@@ -1,30 +1,30 @@
 import { backendLog } from '../../api/backend';
 import { escapeHtml } from '../../core/text';
+import { DisposableRegistry } from '../../core/disposables';
 import { ACH_CLASSES } from '../../steam/css';
 import { gdlText, loc } from '../../steam/localization';
 import { getOfficialCommunityItems, normalizeCommunityAssetUrl } from './community-items';
 import { GDL_INJECTED } from './constants';
 import type { NativeLibraryLayout } from './layout';
 import { buildNativeSidebarSection } from './layout';
+import { clearTradingCardPreloads, getTradingCardPreload, preloadTradingCardImage } from './trading-card-preload';
+import { disposeNativeCardPreview, tryOpenNativeCardPreview } from './native-card-preview';
 
 const tradingCardPreviewCleanup = new WeakMap<Document, () => void>();
 const responsiveGridCleanups = new Map<HTMLElement, () => void>();
-const preloadedArtworks = new Map<string, HTMLImageElement>();
+const tiltLifecycles = new WeakMap<Document, Map<HTMLElement, DisposableRegistry>>();
 
-export function preloadTradingCardImage(url: string): void {
-	if (!url || preloadedArtworks.has(url)) return;
-	const img = new Image();
-	img.decoding = 'async';
-	img.src = url;
-	preloadedArtworks.set(url, img);
-	if (preloadedArtworks.size > 120) {
-		const oldest = preloadedArtworks.keys().next().value;
-		if (oldest) preloadedArtworks.delete(oldest);
-	}
+export function disposeTradingCardUI(doc: Document): void {
+	disposeTradingCardPreview(doc);
+	disposeResponsiveTradingCardGrids(doc);
+	for (const lifecycle of Array.from(tiltLifecycles.get(doc)?.values() || [])) lifecycle.dispose();
+	tiltLifecycles.delete(doc);
+	clearTradingCardPreloads(doc);
 }
 
 export function disposeTradingCardPreview(doc: Document): void {
 	tradingCardPreviewCleanup.get(doc)?.();
+	disposeNativeCardPreview(doc);
 }
 
 export function resetTradingCardTilts(doc: Document): void {
@@ -58,11 +58,15 @@ export function disposeResponsiveTradingCardGrids(doc: Document): void {
 
 function openTradingCardPreview(doc: Document, imageUrl: string, gameName: string, fallbackUrl?: string): void {
 	if (!doc.body || (!imageUrl && !fallbackUrl)) return;
-	disposeTradingCardPreview(doc);
+	tradingCardPreviewCleanup.get(doc)?.();
 	resetTradingCardTilts(doc);
-
 	const initialUrl = imageUrl || fallbackUrl || '';
-	const cachedPreload = preloadedArtworks.get(initialUrl);
+	// Use the same measured image viewer as Steam's own trading cards. Steam
+	// owns the popup frame, image limits, typography and both close controls.
+	if (tryOpenNativeCardPreview(doc, initialUrl, gameName, fallbackUrl)) return;
+	disposeNativeCardPreview(doc);
+
+	const cachedPreload = getTradingCardPreload(doc, initialUrl);
 	const initialWidth = (cachedPreload && cachedPreload.complete && cachedPreload.naturalWidth > 0)
 		? cachedPreload.naturalWidth
 		: 1920;
@@ -206,21 +210,23 @@ function openTradingCardPreview(doc: Document, imageUrl: string, gameName: strin
 
 /** Steam-like foil-card motion with bounded, per-card listeners. */
 export function setupTradingCardTilt(root: HTMLElement): void {
+	const doc = root.ownerDocument;
+	let lifecycles = tiltLifecycles.get(doc);
+	if (!lifecycles) { lifecycles = new Map(); tiltLifecycles.set(doc, lifecycles); }
+	lifecycles.get(root)?.dispose();
+	const ownedLifecycles = lifecycles;
+	const lifecycle = new DisposableRegistry(() => ownedLifecycles.delete(root));
+	ownedLifecycles.set(root, lifecycle);
 	let activeReset: (() => void) | null = null;
 	let activeContainsPoint: ((clientX: number, clientY: number) => boolean) | null = null;
 	let lastClientX = 0;
 	let lastClientY = 0;
 	const activators = new Map<HTMLElement, (clientX: number, clientY: number) => void>();
-	const doc = root.ownerDocument;
 	const trackDocumentPointer = (event: PointerEvent): void => {
 		lastClientX = event.clientX;
 		lastClientY = event.clientY;
 		if (!root.isConnected) {
-			doc.removeEventListener('pointermove', trackDocumentPointer, true);
-			doc.removeEventListener('pointerleave', onPointerLeaveOrScroll);
-			doc.defaultView?.removeEventListener('scroll', onPointerLeaveOrScroll, true);
-			doc.defaultView?.removeEventListener('blur', onPointerLeaveOrScroll);
-			doc.removeEventListener('visibilitychange', onPointerLeaveOrScroll);
+			lifecycle.dispose();
 		}
 	};
 	const onPointerLeaveOrScroll = (): void => {
@@ -229,16 +235,18 @@ export function setupTradingCardTilt(root: HTMLElement): void {
 	// The pointer may leave the whole sidebar before the delayed leave check
 	// runs. Track it at document level so that check never uses stale in-panel
 	// coordinates and leaves a card expanded after the cursor moved away.
-	doc.addEventListener('pointermove', trackDocumentPointer, { capture: true, passive: true });
-	doc.addEventListener('pointerleave', onPointerLeaveOrScroll, { passive: true });
-	doc.defaultView?.addEventListener('scroll', onPointerLeaveOrScroll, { passive: true, capture: true });
-	doc.defaultView?.addEventListener('blur', onPointerLeaveOrScroll);
-	doc.addEventListener('visibilitychange', onPointerLeaveOrScroll);
+	lifecycle.listen(doc, 'pointermove', trackDocumentPointer, { capture: true, passive: true });
+	lifecycle.listen(doc, 'pointerleave', onPointerLeaveOrScroll, { passive: true });
+	if (doc.defaultView) {
+		lifecycle.listen(doc.defaultView, 'scroll', onPointerLeaveOrScroll, { passive: true, capture: true });
+		lifecycle.listen(doc.defaultView, 'blur', onPointerLeaveOrScroll);
+	}
+	lifecycle.listen(doc, 'visibilitychange', onPointerLeaveOrScroll);
 
 	// CEF does not always emit a fresh pointerenter after an expanded card is
 	// removed from beneath the cursor. Pointer movement therefore also acts as
 	// a recovery path for the unexpanded card currently under the pointer.
-	root.addEventListener('pointermove', event => {
+	lifecycle.listen(root, 'pointermove', (event: PointerEvent) => {
 		lastClientX = event.clientX;
 		lastClientY = event.clientY;
 		if (activeReset) return;
@@ -258,6 +266,7 @@ export function setupTradingCardTilt(root: HTMLElement): void {
 		card.appendChild(hitbox);
 		card.dataset.gdlTiltReady = '1';
 		let frame = 0;
+		let recoveryFrame = 0;
 		let pointerX = .5;
 		let pointerY = .5;
 		let baseRect: DOMRect | null = null;
@@ -324,6 +333,12 @@ export function setupTradingCardTilt(root: HTMLElement): void {
 				activeContainsPoint = null;
 			}
 		};
+		lifecycle.add(() => {
+			reset();
+			if (recoveryFrame) view?.cancelAnimationFrame(recoveryFrame);
+			hitbox.remove();
+			delete card.dataset.gdlTiltReady;
+		});
 
 		const onSurfacePointerMove = (event: PointerEvent): void => {
 			lastClientX = event.clientX;
@@ -413,12 +428,12 @@ export function setupTradingCardTilt(root: HTMLElement): void {
 		let pointerDownTime = 0;
 		let lastPreviewOpenedTime = 0;
 
-		card.addEventListener('pointerenter', (event: PointerEvent) => {
+		lifecycle.listen(card, 'pointerenter', (event: PointerEvent) => {
 			lastClientX = event.clientX;
 			lastClientY = event.clientY;
 			activate(event.clientX, event.clientY);
 			const fullArtworkUrl = card.dataset.gdlFullImage;
-			if (fullArtworkUrl) preloadTradingCardImage(fullArtworkUrl);
+			if (fullArtworkUrl) preloadTradingCardImage(doc, fullArtworkUrl);
 		});
 
 		// The local hitbox follows the expanded card with equal space on all sides.
@@ -439,19 +454,21 @@ export function setupTradingCardTilt(root: HTMLElement): void {
 
 				// Re-evaluate after the expanded surface disappears. This repairs the
 				// missing pointerenter event when another card is now under the cursor.
-				view?.requestAnimationFrame(() => {
+				if (recoveryFrame) view?.cancelAnimationFrame(recoveryFrame);
+				recoveryFrame = view?.requestAnimationFrame(() => {
+					recoveryFrame = 0;
 					const element = card.ownerDocument.elementFromPoint(lastClientX, lastClientY);
 					const hovered = element?.closest<HTMLElement>('.gdl-trading-card') || null;
 					if (hovered && root.contains(hovered)) activators.get(hovered)?.(lastClientX, lastClientY);
-				});
+				}) || 0;
 			}, 110) || 0;
 		};
-		surface.addEventListener('pointermove', onSurfacePointerMove, { passive: true });
-		hitbox.addEventListener('pointermove', onSurfacePointerMove, { passive: true });
-		surface.addEventListener('pointerout', resetWhenLeavingCard);
-		hitbox.addEventListener('pointerout', resetWhenLeavingCard);
+		lifecycle.listen(surface, 'pointermove', onSurfacePointerMove, { passive: true });
+		lifecycle.listen(hitbox, 'pointermove', onSurfacePointerMove, { passive: true });
+		lifecycle.listen(surface, 'pointerout', resetWhenLeavingCard);
+		lifecycle.listen(hitbox, 'pointerout', resetWhenLeavingCard);
 
-		card.addEventListener('pointercancel', reset);
+		lifecycle.listen(card, 'pointercancel', reset);
 		const openPreview = (): void => {
 			const now = Date.now();
 			if (now - lastPreviewOpenedTime < 350) return;
@@ -472,7 +489,7 @@ export function setupTradingCardTilt(root: HTMLElement): void {
 			pointerDownY = event.clientY;
 			pointerDownTime = Date.now();
 			const fullArtworkUrl = card.dataset.gdlFullImage;
-			if (fullArtworkUrl) preloadTradingCardImage(fullArtworkUrl);
+			if (fullArtworkUrl) preloadTradingCardImage(doc, fullArtworkUrl);
 		};
 
 		const onCardPointerUp = (event: PointerEvent): void => {
@@ -488,20 +505,20 @@ export function setupTradingCardTilt(root: HTMLElement): void {
 			}
 		};
 
-		card.addEventListener('pointerdown', onCardPointerDown, { passive: true });
-		surface.addEventListener('pointerdown', onCardPointerDown, { passive: true });
-		hitbox.addEventListener('pointerdown', onCardPointerDown, { passive: true });
+		lifecycle.listen(card, 'pointerdown', onCardPointerDown, { passive: true });
+		lifecycle.listen(surface, 'pointerdown', onCardPointerDown, { passive: true });
+		lifecycle.listen(hitbox, 'pointerdown', onCardPointerDown, { passive: true });
 
-		card.addEventListener('pointerup', onCardPointerUp);
-		surface.addEventListener('pointerup', onCardPointerUp);
-		hitbox.addEventListener('pointerup', onCardPointerUp);
+		lifecycle.listen(card, 'pointerup', onCardPointerUp);
+		lifecycle.listen(surface, 'pointerup', onCardPointerUp);
+		lifecycle.listen(hitbox, 'pointerup', onCardPointerUp);
 
-		card.addEventListener('click', event => {
+		lifecycle.listen(card, 'click', event => {
 			event.preventDefault();
 			event.stopPropagation();
 			openPreview();
 		});
-		card.addEventListener('keydown', event => {
+		lifecycle.listen(card, 'keydown', (event: KeyboardEvent) => {
 			if (event.key !== 'Enter' && event.key !== ' ') return;
 			event.preventDefault();
 			openPreview();
@@ -598,7 +615,6 @@ export async function renderOfficialTradingCards(
 		const image = normalizeCommunityAssetUrl(card.image);
 		if (!image) return '';
 		const artwork = normalizeCommunityAssetUrl(card.artwork) || image;
-		if (artwork) preloadTradingCardImage(artwork);
 		const title = card.title || gameName;
 		const foilClass = card.foil ? ' gdl-foil-card' : '';
 		return `<div class="gdl-trading-card gdl-official-card${foilClass}" data-gdl-card-index="${index}" data-gdl-full-image="${escapeHtml(artwork)}" role="button" tabindex="0" aria-label="${escapeHtml(title)}"><div class="gdl-trading-card-surface"><img src="${escapeHtml(image)}" alt="" /><span class="gdl-card-hologram" aria-hidden="true"></span></div></div>`;

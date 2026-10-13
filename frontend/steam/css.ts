@@ -2,6 +2,18 @@ import { findClassModule } from '@steambrew/client';
 
 export type CssClasses = { [name: string]: string };
 
+const LIBRARY_SIDEBAR_ENTRY_CLASSES_FALLBACK: CssClasses = {
+	Container: '_2-O4ZG0KrnSrzISHBKctFQ',
+	GameListEntryContainer: '_1vO6BoiVslZgs1kqDGdUs8',
+	GameListEntryName: '_2SXJM0PeFEi3gbC7V3S5pE',
+	GameIcon: 'ga1hyw11cdBVodrCAidPF',
+};
+const LIBRARY_SIDEBAR_CLASSES_FALLBACK: CssClasses = {
+	Container: '_3x1HklzyDs4TEjACrRO2tB',
+	GameListHomeAndSearch: '_2TKEazUUS3TlniZfpc8OOe',
+	CollectionsButton: '_2CEKFex6JMsAse2lqMMjUp',
+};
+
 export const FEED_CLASSES_FALLBACK: CssClasses = {
 	ActivityFeedContainer: '_3yTl3RiWfo-Itg-xp967wP',
 	FetchMoreContainer: '_39ZurKJQex6v69aXzvc_nj',
@@ -203,6 +215,20 @@ let _gameInfoOuterClassModule: ResolvedCssClasses | null = null;
 let _appPortraitClassModule: ResolvedCssClasses | null = null;
 let _gameInfoClassModule: ResolvedCssClasses | null = null;
 let _linksBarClassModule: ResolvedCssClasses | null = null;
+let _librarySidebarEntryClassModule: ResolvedCssClasses | null = null;
+let _librarySidebarClassModule: ResolvedCssClasses | null = null;
+
+export const LIBRARY_SIDEBAR_ENTRY_CLASSES = (): CssClasses =>
+	(_librarySidebarEntryClassModule ||= resolveClassModule(
+		module => module.GameListEntryContainer && module.GameListEntryName && module.GameIcon,
+		LIBRARY_SIDEBAR_ENTRY_CLASSES_FALLBACK,
+	)).classes;
+
+export const LIBRARY_SIDEBAR_CLASSES = (): CssClasses =>
+	(_librarySidebarClassModule ||= resolveClassModule(
+		module => module.Container && module.GameListHomeAndSearch && module.CollectionsButton,
+		LIBRARY_SIDEBAR_CLASSES_FALLBACK,
+	)).classes;
 
 export const FEED_CLASS_MODULE = (): ResolvedCssClasses =>
 	(_feedClassModule ||= resolveClassModule(
@@ -298,4 +324,6 @@ export function resetResolvedCssClassModules(): void {
 	_appPortraitClassModule = null;
 	_gameInfoClassModule = null;
 	_linksBarClassModule = null;
+	_librarySidebarEntryClassModule = null;
+	_librarySidebarClassModule = null;
 }

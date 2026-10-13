@@ -400,7 +400,7 @@ export async function synchronizeShortcutOfficialIdentity(options: {
 			}]).then(statsMap => {
 				const stats = statsMap.get(shortcutAppId);
 				if (stats) {
-					setInstantPlaytimeStats(shortcutAppId, stats);
+					setInstantPlaytimeStats(shortcutAppId, stats, options.steamAppId);
 					window.dispatchEvent(new CustomEvent('gdl:playtime-changed', {
 						detail: { shortcutAppId, title: officialName, steamAppId: options.steamAppId },
 					}));

@@ -2,7 +2,9 @@ import type { LocalAchievementData } from '../../domain/types';
 
 const localAchievementMemoryCache = new Map<string, LocalAchievementData>();
 const MAX_LOCAL_ACHIEVEMENT_ALIASES = 192;
-const LOCAL_ACHIEVEMENT_SNAPSHOT_STORAGE_KEY = 'gdl_local_achievement_snapshots_v2';
+// Older snapshots could be aliased to the next shortcut by an in-flight
+// navigation. Ignore that renderer cache; the underlying progress files remain.
+const LOCAL_ACHIEVEMENT_SNAPSHOT_STORAGE_KEY = 'gdl_local_achievement_snapshots_v3';
 const MAX_PERSISTED_ACHIEVEMENT_SNAPSHOTS = 64;
 const PERSISTED_ACHIEVEMENT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -141,6 +143,60 @@ export function getCachedLocalAchievementsForGame(
 	return null;
 }
 
+function achievementSnapshotIdentity(data: LocalAchievementData): string {
+	return JSON.stringify([
+		String(data.metadata_appid || data.appid || ''),
+		String(data.state_appid || ''),
+		String(data.path || ''),
+		String(data.root || ''),
+	]);
+}
+
+function findCachedAchievementSnapshot(
+	keys: string[],
+	matches: (data: LocalAchievementData) => boolean,
+): LocalAchievementData | null {
+	for (const key of keys) {
+		const value = localAchievementMemoryCache.get(key);
+		if (value && matches(value)) {
+			localAchievementMemoryCache.delete(key);
+			localAchievementMemoryCache.set(key, value);
+			return value;
+		}
+		loadPersistedSnapshots();
+		const snapshot = persistedSnapshots.find(entry =>
+			entry.aliases.includes(key) && matches(entry.data));
+		if (!snapshot) continue;
+		snapshot.updatedAt = Date.now();
+		memoryCache(snapshot.data, snapshot.aliases);
+		return snapshot.data;
+	}
+	return null;
+}
+
+/** Early rendering needs this shortcut's own snapshot. A shared Steam AppID
+ * alias can belong to another installation, and state_appid is backend
+ * provenance rather than proof that a snapshot belongs to this shortcut. */
+export function getCachedLocalAchievementsForShortcut(
+	steamAppId: string | number | null | undefined,
+	shortcutId: string | number | null | undefined,
+): LocalAchievementData | null {
+	const expectedAppId = String(steamAppId || '');
+	const shortcutAlias = String(shortcutId || '');
+	if (!/^\d+$/.test(expectedAppId) || !/^\d+$/.test(shortcutAlias)) return null;
+	return findCachedAchievementSnapshot([shortcutAlias], data =>
+		String(data.metadata_appid || data.appid || '') === expectedAppId);
+}
+
+/** Reuse a newer cached result only when it describes the same local source. */
+export function pickCachedLocalAchievementSnapshot(data: LocalAchievementData): LocalAchievementData {
+	const identity = achievementSnapshotIdentity(data);
+	const keys = Array.from(new Set([data.state_appid, data.appid, data.metadata_appid]
+		.map(value => String(value || '')).filter(Boolean)));
+	return findCachedAchievementSnapshot(keys, cached =>
+		achievementSnapshotIdentity(cached) === identity) || data;
+}
+
 export function hasCachedLocalAchievements(key: string): boolean {
 	return Boolean(getCachedLocalAchievements(key));
 }
@@ -152,9 +208,9 @@ export function cacheLocalAchievements(data: LocalAchievementData, ...aliases: A
 	memoryCache(data, allAliases);
 	loadPersistedSnapshots();
 	const signature = localAchievementDataSignature(data);
-	const identity = `${data.appid}|${data.state_appid || ''}`;
+	const identity = achievementSnapshotIdentity(data);
 	const existingIndex = persistedSnapshots.findIndex(entry =>
-		`${entry.data.appid}|${entry.data.state_appid || ''}` === identity);
+		achievementSnapshotIdentity(entry.data) === identity);
 	const existing = existingIndex >= 0 ? persistedSnapshots[existingIndex] : null;
 	if (existing?.signature === signature
 		&& allAliases.every(alias => existing.aliases.includes(alias))) return;

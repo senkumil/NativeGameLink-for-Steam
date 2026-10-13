@@ -25,26 +25,25 @@ function forceFlexDisplay(doc: Document, element: HTMLElement): void {
 	// Steam applies display:none!important through NarrowRightPanel. An inline
 	// important declaration wins that fixed logical-pixel breakpoint without
 	// changing the native component's layout or affecting ordinary Steam games.
-	element.style.setProperty('display', 'flex', 'important');
+	if (element.style.getPropertyValue('display') !== 'flex' || element.style.getPropertyPriority('display') !== 'important') {
+		element.style.setProperty('display', 'flex', 'important');
+	}
 }
 
-/** Keep linked-game play-bar copy visible while Steam's middle splitter marks
- * the right pane NarrowRightPanel even though its stats row still has room. */
+/** Keep the linked Cloud and playtime copy visible. Achievement visibility is
+ * controlled entirely by Steam's responsive rules and available row space. */
 export function preserveLinkedPlaybarVisibility(doc: Document): void {
 	const classes = PLAYBAR_CLASSES();
 	const sections = elementsWithCssModuleClass(doc, classes.GameStatsSection)
 		.filter(section => section.isConnected);
 	for (const section of sections) {
 		for (const copy of elementsWithCssModuleClass(section, classes.HideWhenNarrow)) {
-			forceFlexDisplay(doc, copy);
-		}
-		for (const achievements of elementsWithCssModuleClass(section, classes.MiniAchievements)) {
-			forceFlexDisplay(doc, achievements);
+			if (copy.closest('[data-gdl-cloud-status], [data-gdl-playtime]')) forceFlexDisplay(doc, copy);
 		}
 	}
 }
 
-/** Restore any native inline display value when the linked route is retired. */
+/** Restore the owned copy's original display when the linked route retires. */
 export function restoreLinkedPlaybarVisibility(doc: Document): void {
 	const forced = forcedElementsByDocument.get(doc);
 	if (!forced) return;

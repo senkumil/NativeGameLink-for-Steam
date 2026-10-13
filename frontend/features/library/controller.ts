@@ -7,6 +7,9 @@ import { ensureControllerStyles } from './styles/controller';
 import { buildNativeSidebarSection, type NativeLibraryLayout } from './layout';
 import { getSteamStore } from '../../steam/modules/SteamModuleResolver';
 import { steamWebpackRuntime } from '../../steam/modules/SteamWebpackRuntime';
+import { withoutLibrarySidebarMutations, isLibrarySidebarNode } from '../../steam/library-sidebar';
+import { mutationIsWithinSelector } from '../../core/dom';
+import { isLibrarySidebarInteractionActive } from '../../steam/sidebar-interaction';
 import {
 	NATIVE_SVG_XBOX,
 	NATIVE_SVG_XBOX_PARTIAL,
@@ -48,10 +51,10 @@ export function isSteamControllerConnected(ctrl: any): boolean {
 	return false;
 }
 
+const controllerStoreLookups = new WeakMap<Window, { runtime: unknown; checkedAt: number; store: any }>();
+
 function getSteamControllerStore(doc?: Document): any {
 	try {
-		const fromResolver = getSteamStore('ControllerStore') || getSteamStore('controllerStore');
-		if (fromResolver) return fromResolver;
 		const win = doc?.defaultView || (typeof window !== 'undefined' ? window : null);
 		const candidates = [
 			typeof window !== 'undefined' ? window : null,
@@ -64,14 +67,29 @@ function getSteamControllerStore(doc?: Document): any {
 			if (w?.ControllerStore) return w.ControllerStore;
 			if (w?.controllerStore) return w.controllerStore;
 		}
-		const mods = steamWebpackRuntime.getAllModules();
+		// Most clients expose no controller store at all. Polling connection
+		// state must not rescan every loaded Webpack module every 150 ms. Live
+		// globals above remain immediate, including after a negative lookup.
+		const runtime = steamWebpackRuntime.getRequire(doc);
+		const cached = win ? controllerStoreLookups.get(win) : null;
+		const checkedAt = Date.now();
+		if (doc && isLibrarySidebarInteractionActive(doc)) return cached?.runtime === runtime ? cached.store : null;
+		if (cached && cached.runtime === runtime && checkedAt - cached.checkedAt < (cached.store ? 5000 : 2000)) return cached.store;
+		const remember = (store: any): any => {
+			if (win) controllerStoreLookups.set(win, { runtime, checkedAt, store });
+			return store;
+		};
+		const fromResolver = getSteamStore('ControllerStore') || getSteamStore('controllerStore');
+		if (fromResolver) return remember(fromResolver);
+		const mods = steamWebpackRuntime.getAllModules(doc);
 		for (const m of mods) {
 			const exp = m?.exports;
 			if (!exp) continue;
-			if (typeof exp.GetControllers === 'function') return exp;
-			if (typeof exp.sY?.GetControllers === 'function') return exp.sY;
-			if (typeof exp.default?.GetControllers === 'function') return exp.default;
+			if (typeof exp.GetControllers === 'function') return remember(exp);
+			if (typeof exp.sY?.GetControllers === 'function') return remember(exp.sY);
+			if (typeof exp.default?.GetControllers === 'function') return remember(exp.default);
 		}
+		return remember(null);
 	} catch {}
 	return null;
 }
@@ -562,9 +580,12 @@ function setupControllerScrollTranslucencyWatcher(
 		});
 	};
 
-	const onScroll = () => schedule();
+	const onScroll = (event: Event) => { if (!isLibrarySidebarNode(event.target)) schedule(); };
 	const onResize = () => schedule();
-	const observer = new MutationObserver(() => schedule());
+	const observer = new MutationObserver(records => {
+		if (withoutLibrarySidebarMutations(records).some(record => !mutationIsWithinSelector(record,
+			'[id^="gdl-"], [data-gdl-injected]'))) schedule();
+	});
 	try {
 		if (doc.body) observer.observe(doc.body, { childList: true, subtree: true });
 	} catch {}

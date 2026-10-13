@@ -17,7 +17,6 @@ import { getCachedOfficialCommunityItems, getOfficialCommunityItems } from '../l
 import { getCachedCommunityContent, getCachedNews, getCommunityContent, getNews } from '../library/news';
 import { getCachedFriendData, getFriendData } from '../library/social/friends';
 import { cachePersona, hasCachedPersona } from '../library/social/personas';
-import { prioritizeShortcutLinkingAndArtwork } from '../library/artwork-sync';
 import { detectConnectedController, detectGameControllerSupport, subscribeControllerChanges } from '../library/controller';
 import { defaultBigPictureModeEnabled } from '../../core/preferences';
 import {
@@ -36,7 +35,6 @@ import {
 	restoreBigPictureNonSteamNotices,
 	restoreNativePanelChildren,
 } from './panel-mount';
-import { syncNativeAchievementProgressCache } from '../achievements/progress';
 import { activeTabFromNative, findBigPictureTabStrip } from './tabs';
 import { ensureBigPictureDetailStyles } from './details-styles';
 import { activateNativeGameInfoBridge, deactivateNativeGameInfoBridge } from './native-info-bridge';
@@ -297,12 +295,6 @@ function startDetailHydration(doc: Document, state: BigPictureDetailState): void
 	applyResource('achievements', fetchLocalAchievementData(state.shortcut.steamAppId, {
 		stateAppId: String(state.shortcut.id),
 		maxAgeMs: 1250,
-	}).then(achievements => {
-		if (achievements && typeof achievements.total === 'number') {
-			syncNativeAchievementProgressCache(state.shortcut.id, achievements.unlocked, achievements.total, doc);
-			syncNativeAchievementProgressCache(state.shortcut.steamAppId, achievements.unlocked, achievements.total, doc);
-		}
-		return achievements;
 	}));
 	applyResource('news', getNews(state.shortcut.steamAppId, state.language));
 	applyResource('community', getCommunityContent(state.shortcut.steamAppId, state.language));
@@ -518,13 +510,9 @@ export async function refreshBigPictureShortcutDetails(doc: Document): Promise<v
 		detailTabObservers.delete(doc);
 		removeBigPictureDetailsNodes(doc, true);
 		ensureControllerSync(doc);
-		prioritizeShortcutLinkingAndArtwork(shortcut.id, shortcut.steamAppId, shortcut.title);
 		return;
 	}
 	defaultModeDetailShortcuts.delete(doc);
-	if (!state || changedShortcut) {
-		prioritizeShortcutLinkingAndArtwork(shortcut.id, shortcut.steamAppId, shortcut.title);
-	}
 	const tabs = findBigPictureTabStrip(doc);
 	if (!tabs) {
 		backendLog('Big Picture details: native tab strip not ready, scheduling retry');

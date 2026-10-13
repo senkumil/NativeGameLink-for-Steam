@@ -3,6 +3,7 @@ import type { FriendCategories, SteamGameData } from '../../domain/types';
 import { loc } from '../../steam/localization';
 import {
 	getCachedLocalAchievementsForGame,
+	getCachedLocalAchievementsForShortcut,
 	makeLinkedAchievementsClickable,
 	openLocalAchievementsModal,
 	renderLocalAchievementSidebarHtml,
@@ -74,7 +75,9 @@ export function renderLinkedSidebarCore(
 	if (total <= 0) return;
 	ensureAchievementSidebarStyles(doc);
 	ensureAchievementModalStyles(doc);
-	const cachedAchievements = getCachedLocalAchievementsForGame(options.steamAppId, options.shortcutAppId);
+	const cachedAchievements = options.shortcutAppId
+		? getCachedLocalAchievementsForShortcut(options.steamAppId, options.shortcutAppId)
+		: getCachedLocalAchievementsForGame(options.steamAppId);
 	let initialAchievements = cachedAchievements;
 	if (!initialAchievements && options.data.achievements && options.data.achievements.total > 0) {
 		const highlighted = options.data.achievements.highlighted || [];

@@ -1,7 +1,7 @@
 import type { LocalAchievementData } from '../../domain/types';
 import { backendLog } from '../../api/backend';
 import { escapeHtml } from '../../core/text';
-import { PLAYBAR_CLASSES } from '../../steam/css';
+import { ACH_CLASSES, PLAYBAR_CLASSES } from '../../steam/css';
 import { steamUIModeService } from '../../steam/ui/SteamUIModeService';
 import { gdlText, loc } from '../../steam/localization';
 import {
@@ -12,9 +12,14 @@ import {
 	NATIVE_UI_BLUEPRINT_KEYS,
 } from '../../steam/native-dom';
 import { preserveLinkedPlaybarVisibility } from '../../steam/playbar-visibility';
+import { paintedNativeStats } from '../../steam/library-details';
+import { syncAchievementPlaybarSpace } from '../../steam/achievement-playbar-space';
 import { localAchievementPercent } from './format';
-import { getCachedLocalAchievementsForGame } from './cache';
 import { openLocalAchievementsModal } from './modal';
+import { isCurrentAchievementTarget, linkedAchievementTarget, type LinkedAchievementTarget } from './navigation';
+
+type PlaybarState = { element: HTMLElement; data: LocalAchievementData; target: LinkedAchievementTarget };
+const playbarStates = new WeakMap<Document, PlaybarState>();
 
 export function findVisibleTextElement(doc: Document, wanted: string, root?: Node): HTMLElement | null {
 	const normalize = (value: string) => value.replace(/\s+/g, ' ').trim().toLocaleLowerCase();
@@ -71,89 +76,70 @@ function updateAchievementMedal(
 }
 
 export function ensureLocalPlaybarStat(doc: Document, data: LocalAchievementData): HTMLElement | null {
+	const target = linkedAchievementTarget(doc);
+	if (!target || !data || String(data.metadata_appid || data.appid) !== target.steamAppId) return null;
 	if (steamUIModeService.isGamepadUI(doc)) {
 		doc.querySelectorAll<HTMLElement>('[data-gdl-playbar-achievements="1"], #gdl-playbar-achievements').forEach(el => el.remove());
 		return null;
 	}
-	if (!data || data.total <= 0) return null;
+	if (data.total <= 0) return null;
 	const classes = PLAYBAR_CLASSES();
 	const pct = localAchievementPercent(data);
 	const isComplete = data.unlocked >= data.total && data.total > 0;
 	const progressText = `${data.unlocked}/${data.total}`;
-	let sections = elementsWithCssModuleClass(doc, classes.GameStatsSection).filter(section => section.isConnected);
-	if (sections.length === 0) {
-		const cloud = doc.querySelector('[data-gdl-cloud-status="1"]') as HTMLElement | null;
-		if (cloud?.parentElement) sections = [cloud.parentElement];
-		else {
-			const playtime = doc.querySelector('[data-gdl-playtime="1"], .SVGIcon_PlayTime') as HTMLElement | null;
-			if (playtime?.parentElement?.parentElement) {
-				const candidate = playtime.closest('[class*="GameStatsSection"], [class*="gameStatsSection"], [class*="PlayBarStats"], [class*="playBarStats"]') as HTMLElement | null
-					|| playtime.parentElement.parentElement;
-				if (candidate) sections = [candidate];
-			} else {
-				const fallback = doc.querySelector('[class*="GameStatsSection"], [class*="gameStatsSection"], [class*="PlayBarStats"], [class*="playBarStats"]') as HTMLElement | null;
-				if (fallback) sections = [fallback];
-			}
-		}
-	}
-	if (sections.length === 0) return null;
-	let lastStat: HTMLElement | null = null;
-	for (const stats of sections) {
-		const open = (event: Event) => {
-			event.preventDefault();
-			event.stopPropagation();
-			const current = (data?.appid ? getCachedLocalAchievementsForGame(data.appid, data.state_appid) : null) || data;
-			void openLocalAchievementsModal(doc, current).catch(error => backendLog('Achievements modal error: ' + error));
+	const sections = paintedNativeStats(doc, Number(target.shortcutAppId));
+	if (!sections.length) return null;
+	let state = playbarStates.get(doc);
+	const cloudParent = doc.querySelector<HTMLElement>('[data-gdl-cloud-status="1"]')?.parentElement;
+	const stats = sections.find(section => section === cloudParent)
+		|| sections.find(section => section === state?.element.parentElement) || sections[0];
+	if (!state) {
+		const open = (event: Event): void => {
+			const current = playbarStates.get(doc);
+			if (!current || !isCurrentAchievementTarget(doc, current.target)) return;
+			event.preventDefault(); event.stopPropagation();
+			void openLocalAchievementsModal(doc, current.data)
+				.catch(error => backendLog('Achievements modal error: ' + error));
 		};
-		let stat = stats.querySelector<HTMLElement>('[data-gdl-playbar-achievements="1"], #gdl-playbar-achievements');
-		if (stat) {
-			if (stat.dataset.gdlNativeBlueprint !== '1') {
-				const upgraded = buildNativeAchievementPlaybarBlueprint(doc, data.unlocked, data.total, open);
-				if (upgraded) {
-					stat.replaceWith(upgraded);
-					stat = upgraded;
-				}
-			}
-			const count = stat.querySelector<HTMLElement>('.gdl-lp-count')
-				|| elementsWithCssModuleClass(stat, classes.AchievementCountLabel)[0]
-				|| Array.from(stat.querySelectorAll<HTMLElement>('div,span')).find(element => /^\s*\d+\s*\/\s*\d+\s*$/.test(element.textContent || ''))
-				|| null;
-			if (count && count.textContent !== progressText) count.textContent = progressText;
-			const fill = stat.querySelector<HTMLElement>('.gdl-lp-fill')
-				|| elementsWithCssModuleClass(stat, classes.DetailsProgressBar)[0]
-				|| null;
-			const targetWidth = `${pct}%`;
-			if (fill && fill.style.width !== targetWidth) fill.style.width = targetWidth;
-			if (stat.classList.contains('is-complete') !== isComplete) {
-				stat.classList.toggle('is-complete', isComplete);
-			}
-			updateAchievementMedal(stat, classes, isComplete);
-			applyNativePlaybarTypography(stat, NATIVE_UI_BLUEPRINT_KEYS.playbarAchievements);
-			insertAchievementInNativeOrder(stats, stat);
-			lastStat = stat;
-			continue;
-		}
 		let wrapper = buildNativeAchievementPlaybarBlueprint(doc, data.unlocked, data.total, open);
-		if (wrapper) {
-			wrapper.classList.toggle('is-complete', isComplete);
-			updateAchievementMedal(wrapper, classes, isComplete);
-			applyNativePlaybarTypography(wrapper, NATIVE_UI_BLUEPRINT_KEYS.playbarAchievements);
-			insertAchievementInNativeOrder(stats, wrapper);
-			lastStat = wrapper;
-			continue;
+		if (!wrapper) {
+			wrapper = doc.createElement('div');
+			wrapper.id = 'gdl-playbar-achievements';
+			wrapper.dataset.gdlPlaybarAchievements = '1';
+			wrapper.dataset.gdlNativeBlueprint = '0';
+			wrapper.className = `${classes.GameStat || ''} ${classes.MiniAchievements || classes.Playtime || ''} gdl-local-playbar`;
+			wrapper.title = gdlText('view_linked_achievements', 'View achievements for this linked game');
+			wrapper.innerHTML = `<div class="${classes.GameStatIcon || classes.GameStatIconForced || ''} gdl-lp-icon"></div><div class="${classes.GameStatRight || ''} ${classes.AchievementRight || ''}"><div class="${classes.PlayBarLabel || ''} ${classes.AchievementLabel || ''}">${escapeHtml(loc('AppDetails_SectionTitle_Achievements', gdlText('achievements_label', 'Achievements')))}</div><div class="${classes.AchievementProgressRow || ''}"><div class="gdl-lp-count ${classes.PlayBarDetailLabel || ''} ${classes.AchievementCountLabel || ''}"></div><div class="gdl-lp-bar ${classes.DetailsProgressContainer || ''}"><div class="gdl-lp-fill ${classes.DetailsProgressBar || ''}"></div></div></div></div>`;
+			wrapper.addEventListener('click', open);
 		}
-		wrapper = doc.createElement('div');
-		wrapper.dataset.gdlPlaybarAchievements = '1';
-		wrapper.dataset.gdlNativeBlueprint = '0';
-		wrapper.id = 'gdl-playbar-achievements';
-		wrapper.className = `${classes.GameStat || ''} ${classes.MiniAchievements || classes.Playtime || ''} gdl-local-playbar`;
-		wrapper.title = gdlText('view_linked_achievements', 'View achievements for this linked game');
-		wrapper.innerHTML = `<div class="${classes.GameStatIcon || classes.GameStatIconForced || ''} ${classes.AchievementSVG || ''} gdl-lp-icon">${achievementMedalSvg(classes.AchievementSVG || '', isComplete)}</div><div class="${classes.HideWhenNarrow || ''} ${classes.GameStatRight || ''} ${classes.AchievementRight || ''}"><div class="${classes.PlayBarLabel || ''} ${classes.AchievementLabel || ''}">${escapeHtml(loc('AppDetails_SectionTitle_Achievements', gdlText('achievements_label', 'Achievements')))}</div><div class="${classes.AchievementProgressRow || ''}"><div class="gdl-lp-count ${classes.PlayBarDetailLabel || ''} ${classes.AchievementCountLabel || ''}">${progressText}</div><div class="gdl-lp-bar ${classes.DetailsProgressContainer || ''}"><div class="gdl-lp-fill ${classes.DetailsProgressBar || ''}" style="width:${pct}%;"></div></div></div></div>`;
-		wrapper.addEventListener('click', open);
+		const count = elementsWithCssModuleClass(wrapper, classes.AchievementCountLabel)[0]
+			|| Array.from(wrapper.querySelectorAll<HTMLElement>('div,span')).find(element => /^\s*\d+\s*\/\s*\d+\s*$/.test(element.textContent || ''));
+		if (count && !count.classList.contains('gdl-lp-count')) count.classList.add('gdl-lp-count');
+		const fill = elementsWithCssModuleClass(wrapper, classes.DetailsProgressBar)[0]
+			|| elementsWithCssModuleClass(wrapper, ACH_CLASSES().AchievementProgress)[0];
+		if (fill && !fill.classList.contains('gdl-lp-fill')) fill.classList.add('gdl-lp-fill');
 		applyNativePlaybarTypography(wrapper, NATIVE_UI_BLUEPRINT_KEYS.playbarAchievements);
-		insertAchievementInNativeOrder(stats, wrapper);
-		lastStat = wrapper;
+		state = { element: wrapper, target, data };
+		playbarStates.set(doc, state);
 	}
+	state.target = target; state.data = data;
+	const stat = state.element;
+	const identity = `${target.steamAppId}:${target.shortcutAppId}`;
+	if (stat.dataset.gdlAchievementIdentity !== identity) stat.dataset.gdlAchievementIdentity = identity;
+	if (stat.dataset.gdlAchievementShortcutId !== target.shortcutAppId) stat.dataset.gdlAchievementShortcutId = target.shortcutAppId;
+	if (stat.dataset.gdlShortcutAppId !== target.shortcutAppId) stat.dataset.gdlShortcutAppId = target.shortcutAppId;
+	if (stat.dataset.gdlSteamAppId !== target.steamAppId) stat.dataset.gdlSteamAppId = target.steamAppId;
+	for (const duplicate of doc.querySelectorAll<HTMLElement>('[data-gdl-playbar-achievements="1"], #gdl-playbar-achievements')) {
+		if (duplicate !== stat) duplicate.remove();
+	}
+	const count = stat.querySelector<HTMLElement>('.gdl-lp-count') || elementsWithCssModuleClass(stat, classes.AchievementCountLabel)[0];
+	if (count && count.textContent !== progressText) count.textContent = progressText;
+	const fill = stat.querySelector<HTMLElement>('.gdl-lp-fill') || elementsWithCssModuleClass(stat, classes.DetailsProgressBar)[0];
+	if (fill && fill.style.width !== `${pct}%`) fill.style.width = `${pct}%`;
+	if (stat.classList.contains('is-complete') !== isComplete) stat.classList.toggle('is-complete', isComplete);
+	updateAchievementMedal(stat, classes, isComplete);
+	insertAchievementInNativeOrder(stats, stat);
+	syncAchievementPlaybarSpace(doc);
 	preserveLinkedPlaybarVisibility(doc);
-	return lastStat;
+	return stat;
 }

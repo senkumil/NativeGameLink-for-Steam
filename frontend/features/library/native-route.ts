@@ -1,29 +1,99 @@
-import { LINKS_BAR_CLASSES } from '../../steam/css';
+import { LINKS_BAR_CLASSES, PLAYBAR_CLASSES } from '../../steam/css';
 import { elementsWithCssModuleClass, isRenderedElement } from '../../steam/native-dom';
-import { findMappingForShortcut, isShortcutDismissed } from '../shortcuts/runtime';
+import { findMappingForShortcut } from '../shortcuts/registry';
+import { isShortcutDismissed } from '../shortcuts/dismissed';
+import { committedHeaderAppId, isPaintedLibraryElement } from '../../steam/library-details';
 import { GDL_INJECTED } from './constants';
 import { findNonSteamNotice } from './notice';
 
+function normalizedRouteAppId(value: unknown): number | null {
+	const raw = Number(value);
+	if (!Number.isInteger(raw) || raw === 0 || raw < -2147483648 || raw > 4294967295) return null;
+	return raw < 0 ? raw >>> 0 : raw;
+}
+
+function isPaintedNativeHeader(doc: Document, element: HTMLElement): boolean {
+	if (!isPaintedLibraryElement(doc, element)
+		|| element.closest('[id^="gdl-"], [data-gdl-cloud-stats], [data-gdl-cloud-status], [data-gdl-playtime]')) return false;
+	return true;
+}
+
+function nativeDetailsHeaderAppId(doc: Document): number | null {
+	const classes = PLAYBAR_CLASSES();
+	const ids = new Set<number>();
+	for (const value of [classes.Container, classes.GameStatsSection]) {
+		for (const element of elementsWithCssModuleClass(doc, value)) {
+			try {
+				if (!isPaintedNativeHeader(doc, element)) continue;
+				const appId = committedHeaderAppId(element);
+				if (appId !== null) ids.add(appId);
+			} catch {}
+		}
+	}
+	return ids.size === 1 ? ids.values().next().value! : null;
+}
+
 export function routedSteamAppId(doc: Document): number | null {
-	const routePattern = /(?:games\/details|library\/app|routes\/library\/app|appdetails|app|game)\/(\d+)|[?&#]appid=(\d+)/i;
+	const routePattern = /(?:games\/details|library\/app|routes\/library\/app|library\/collection\/[^/?#]+|appdetails|app|game)\/(-?\d+)(?=[/?#]|$)|[?&#]appid=(-?\d+)/i;
+	const fromPath = (path: unknown): number | null => {
+		const match = String(path || '').match(routePattern);
+		return match ? normalizedRouteAppId(match[1] || match[2]) : null;
+	};
+	const localView = doc.defaultView as any;
+	const rootView = typeof window !== 'undefined' ? window as any : null;
+	const views = Array.from(new Set([localView, rootView].filter(Boolean)));
+	const selectionCandidates: unknown[] = [];
+	// SP Desktop's browser URL often has no AppID. Steam publishes the real
+	// in-memory route on its active window instance, independently of metadata.
+	for (const view of views) {
+		const uiStore = view.uiStore;
+		if (!uiStore) continue;
+		try {
+			const path = String(uiStore.GetActiveWindowInstance?.()?.LocationPathName || '');
+			const appId = fromPath(path);
+			if (appId !== null) return appId;
+			// The saved selection survives Home/collection navigation. A concrete
+			// non-details Library destination must not reuse that stale identity.
+			if (/^\/?library(?:\/|$)/i.test(path)) return null;
+		} catch {}
+		try {
+			const selection = uiStore.currentGameListSelection || uiStore.m_gameListSelection;
+			selectionCandidates.push(selection?.nAppId);
+		} catch {}
+	}
 	for (const url of [String(doc.defaultView?.location?.href || ''), String(doc.location?.href || '')]) {
-		const match = url.match(routePattern);
-		if (match) return Number(match[1] || match[2]);
+		const appId = fromPath(url);
+		if (appId !== null) return appId;
 	}
 	try {
-		const view = (doc.defaultView as any) || (typeof window !== 'undefined' ? (window as any) : null);
-		const history = view?.g_History || view?.g_AppHistory || (typeof window !== 'undefined' ? (window as any).g_History || (window as any).g_AppHistory : null);
-		const path = String(history?.location?.pathname || history?.location?.hash || '');
-		const historyMatch = path.match(routePattern);
-		if (historyMatch) return Number(historyMatch[1] || historyMatch[2]);
+		for (const view of views) {
+			const history = view.g_History || view.g_AppHistory;
+			for (const path of [history?.location?.pathname, history?.location?.hash]) {
+				const appId = fromPath(path);
+				if (appId !== null) return appId;
+			}
+		}
 	} catch {}
+	// A selection may advance before React replaces the previous game's header.
+	// Without a concrete route, require the displayed header to agree with it.
+	const headerAppId = selectionCandidates.length > 0 ? nativeDetailsHeaderAppId(doc) : null;
+	if (headerAppId !== null) {
+		for (const selection of selectionCandidates) {
+			const appId = normalizedRouteAppId(selection);
+			if (appId !== null) {
+				if (appId === headerAppId) return appId;
+				break;
+			}
+		}
+	}
 	try {
 		const selected = doc.querySelectorAll<HTMLElement>(
 			'[class*="gameListRow"][class*="Selected"], [class*="GameListEntry"][class*="Selected"], [class*="gamelistentry_"][class*="selected_"]'
 		);
 		for (const el of Array.from(selected)) {
 			const id = el.getAttribute('data-appid') || el.getAttribute('data-app-id');
-			if (id && /^\d+$/.test(id) && Number(id) > 0) return Number(id);
+			const appId = id && /^-?\d+$/.test(id) ? normalizedRouteAppId(id) : null;
+			if (appId !== null) return appId;
 		}
 	} catch {}
 	try {
@@ -33,7 +103,8 @@ export function routedSteamAppId(doc: Document): number | null {
 		for (const el of detailContainers) {
 			if (el.closest('[id^="gdl-"]')) continue;
 			const id = el.getAttribute('data-appid') || el.getAttribute('data-app-id');
-			if (id && /^\d+$/.test(id) && Number(id) > 0) return Number(id);
+			const appId = id && /^-?\d+$/.test(id) ? normalizedRouteAppId(id) : null;
+			if (appId !== null) return appId;
 		}
 	} catch {}
 	return null;

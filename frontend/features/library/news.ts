@@ -4,6 +4,7 @@ import { CACHE_RETENTION, CACHE_TTL, cacheDeleteMatching, cacheGet, cacheRead, c
 import { RetryingRequestCache } from '../../core/request-cache';
 import { getGameData, getSynchronousGameData } from '../../core/game-data';
 import { gdlText, getSteamLanguage, loc, steamIntlLocale, steamLanguageSync } from '../../steam/localization';
+import { orderCommunityItems } from './community-order';
 
 // A partially available legacy feed is still a useful last-known-good snapshot.
 // Keep transient failures in memory briefly so revisiting a game does not launch
@@ -214,7 +215,7 @@ export async function getCommunityContent(steamAppId: string, requestedLanguage?
 			const json = await fetchCommunityContentBackend({ steam_app_id: steamAppId, language });
 			const parsed = JSON.parse(json);
 			if (parsed?.error || parsed?.transient_error === true) return null;
-			const items = Array.isArray(parsed.items) ? parsed.items.slice(0, 80) as CommunityContentItem[] : [];
+			const items = Array.isArray(parsed.items) ? orderCommunityItems(parsed.items).slice(0, 80) : [];
 			cacheSet(cacheKey, items);
 			return items;
 		} catch (e) {
@@ -492,7 +493,19 @@ export function stripTags(str: string): string {
 }
 
 export function newsExcerpt(contents: string, maxLength = 250): string {
-	const clean = stripTags(contents).replace(/\s+/g, ' ').trim();
+	// Steam announcements can consist solely of an embedded trailer and a
+	// Store URL. Removing only the BBCode tags exposes media/link addresses as
+	// prose. Drop complete embeds, retain labeled-link text, and omit raw URLs.
+	const prose = String(contents || '')
+		.replace(/\[(img|previewimg|previewyoutube|youtube|video|webm)\b[^\]]*\][\s\S]*?\[\/\1\]/gi, ' ')
+		.replace(/<(script|style|iframe|video|audio)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, ' ')
+		.replace(/<(?:br\b[^>]*|\/(?:p|div|li|h[1-6]))>/gi, ' ')
+		.replace(/\[(?:\/?(?:h[1-6]|p|list|olist|table|tr|td)|\*)(?:=[^\]]*)?\]/gi, ' ');
+	const clean = stripTags(prose)
+		.replace(/<[^>]+>/g, ' ')
+		.replace(/(?:https?:\/\/|steam:\/\/|www\.)[^\s<>"']+/gi, ' ')
+		.replace(/\(\s*\)|\[\s*\]/g, ' ')
+		.replace(/\s+/g, ' ').trim();
 	if (clean.length <= maxLength) return clean;
 	const candidate = clean.slice(0, maxLength + 1);
 	const sentenceEnd = Math.max(candidate.lastIndexOf('. '), candidate.lastIndexOf('! '), candidate.lastIndexOf('? '));

@@ -1,5 +1,6 @@
 import { loc } from '../../steam/localization';
 import { restoreLinkedPlaybarVisibility } from '../../steam/playbar-visibility';
+import { containsNativeLibraryHeader, findNativeLibraryHeader, isInsideNativeLibraryHeader } from '../../steam/library-header';
 
 export interface NativeLibraryLayout {
 	anchorRegion: HTMLElement | null;
@@ -40,6 +41,7 @@ function setNativeStyle(element: HTMLElement, property: ManagedStyleProperty, va
 }
 
 export function hideNativeLibraryElement(element: HTMLElement): void {
+	if (containsNativeLibraryHeader(element) || isInsideNativeLibraryHeader(element)) return;
 	setNativeStyle(element, 'display', 'none');
 	element.setAttribute('data-gdl-hidden', '1');
 }
@@ -157,15 +159,10 @@ export function discoverNativeLibraryLayout(doc: Document, noticeElement: Elemen
 
 		if (anchorRegion) {
 			const isHeaderOrContainsHeader = (el: HTMLElement | null): boolean => {
-				if (!el) return false;
-				const className = String(el.className || '');
-				if (/playbar|gamestats|header|hero|appdetailsheader/i.test(className)) return true;
-				if (el.querySelector('[class*="PlayBar"], [class*="playbar"], [class*="PlayButton"], [class*="playButton"], [class*="GameStatsSection"], [class*="AppDetailsHeader"]')) return true;
-				return false;
+				return Boolean(el && containsNativeLibraryHeader(el));
 			};
 			const isInsideHeader = (el: HTMLElement | null): boolean => {
-				if (!el) return false;
-				return Boolean(el.closest('[class*="AppDetailsHeader"], [class*="appdetailsheader"], [class*="HeaderContainer"]'));
+				return Boolean(el && isInsideNativeLibraryHeader(el));
 			};
 
 			const noticeChain = ancestorChain(noticeElement);
@@ -186,7 +183,7 @@ export function discoverNativeLibraryLayout(doc: Document, noticeElement: Elemen
 			}
 
 			if (!twoColumnRow) {
-				const header = doc.querySelector<HTMLElement>('[class*="AppDetailsHeader"], [class*="appdetailsheader"], [class*="HeaderContainer"]');
+				const header = findNativeLibraryHeader(doc);
 				const mainContainer = header?.parentElement;
 				if (mainContainer) {
 					for (let ai = 0; ai < anchorChain.length; ai += 1) {
@@ -209,12 +206,9 @@ export function discoverNativeLibraryLayout(doc: Document, noticeElement: Elemen
 			const parent: HTMLElement | null = cur.parentElement;
 			if (parent && parent.children.length >= 2) {
 				const isPlaybarOrHeader = (el: HTMLElement): boolean => {
-					const className = String(el.className || '');
-					if (/playbar|gamestats|header|hero/i.test(className)) return true;
-					if (el.querySelector('[class*="PlayBar"], [class*="playbar"], [class*="PlayButton"], [class*="playButton"], [class*="GameStatsSection"]')) return true;
-					return false;
+					return containsNativeLibraryHeader(el);
 				};
-				const hasInnerPlaybar = Boolean(parent.querySelector('[class*="PlayBar"], [class*="playbar"], [class*="PlayButton"], [class*="playButton"], [class*="GameStatsSection"]'));
+				const hasInnerPlaybar = containsNativeLibraryHeader(parent);
 				if (!isPlaybarOrHeader(parent) && !hasInnerPlaybar) {
 					const siblings = Array.from(parent.children).filter(c => c !== cur) as HTMLElement[];
 					const validSiblings = siblings.filter(s => !isPlaybarOrHeader(s));
@@ -237,14 +231,11 @@ export function discoverNativeLibraryLayout(doc: Document, noticeElement: Elemen
 		}
 
 		if (!twoColumnRow) {
-			const header = doc.querySelector<HTMLElement>('[class*="AppDetailsHeader"], [class*="appdetailsheader"], [class*="HeaderContainer"]');
+			const header = findNativeLibraryHeader(doc);
 			const mainContainer = header?.parentElement;
 			if (mainContainer) {
 				const isHeaderOrPlaybar = (el: HTMLElement): boolean => {
-					const className = String(el.className || '');
-					if (/playbar|gamestats|header|hero/i.test(className)) return true;
-					if (el.querySelector('[class*="PlayBar"], [class*="playbar"], [class*="PlayButton"], [class*="playButton"], [class*="GameStatsSection"]')) return true;
-					return false;
+					return containsNativeLibraryHeader(el);
 				};
 				const siblings = Array.from(mainContainer.children).filter(c => c !== header && c instanceof HTMLElement && !c.id?.startsWith('gdl-') && !isHeaderOrPlaybar(c as HTMLElement)) as HTMLElement[];
 				for (const sib of siblings) {
@@ -273,14 +264,14 @@ export function discoverNativeLibraryLayout(doc: Document, noticeElement: Elemen
 
 /** Restore only the geometry we intentionally need for the linked-game render. */
 export function prepareNativeLibraryLayout(layout: NativeLibraryLayout): void {
-	if (layout.contentColumn) {
+	if (layout.contentColumn && !containsNativeLibraryHeader(layout.contentColumn) && !isInsideNativeLibraryHeader(layout.contentColumn)) {
 		setNativeStyle(layout.contentColumn, 'display', 'block');
 		setNativeStyle(layout.contentColumn, 'height', 'auto');
 		setNativeStyle(layout.contentColumn, 'minHeight', '0');
 		setNativeStyle(layout.contentColumn, 'alignSelf', 'flex-start');
 		layout.contentColumn.removeAttribute('data-gdl-hidden');
 	}
-	if (layout.twoColumnRow) {
+	if (layout.twoColumnRow && !containsNativeLibraryHeader(layout.twoColumnRow) && !isInsideNativeLibraryHeader(layout.twoColumnRow)) {
 		setNativeStyle(layout.twoColumnRow, 'display', '');
 		setNativeStyle(layout.twoColumnRow, 'alignItems', 'flex-start');
 		layout.twoColumnRow.removeAttribute('data-gdl-hidden');
@@ -371,6 +362,9 @@ export function insertMainContent(
 ): void {
 	const { contentColumn, noticeParent } = layout;
 	if (contentColumn) {
+		// A partial Steam route commit can expose a common ancestor before the
+		// real content column exists. Wait for that column instead of hiding art.
+		if (containsNativeLibraryHeader(contentColumn) || isInsideNativeLibraryHeader(contentColumn)) return;
 		for (const child of Array.from(contentColumn.children)) {
 			const element = child as HTMLElement;
 			if (child === wrapper || protectedIds.has(element.id)) continue;
@@ -380,7 +374,7 @@ export function insertMainContent(
 		return;
 	}
 	const doc = wrapper.ownerDocument;
-	const header = doc.querySelector<HTMLElement>('[class*="AppDetailsHeader"], [class*="appdetailsheader"], [class*="HeaderContainer"]');
+	const header = findNativeLibraryHeader(doc);
 	if (header && header.parentElement && ((noticeParent && header.contains(noticeParent)) || !noticeParent)) {
 		if (header.nextElementSibling) {
 			header.parentElement.insertBefore(wrapper, header.nextElementSibling);

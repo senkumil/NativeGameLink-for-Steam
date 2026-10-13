@@ -2,22 +2,21 @@ import { findShortcutIdForMappedSteamAppId } from '../../core/mappings';
 import { navigateToLibraryShortcut } from '../../steam/navigation';
 import { AppStoreAdapter } from '../../steam/gamepad/stores/AppStoreAdapter';
 import { routedSteamAppId } from './native-route';
+export { isLibrarySidebarMutation } from '../../steam/library-sidebar';
+const SIDEBAR_ROW_SELECTOR = '[class*="gamelistentry_"], [class*="gameListRow"], [class*="GameListRow"], [class*="gameListEntry"], [class*="GameListEntry"], [role="treeitem"], [role="listitem"]';
 
-
-/**
- * Preserve all legitimate library games and mapped shortcuts in the sidebar,
- * unhiding any virtual rows that were previously suppressed with display: none.
- */
-export function cleanupGhostSidebarEntries(doc: Document): void {
+/** Restore only rows explicitly hidden by this plugin. Steam owns every other
+ * display value, including temporary visibility used by its virtual list. */
+export function cleanupGhostSidebarEntries(root: Document | Element): void {
 	try {
-		if (!doc?.body) return;
-		const rows = doc.querySelectorAll<HTMLElement>(
-			'[class*="gamelistentry_"], [class*="gameListRow"], [class*="GameListRow"], [class*="gameListEntry"], [class*="GameListEntry"], [role="treeitem"], [role="listitem"]'
-		);
-		for (const row of Array.from(rows)) {
+		const rows = Array.from(root.querySelectorAll<HTMLElement>('[data-gdl-hidden="1"]'));
+		if (root.nodeType === 1 && (root as Element).matches('[data-gdl-hidden="1"]')) rows.unshift(root as HTMLElement);
+		for (const row of rows) {
+			if (!row.matches(SIDEBAR_ROW_SELECTOR)) continue;
 			if (row.style.display === 'none') {
 				row.style.removeProperty('display');
 			}
+			row.removeAttribute('data-gdl-hidden');
 		}
 	} catch {}
 }
@@ -42,47 +41,53 @@ export function tryRedirectUnownedMappedGame(doc: Document): boolean {
 	return false;
 }
 
-const NON_STEAM_COLLECTION_REGEX = /(?:^|\b)(?:no\s+de\s+steam|non-?steam|nicht-?steam|jeux\s+non-?steam|giochi\s+non-?steam|não\s+(?:são\s+do\s+)?steam|не\s+из\s+steam|非\s*steam|비\s*steam)(?:\b|$)/i;
-
-/**
- * Permanently hide "Non-Steam" collection headers, filter pills, and category tabs
- * across all views so shortcuts seamlessly integrate into standard game collections.
- */
-export function cleanupNonSteamPillsAndHeaders(doc: Document): void {
+/** One-time recovery of controls changed by older versions. Ordinary Steam
+ * filters, collections and names are never selected or rewritten here. */
+function restoreLegacySidebarLabels(root: Document | Element): void {
 	try {
-		if (!doc?.body) return;
-		const candidates = doc.querySelectorAll<HTMLElement>(
-			'[class*="FilterOption"], [class*="filterOption"], [class*="SavedFilter"], [class*="savedFilter"], [class*="CollectionHeader"], [class*="collectionHeader"], [class*="SectionHeader"], [class*="sectionHeader"], [class*="Collections"], [class*="collections"], [class*="allcollections_"], [class*="libraryhome_"], [class*="Filter"], [class*="filter"], [class*="Pill"], [class*="pill"], [role="tab"], [role="button"]'
-		);
-		for (const el of Array.from(candidates)) {
-			const text = el.textContent?.trim() || '';
-			if (!text || text.length > 45) continue;
-			if (NON_STEAM_COLLECTION_REGEX.test(text)) {
-				const target = (el.closest('[class*="FilterOption"], [class*="SavedFilter"], [class*="CollectionHeader"], [class*="SectionHeader"], [class*="Pill"], [class*="pill"], [role="tab"]') as HTMLElement) || el;
-				if (target.style.display !== 'none') {
-					target.style.setProperty('display', 'none', 'important');
-					target.style.setProperty('visibility', 'hidden', 'important');
-					target.style.setProperty('pointer-events', 'none', 'important');
-					target.dataset.gdlNonsteam = '1';
+		for (const element of root.querySelectorAll<HTMLElement>('[data-gdl-nonsteam="1"]')) {
+			for (const [property, value] of [['display', 'none'], ['visibility', 'hidden'], ['pointer-events', 'none']]) {
+				if (element.style.getPropertyValue(property) === value && element.style.getPropertyPriority(property) === 'important') {
+					element.style.removeProperty(property);
 				}
 			}
+			element.removeAttribute('data-gdl-nonsteam');
+		}
+		for (const label of root.querySelectorAll<HTMLElement>('[data-gdl-running-alias="1"]')) {
+			const original = label.dataset.gdlRunningOriginalText;
+			// A recycled React row may already display another game. Restore text
+			// only if the old plugin's exact alias remains on that same element.
+			const aliasUnchanged = original !== undefined && label.textContent === `${original} - En ejecución`;
+			if (aliasUnchanged) label.textContent = original;
+			if (aliasUnchanged && (label.style.getPropertyValue('color') === 'rgb(161, 205, 68)' || label.style.getPropertyValue('color') === '#a1cd44')) {
+				const color = label.dataset.gdlRunningOriginalColor;
+				if (color) label.style.setProperty('color', color); else label.style.removeProperty('color');
+			}
+			label.removeAttribute('data-gdl-running-alias');
+			label.removeAttribute('data-gdl-running-original-text');
+			label.removeAttribute('data-gdl-running-original-color');
 		}
 	} catch {}
 }
 
+const sidebarCleanupLifecycles = new WeakMap<Document, () => void>();
+
+export function disposeGhostSidebarCleanup(doc: Document): void {
+	sidebarCleanupLifecycles.get(doc)?.();
+}
+
 export function installGhostSidebarCleanup(doc: Document): () => void {
+	const existing = sidebarCleanupLifecycles.get(doc);
+	if (existing) return existing;
+	if (!doc.body) return () => {};
 	cleanupGhostSidebarEntries(doc);
-	cleanupNonSteamPillsAndHeaders(doc);
-	const Observer = doc.defaultView?.MutationObserver;
-	if (!Observer) return () => {};
-	const observer = new Observer(() => {
-		cleanupGhostSidebarEntries(doc);
-		cleanupNonSteamPillsAndHeaders(doc);
-	});
-	try {
-		if (doc.body) {
-			observer.observe(doc.body, { childList: true, subtree: true });
-		}
-	} catch {}
-	return () => observer.disconnect();
+	restoreLegacySidebarLabels(doc);
+	let disposed = false;
+	const dispose = (): void => {
+		if (disposed) return;
+		disposed = true;
+		sidebarCleanupLifecycles.delete(doc);
+	};
+	sidebarCleanupLifecycles.set(doc, dispose);
+	return dispose;
 }

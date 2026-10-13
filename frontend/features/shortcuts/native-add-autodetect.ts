@@ -2,11 +2,8 @@ import { backendLog } from '../../api/backend';
 import { getPreferences } from '../../core/preferences';
 import { readShortcutOverviewField, shortcutExecutableIdentity, shortcutStableIdentity } from '../../steam/shortcuts';
 import { candidateSteamDocuments, nativeAddNonSteamDialogOpen, nativeAddSelectedExecutableIdentities } from './native-add-guard';
-import { findMappingForShortcut, getAllShortcutRecords, refreshShortcutRecordsFromBackend, shortcutAlreadyLinked, type ShortcutRecord } from './registry';
+import { getAllShortcutRecords, refreshShortcutRecordsFromBackend, shortcutAlreadyLinked, type ShortcutRecord } from './registry';
 import { requestNativeAddShortcutReview } from './manual-link';
-import { hasNoLauncherOption, mergeNoLauncherOption, removeIncompatibleLauncherBypass, shouldAutoApplyNoLauncher } from './linking';
-import { mappings, updateMappingsChecked } from '../../core/mappings';
-import { purgeShortcutCachesAndArtwork } from './purge';
 
 let watcherTimer: ReturnType<typeof setInterval> | null = null;
 let closeEvaluationTimers: ReturnType<typeof setTimeout>[] = [];
@@ -24,7 +21,6 @@ const knownShortcutIdentities = new Set<string>();
 const handledIds = new Set<number>();
 const handledIdentities = new Set<string>();
 const handledExecutables = new Set<string>();
-const reconciledLauncherBypassMap = new Map<number, string>();
 
 let baselineIds = new Set<number>();
 let baselineIdentities = new Set<string>();
@@ -145,34 +141,6 @@ function scanForNewlyAddedShortcuts(): void {
 	const records = getAllShortcutRecords();
 	if (!records.length) return;
 
-	const apps = (window as any).SteamClient?.Apps;
-	for (const record of records) {
-		const rawExe = readShortcutOverviewField(record.app, 'strShortcutExe', 'm_strShortcutExe', 'shortcut_exe', 'strExePath');
-		const steamAppId = findMappingForShortcut(record.id, record.title, rawExe);
-		if (steamAppId) {
-			if (typeof apps?.SetShortcutLaunchOptions === 'function') {
-				const currentOptions = readShortcutOverviewField(record.app, 'strShortcutLaunchOptions', 'm_strShortcutLaunchOptions', 'shortcut_launch_options', 'strArguments') || '';
-				if (shouldAutoApplyNoLauncher(steamAppId)) {
-					if (!hasNoLauncherOption(currentOptions)) {
-						const updated = mergeNoLauncherOption(currentOptions, steamAppId);
-						if (reconciledLauncherBypassMap.get(record.id) !== updated) {
-							reconciledLauncherBypassMap.set(record.id, updated);
-							void apps.SetShortcutLaunchOptions(record.id, updated);
-							backendLog(`Auto-reconciled launcher bypass for "${record.title}" (${record.id}): "${updated}"`);
-						}
-					}
-				} else if (hasNoLauncherOption(currentOptions)) {
-					const cleaned = removeIncompatibleLauncherBypass(currentOptions, steamAppId);
-					if (reconciledLauncherBypassMap.get(record.id) !== cleaned) {
-						reconciledLauncherBypassMap.set(record.id, cleaned);
-						void apps.SetShortcutLaunchOptions(record.id, cleaned);
-						backendLog(`Cleaned incompatible launcher bypass for "${record.title}" (${record.id}): "${cleaned}"`);
-					}
-				}
-			}
-		}
-	}
-
 	const inStartupWarmup = !startupSettled || (Date.now() - pluginStartedAt < STARTUP_WARMUP_MS);
 	const bulkCatalogHydration = knownShortcutIds.size === 0 && records.length > 0;
 
@@ -209,18 +177,6 @@ function scanForNewlyAddedShortcuts(): void {
 		}
 	}
 
-	if (currentIds.size > 0) {
-		for (const key of Object.keys(mappings)) {
-			if (key.startsWith('shortcut:')) {
-				const sid = Number(key.slice('shortcut:'.length));
-				if (Number.isFinite(sid) && sid >= 2147483648 && !currentIds.has(sid)) {
-					const mappedSteamAppId = mappings[key];
-					void updateMappingsChecked({ remove: [key] }).catch(() => {});
-					void purgeShortcutCachesAndArtwork(sid, mappedSteamAppId, true).catch(() => {});
-				}
-			}
-		}
-	}
 }
 
 function evaluateCommittedNativeAdds(generation: number): void {
@@ -378,6 +334,5 @@ export function stopNativeAddAutoDetector(): void {
 	handledIds.clear();
 	handledIdentities.clear();
 	handledExecutables.clear();
-	reconciledLauncherBypassMap.clear();
 	clearInteractionListeners();
 }

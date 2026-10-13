@@ -24,3 +24,15 @@ export function findElementByExactText(root: Element | Document, text: string): 
 	}
 	return null;
 }
+
+/** A host can receive an owned child without being owned itself. Classify the
+ * complete record, including detached removed nodes, before scheduling work. */
+export function mutationIsWithinSelector(record: MutationRecord, selector: string): boolean {
+	const matches = (node: Node): boolean => {
+		const element = node.nodeType === 1 ? node as Element : node.parentElement;
+		return Boolean(element?.closest(selector));
+	};
+	if (matches(record.target)) return true;
+	const changed = [...Array.from(record.addedNodes), ...Array.from(record.removedNodes)];
+	return changed.length > 0 && changed.every(matches);
+}

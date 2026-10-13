@@ -21,7 +21,7 @@ export function invalidateShortcutArtworkVerification(shortcutId?: number): void
 }
 
 export function prioritizeShortcutArtwork(shortcutId: number, steamAppId: string, title?: string): void {
-	if (!shortcutId || !steamAppId || !/^\d+$/.test(steamAppId)) return;
+	if (!Number.isInteger(shortcutId) || shortcutId < 2147483648 || !steamAppId || !/^\d+$/.test(steamAppId)) return;
 	priorityShortcutId = shortcutId;
 	const key = `${shortcutId}:${steamAppId}`;
 	const isSaved = artworkAlreadySaved(shortcutId, steamAppId);

@@ -63,6 +63,7 @@ const communityLua = read('backend/lib/community.lua');
 const navigationTs = read('frontend/steam/navigation.ts');
 const communityViewTs = read('frontend/features/library/community-view.ts');
 const bpRuntime = read('frontend/features/big-picture/runtime.ts');
+const bpRerenderScheduler = read('frontend/features/big-picture/rerender-scheduler.ts');
 const mappingsTs = read('frontend/core/mappings.ts');
 const existingWindows = read('frontend/runtime/existing-windows.ts');
 const shortcutRegistry = read('frontend/features/shortcuts/registry.ts');
@@ -145,12 +146,12 @@ assert(!artwork.includes('const backendCandidates ='), 'grid persistence never r
 assert(artwork.includes('heroPolicyVersion: 2'), 'new Hero provenance policy invalidates stale fallback decisions');
 
 
-// Logo placement is applied once and then left to the user. MKK has a curated
-// centered first position, while later Steam-native manual adjustments persist.
+// Logo placement is settled once using Steam metadata/defaults and then left
+// to native layout. Automatic image analysis must not resize it after linking.
 assert(logoPosition.includes("const STORAGE_PREFIX = 'gdl_logo_position4_';"), 'logo position marker bumped to v4');
-assert(logoPosition.includes("MKK_POSITION: SteamLogoPosition = { pinnedPosition: 'CenterCenter', nWidthPct: 58, nHeightPct: 58 }"), 'Mortal Kombat Komplete Edition starts centered with the larger clean-install logo profile');
-assert(logoPosition.includes('return 5;'), 'Responsive logo profile revision reapplies automatic sizing once while retaining manual adjustments');
-assert(logoPosition.includes('markSaved(shortcutAppId, steamAppId, position, source, undefined, pairKey);'), 'accepted logo position is settled even when readback is unavailable');
+assert(!logoPosition.includes('CURATED_POSITIONS') && !logoPosition.includes('prepareAutomaticLogo') && !logoPosition.includes('detectHeroEmptySpace'), 'all games use Steam official placement or its native fallback without late image-based resizing');
+assert(logoPosition.includes('const PROFILE_REVISION = 6;'), 'native logo policy replaces automatic profiles once while retaining explicit manual adjustments');
+assert(logoPosition.includes('saveNativeShortcutLogoPosition') && logoPosition.indexOf('if (accepted)') < logoPosition.indexOf('markSaved(shortcutAppId, steamAppId, position, source, pairKey)'), 'logo verification requires Steam to accept the final disk and native-cache position');
 
 // Linked shortcuts use the visible native Change button, but the actual picker
 // is a synchronous CEF file input because Steam's dialog bridge can just flash.
@@ -204,8 +205,8 @@ assert(gameData.includes('MAX_GAME_DATA_CACHE_KEYS = 64'), 'in-memory game-data 
 
 // Steam's 884 logical-pixel NarrowRightPanel breakpoint can trigger early at
 // desktop scaling levels and hide linked cloud/achievement copy despite room.
-assert(playbarVisibility.includes('classes.HideWhenNarrow') && playbarVisibility.includes('classes.MiniAchievements'), 'linked play-bar preserves cloud and achievement copy across the middle splitter breakpoint');
-assert(playbarVisibility.includes("setProperty('display', 'flex', 'important')") && playbarVisibility.includes('restoreLinkedPlaybarVisibility'), 'linked-only visibility override outranks NarrowRightPanel and restores native display state on route exit');
+assert(playbarVisibility.includes("copy.closest('[data-gdl-cloud-status], [data-gdl-playtime]')") && !playbarVisibility.includes('classes.MiniAchievements'), 'only linked Cloud and playtime copy override narrow hiding; achievements obey Steam responsive visibility');
+assert(playbarVisibility.includes("setProperty('display', 'flex', 'important')") && playbarVisibility.includes('restoreLinkedPlaybarVisibility'), 'linked-only Cloud and playtime copy retain their scoped display restoration on route exit');
 assert(bigPictureDetails.includes('docWindow?.SP_REACTDOM') && bigPictureDetails.includes('globalWindow === docWindow') && bigPictureDetails.includes('getAllModules(doc)'), 'Big Picture mounts native sections through the owning CEF realm ReactDOM host');
 assert(webpackRuntime.includes('modules as millenniumWebpackModules') && webpackRuntime.includes('for (const [id, exports] of millenniumWebpackModules)'), 'Big Picture reuses the captured Millennium Webpack registry when its popup hides the chunk global');
 assert(!bigPictureDetails.includes('PanelSection') && !bigPictureDetails.includes('PanelSectionRow') && !bigPictureDetails.includes('Field as NativeComponent'), 'Big Picture no longer renders settings-form rows inside game details');
@@ -355,7 +356,12 @@ assert(bpRuntime.includes('installBrowserProtection(doc.defaultView, doc)'), 'ac
 // 3. handleBigPictureExit is guarded against active/connected Big Picture sessions
 // 4. steamUIModeService.isGamepadUI strictly evaluates document surface when doc is supplied
 // 5. refreshBigPictureShortcutDetails preserves existing details when tabs momentarily transition
-assert(bpRuntime.includes('requestBigPictureRerender()') && bpRuntime.includes('now - lastRerenderTime < 1500'), 'runtime throttles forced re-renders to prevent render loops');
+assert(bpRuntime.includes('requestBigPictureRerender(doc)') && bpRerenderScheduler.includes('now - this.lastRerenderTime < 1500')
+  && bpRuntime.includes('gdlBigPictureDoc === doc') && bpRuntime.includes('bigPictureGeneration === generation')
+  && bpRerenderScheduler.includes('steamUIModeService.isGamepadUI(doc)') && bpRerenderScheduler.includes('!isPublicSteamLibraryRoute(doc)')
+  && !bpRuntime.includes('(window as any).MILLENNIUM_STEAM_FORCE_RERENDER')
+  && !bpRerenderScheduler.includes('(window as any).MILLENNIUM_STEAM_FORCE_RERENDER'),
+  'runtime throttles forced re-renders inside the active gamepad document and never targets the global Desktop realm');
 assert(bpRuntime.includes('activeRefreshPromises = new WeakMap<Document, Promise<void>>()') && bpRuntime.includes('lastRefreshCompletedAt = new WeakMap<Document, number>()') && bpRuntime.includes('Date.now() - lastCompletedAt < 250'), 'runtime coalesces rapid Big Picture refreshes per document');
 assert(webpackRuntime.includes('states = new WeakMap<Window, SteamWebpackRuntimeState>()') && webpackRuntime.includes('if (doc?.defaultView) return [doc.defaultView]') && webpackRuntime.includes('invalidateWindow(win)'), 'Steam Webpack runtime is isolated per CEF window and invalidated per realm');
 assert(!bpRuntime.includes('loadMappings().catch') && bpRuntime.includes('sameDocument'), 'Big Picture activation is idempotent and does not reload mappings on every mutation refresh');
@@ -384,7 +390,7 @@ assert(controllerTs.includes('setInterval(check, 1000)') && controllerTs.include
 const sidebarCleanup = read('frontend/features/library/sidebar-cleanup.ts');
 assert(sidebarCleanup.includes('AppStoreAdapter.getAppOverview(appId)'), 'sidebar cleanup uses AppStoreAdapter for ownership checks');
 assert(!sidebarCleanup.includes("row.style.display = 'none'") && !sidebarCleanup.includes("row.style.setProperty('display', 'none'"), 'cleanupGhostSidebarEntries never hides virtual gamelist rows with display: none');
-assert(sidebarCleanup.includes("row.style.removeProperty('display')"), 'cleanupGhostSidebarEntries restores any previously suppressed virtual rows');
+assert(sidebarCleanup.includes("row.style.removeProperty('display')") && sidebarCleanup.includes('[data-gdl-hidden="1"]'), 'sidebar cleanup restores only plugin-hidden rows and preserves Steam virtual visibility');
 
 // Big Picture Activity Input & Virtual Keyboard:
 // The collapsed composer must remain lightweight, must not inject a profile avatar,
@@ -424,7 +430,7 @@ assert(!bigPictureDetails.includes('gdl-bp-info-description') && !bigPictureDeta
 assert(bpDetails.includes('activateNativeGameInfoBridge(doc, state.shortcut, state.data.game)') && bpDetails.includes('deactivateNativeGameInfoBridge(doc)'), 'native Game Information bridge is scoped to the active linked detail page and restored on exit');
 assert(bpNativeInfoBridge.includes('new Proxy(base,') && !bpNativeInfoBridge.includes('if (linked?.details) return linked;'), 'native Game Information preserves the shortcut data and local artwork identity');
 assert(bpNativeInfoBridge.includes('buildSyntheticDetails') && bpNativeInfoBridge.includes('strDeveloper') && bpNativeInfoBridge.includes('vecStoreCategories'), 'native Game Information can hydrate Steam detail metadata from linked Store data without drawing a custom panel');
-assert(!bpNativeInfoBridge.includes("setTemporaryValue(app, 'app_type', 1)") && bpNativeInfoBridge.includes("setTemporaryValue(app, 'BIsModOrShortcut'") && bpNativeInfoBridge.includes('restoreActiveShortcutClassification'), 'native Game Information changes only its presentation predicate and preserves shortcut routing');
+assert(!bpNativeInfoBridge.includes("setTemporaryValue(app, 'app_type', 1)") && !bpNativeInfoBridge.includes("setTemporaryValue(app, 'BIsModOrShortcut'") && !bpNativeInfoBridge.includes('patchActiveShortcutClassification'), 'native Game Information preserves shortcut classification required for icon loading and AppOverview state retention');
 assert(!bpNativeInfoBridge.includes('steam://run/') && !bpNativeInfoBridge.includes('OpenSteamURL'), 'native Game Information bridge cannot redirect the Play action to the linked Store AppID');
 assert(bigPictureDetails.includes('gdl-bp-community-empty') && bigPictureDetails.includes('AppDetails_Community_Hub'), 'NativeBigPictureDetails provides focusable community hub button when empty');
 assert(bpAchievements.includes('gdl-bp-view-all-achievements') && bpAchievements.includes('AppDetails_Achievements_ViewAll'), 'NativeBigPictureAchievements provides focusable view-all achievements trigger');
@@ -478,25 +484,25 @@ assert(runtimeApp.includes('isDesktopSteamWindow(popupWin, popupName)') && runti
 assert(runtimeApp.includes('setTimeout(() => { try { if (!popupWin.closed && popupWin.document?.body) windowCreated(context);') && runtimeApp.includes('isDesktopSteamWindow(popupWin, popupName)'), 'windowCreated uses timeout retries and validates real Steam UI window');
 // 6. app.tsx maintains a recurring adoption interval to guarantee late-mounting Steam popups are adopted
 assert(runtimeApp.includes('const adoptionInterval = setInterval(() => { try { adoptExistingSteamWindows(windowCreated); } catch {} }, 3000)') && runtimeApp.includes('clearInterval(adoptionInterval)'), 'app.tsx maintains recurring adoption interval and cleans up on dismount');
-// Primary Links Zero-Flicker & Playbar Settlement:
+// Primary Links: publication belongs to the committed header, never an IPC timer.
 // 1. Primary links bar starts strictly hidden in CSS until data-gdl-links-settled="1"
 assert(primaryLinksStylesTs.includes('#gdl-link-bar:not([data-gdl-links-settled="1"])') && primaryLinksStylesTs.includes('visibility: hidden !important') && primaryLinksStylesTs.includes('pointer-events: none !important'), 'primary links stylesheet strictly hides #gdl-link-bar until data-gdl-links-settled="1"');
 // 2. Bar element initialized with unsettled state and visibility hidden
-assert(primaryLinksTs.includes("linkBar.dataset.gdlLinksSettled = '0'") && primaryLinksTs.includes("linkBar.style.setProperty('visibility', 'hidden', 'important')"), 'createPrimaryLinksBar initializes linkBar with unsettled state and visibility hidden');
+assert(primaryLinksTs.includes("bar.dataset.gdlLinksSettled = '0'") && primaryLinksTs.includes('currentShortcut(doc, options.steamAppId, options.shortcutAppId)'), 'a detached links bar requires the exact committed shortcut before publication');
 // 3. Invariant check requires physical position at or below the playbar bottom
 assert(primaryLinksTs.includes('isBarProperlyPositionedBelowPlaybar') && primaryLinksTs.includes('barRect.top >= playbarRect.bottom - 4'), 'primary links bar position check enforces that bar is physically at or below the playbar bottom');
 // 4. Reveal helper removes hidden styles and marks bar settled
-assert(primaryLinksTs.includes("targetBar.dataset.gdlLinksSettled = '1'") && primaryLinksTs.includes("targetBar.style.removeProperty('visibility')"), 'revealBar marks bar settled and removes visibility override');
+assert(primaryLinksTs.includes("bar.dataset.gdlLinksSettled = '1'") && primaryLinksTs.includes('bar.style.removeProperty(property)'), 'the synchronous links commit removes old visibility overrides');
 // 5. DOM insertion ensures bar is placed after playbar if playbar shares parent and follows twoColumnRow
-assert(primaryLinksTs.includes('Node.DOCUMENT_POSITION_FOLLOWING') && primaryLinksTs.includes('parent.insertBefore(bar, playbar.nextElementSibling)'), 'insertPrimaryLinksBar guarantees bar is never placed before playbar in parent container');
+assert(primaryLinksTs.includes('Node.DOCUMENT_POSITION_FOLLOWING') && primaryLinksTs.includes('parent.insertBefore(bar, anchor.nextSibling)'), 'links insertion follows the current native header anchor');
 // 6. Stylesheet guaranteed injected at creation and styles include opacity: 0
 assert(primaryLinksTs.includes('ensurePrimaryLinksStyles(doc)') && primaryLinksStylesTs.includes('opacity: 0 !important'), 'ensurePrimaryLinksStyles is called before element creation and CSS includes opacity 0');
 // 7. Primary links bar strictly kept outside AppDetailsHeader and never inserted inside the header
-assert(primaryLinksTs.includes('playbarInsideOrAfterTwoColumn') && primaryLinksTs.includes('twoColumnRow && twoColumnRow.parentElement') && !primaryLinksTs.includes('currentPlaybar.parentElement.appendChild(bar)'), 'primary links guarantees links bar is anchored outside AppDetailsHeader before twoColumnRow');
+assert(primaryLinksTs.includes('findNativeLibraryHeader(doc)') && primaryLinksTs.includes('if (header?.contains(playbar)) anchor = header'), 'links remain outside the native header including its hashed production classes');
 // 8. Play button resolution targets in-page position and checks DOM precedence
-assert(primaryLinksTs.includes('findNativePlayButton') && primaryLinksTs.includes('b.getBoundingClientRect().top - a.getBoundingClientRect().top') && primaryLinksTs.includes('targetBar.compareDocumentPosition(currentPlaybar) & Node.DOCUMENT_POSITION_FOLLOWING'), 'findNativePlayButton resolves in-page play button by vertical position and rejects preceding DOM position');
+assert(primaryLinksTs.includes('paintedNativePlaybar(doc, id)') && primaryLinksTs.includes('bar.compareDocumentPosition(playbar) & Node.DOCUMENT_POSITION_FOLLOWING'), 'links geometry uses only the committed current-game playbar');
 // 9. Multi-frame settlement stability prevents single-frame transition flashes
-assert(primaryLinksTs.includes('stableFrames >= 2') && primaryLinksTs.includes('effectivePlaybarBottom'), 'primary links requires consecutive stable animation frames and effective playbar bottom before revealing');
+assert(!primaryLinksTs.includes('stableFrames') && !primaryLinksTs.includes('checkSettled') && primaryLinksTs.includes('responsiveLayouts.get(bar)?.update()'), 'links calculate responsive layout and publish without multi-frame settlement or re-hiding');
 
 // Big Picture Controller Connection-Aware Display & Zero-Flicker Artwork:
 // 1. Default Big Picture mode is ON by default (meaning experimental enhanced BP is OFF)
@@ -515,13 +521,13 @@ assert(artworkSync.includes('artworkAlreadySaved(shortcutId, steamAppId)') && ar
 // 1. Backend calculate_playtime preserves exact session seconds alongside minute rounding
 assert(playtimeLua.includes('seconds_forever = seconds_forever') && playtimeLua.includes('seconds_last_two_weeks = seconds_last_two_weeks'), 'backend calculate_playtime returns seconds_forever and seconds_last_two_weeks');
 // 2. Playtime service parses totalSeconds from backend response
-assert(playtimeServiceTs.includes('totalSeconds?: number') && playtimeServiceTs.includes("secondsForever = Math.max(0, Number(parsed.seconds_forever"), 'playtime service captures totalSeconds for sub-minute sessions');
+assert(playtimeServiceTs.includes('totalSeconds?: number') && playtimeServiceTs.includes('secondsForever = nonnegative(parsed.seconds_forever'), 'playtime service captures finite totalSeconds for sub-minute sessions');
 // 3. Playbar playtime injection evaluates hasRecordedPlaytime including sub-minute sessions and lastPlayedAt
-assert(playtimeTrackerTs.includes('hasRecordedPlaytime') && playtimeTrackerTs.includes('export function syncEarlyLinkedPlaytime(doc: Document)'), 'playtime tracker exports syncEarlyLinkedPlaytime and detects recorded playtime even if sub-minute');
+assert(playtimeTrackerTs.includes('getInstantPlaytimeStats(shortcutAppId, steamAppId)') && playtimeTrackerTs.includes('export function syncEarlyLinkedPlaytime(doc: Document)'), 'early playtime uses confirmed snapshots including zero and sub-minute sessions');
 // 4. Playtime tracker has resilient statsSection discovery matching cloud-status
 assert(playtimeTrackerTs.includes('[data-gdl-cloud-status="1"]') && playtimeTrackerTs.includes('[data-gdl-playbar-achievements="1"]'), 'playtime tracker falls back to existing playbar siblings to locate statsSection');
 // 5. Main application runtime syncs playtime early across window adoption, navigation, and mutation observer ticks
-assert(runtimeApp.includes('syncEarlyLinkedPlaytime(popupDoc)') && runtimeApp.includes('syncEarlyLinkedPlaytime(doc)'), 'app runtime synchronizes linked playtime across navigation, mutations, and playtime change events');
+assert(runtimeApp.includes('installEarlyLinkedPlaybar(popupDoc)') && runtimeApp.includes('earlyPlaybar?.sync()') && runtimeApp.includes('installEarlyLinkedPlaybar(doc).sync()'), 'app runtime owns scoped early playbar synchronization across navigation, hydration and playtime change events');
 
 // Game Info Native Icons & Scroll-to-Top:
 // 1. Native feature icons use exact Steam bundle base64 assets and SVGs matching Steam module 35488 / 28346

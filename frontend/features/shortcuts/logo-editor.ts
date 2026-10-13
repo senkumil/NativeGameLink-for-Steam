@@ -1,7 +1,8 @@
 import { mountModalDialog } from '../../core/modal';
 import { readCustomLogoPositionBackend } from '../../api/backend';
 import { gdlText } from '../../steam/localization';
-import { readLogoLayout } from '../library/logo-layout';
+import { readLogoLayout, STEAM_DEFAULT_LOGO_POSITION } from '../library/logo-layout';
+import { getModernLibraryAssets } from '../library/library-assets';
 import { applyLogoPosition, rememberLogoAdjustment, type SteamLogoPinPosition } from '../library/artwork-logo-position';
 
 export async function openLogoEditor(doc: Document, id: number, appId: string): Promise<void> {
@@ -22,7 +23,7 @@ export async function openLogoEditor(doc: Document, id: number, appId: string): 
 		let response: any = await readCustomLogoPositionBackend({ shortcut_app_id: String(id) });
 		for (let i = 0; i < 3 && typeof response === 'string'; i++) response = JSON.parse(response);
 		if (!dialog.isConnected) return;
-		const position = { pinnedPosition: 'BottomLeft', nWidthPct: 50, nHeightPct: 60, ...response?.logo_position };
+		const position = { ...STEAM_DEFAULT_LOGO_POSITION, ...response?.logo_position };
 		status.textContent = gdlText('logo_preview_note', 'Approximate preview. Steam adapts the layout to the window size. Saved for this logo and background.');
 		const preview = doc.createElement('div');
 		preview.style.cssText = 'position:relative;aspect-ratio:1920/620;background:#10151b;background-size:cover;background-position:center;margin:16px 0;overflow:hidden;';
@@ -75,9 +76,10 @@ export async function openLogoEditor(doc: Document, id: number, appId: string): 
 		automatic.onclick = async () => {
 			automatic.disabled = save.disabled = close.disabled = true;
 			try {
+				const assets = await getModernLibraryAssets(appId);
 				const current = await readLogoLayout(id);
 				if (!dialog.isConnected || current.key !== layout.key) throw new Error('artwork_changed');
-				if (!await applyLogoPosition(id, appId, null, true, 'BottomLeft', 'automatic_reset', () => dialog.isConnected)) throw new Error('save_failed');
+				if (!await applyLogoPosition(id, appId, assets?.logo_position || null, true, 'BottomLeft', 'automatic_reset', () => dialog.isConnected, current)) throw new Error('save_failed');
 				const updated = await readLogoLayout(id);
 				let saved: any = await readCustomLogoPositionBackend({ shortcut_app_id: String(id) });
 				for (let i = 0; i < 3 && typeof saved === 'string'; i++) saved = JSON.parse(saved);

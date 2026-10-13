@@ -361,9 +361,15 @@ if (historicalSidebarSource.includes('developers?.join(')
 	fail(historicalSidebarFile,
 		'legacy metadata renderers must tolerate text and numeric-keyed object fields instead of assuming JSON arrays');
 }
-if (!communityStylesSource.includes('repeat(auto-fit,minmax(min(230px,100%),1fr))')
+if (!communityStylesSource.includes('.gdl-community-grid { display:block;position:relative;')
+	|| !communityViewSource.includes('bottoms.indexOf(Math.min(...bottoms))')
+	|| !communityViewSource.includes('observer?.observe(card)')
+	|| !communityViewSource.includes('orderCommunityItems(sortByLanguage(filteredItems))')
+	|| communityStylesSource.includes('-webkit-line-clamp')
+	|| communityStylesSource.includes('align-items:stretch')
+	|| communityStylesSource.includes('grid-column: span 2')
 	|| !communityStylesSource.includes('#gdl-community-inner { width:100%;min-width:0;max-width:100%;overflow:hidden')) {
-	fail(communityStylesFile, 'community cards must adapt to their actual column width and remain clipped inside the main-content container');
+	fail(communityStylesFile, 'community cards must pack by actual height, respond to late image loading and show complete text within their own main-content container');
 }
 if (communityStylesSource.includes('#gdl-community-content { margin-top:34px;overflow:visible;contain:inline-size;')
 	|| communityStylesSource.includes('#gdl-community-content,#gdl-community-content>*')) {
@@ -634,7 +640,9 @@ try {
 		|| !nativeDomSource.includes("!item.closest('[data-gdl-playtime], [data-gdl-cloud-status], [data-gdl-playbar-achievements]')")
 		|| !nativeDomSource.includes('!closestWithCssModuleClass(item, ps.PlayBarCloudStatusContainer)')
 		|| !nativeDomSource.includes('elementsWithCssModuleClass(stat, ps.GameStatIconForced).length > 0')
-		|| !cloudStatusSource.includes("const nativeCloud = cloudWrappers.find(element => element.dataset.gdlCloudStatus !== '1')")) {
+		|| !cloudStatusSource.includes('const nativeCloud = cloudWrappers.find(')
+		|| !cloudStatusSource.includes("if (element.dataset.gdlCloudStatus === '1') return false;")
+		|| !cloudStatusSource.includes('findVisibleCloudStatusStat(element)')) {
 		fail(nativeDom, 'Last Played and Playtime must come from one native pair, reject cloud-contaminated stats and keep exactly one cloud control');
 	}
 	if (!nativeDomSource.includes('nativeUiBlueprintTypography')
@@ -647,17 +655,18 @@ try {
 		|| playtimeTrackerSource.includes('#8f98a0')) {
 		fail(playtimeTracker, 'linked play-bar typography must be captured from the current native Steam client; hard-coded fallback fonts, sizes and colors are forbidden');
 	}
-	if (!playtimeTrackerSource.includes('applyNativePlaybarTypography(stat, key)')
+	if (!playtimeTrackerSource.includes('applyNativePlaybarTypography(stat,')
 		|| !playtimeTrackerSource.includes('stats.insertBefore(container, achievement)')
 		|| !cloudStatusSource.includes("wrapper.dataset.gdlNativeBlueprint = '0'")
-		|| !cloudStatusSource.includes("if (wrapper.dataset.gdlNativeBlueprint !== '1')")
+		|| !cloudStatusSource.includes('cachedCloudStatus')
 		|| !cloudStatusSource.includes('applyNativePlaybarTypography(wrapper, NATIVE_UI_BLUEPRINT_KEYS.cloudStatus)')
 		|| !achievementPlaybarSource.includes("wrapper.dataset.gdlNativeBlueprint = '0'")
-		|| !achievementPlaybarSource.includes("if (stat.dataset.gdlNativeBlueprint !== '1')")
-		|| !achievementPlaybarSource.includes('applyNativePlaybarTypography(stat, NATIVE_UI_BLUEPRINT_KEYS.playbarAchievements)')
-		|| !achievementChromeSource.includes("stat.dataset.gdlNativeBlueprint = '0'")
-		|| !achievementChromeSource.includes("if (existing.dataset.gdlNativeBlueprint !== '1')")) {
-		fail(nativeDom, 'all owned play-bar controls must keep Steam order/typography and progressively upgrade manual fallbacks to captured native DOM');
+		|| !achievementPlaybarSource.includes('applyNativePlaybarTypography(wrapper, NATIVE_UI_BLUEPRINT_KEYS.playbarAchievements)')
+		|| !achievementPlaybarSource.includes('paintedNativeStats(doc, Number(target.shortcutAppId))')
+		|| !achievementPlaybarSource.includes('const playbarStates = new WeakMap<Document, PlaybarState>()')
+		|| !achievementChromeSource.includes('ensureLocalPlaybarStat(doc, data)')
+		|| !achievementChromeSource.includes('isCurrentAchievementTarget(doc, target)')) {
+		fail(nativeDom, 'owned play-bar controls must keep Steam order/typography and one stable achievement node scoped to its committed native shortcut host');
 	}
 	if (!infoPanelSource.includes('normalizeInformationButtonIcon(button')
 		|| !infoPanelSource.includes('button.dataset.gdlNativeInformationSvg = capturedNativeIcon.outerHTML')
@@ -693,7 +702,7 @@ try {
 	if (!bigPictureSource.includes('fetchPlaytimeStatsBatch(shortcuts.map')
 		|| !bigPictureSource.includes("setBigPicturePlaytimeField(app, 'minutes_playtime_last_two_weeks', recent)")
 		|| !bigPictureSource.includes('playtimeOwnDescriptors')
-		|| !bigPictureSource.includes('MILLENNIUM_STEAM_FORCE_RERENDER')) {
+		|| !bigPictureSource.includes('rerenderScheduler.request(doc, () => gdlBigPictureActive')) {
 		fail(bigPictureRuntime, 'recently-played shortcut cards must merge canonical fallback playtime, update both periods reversibly and request a native rerender');
 	}
 	if (!playtimeServiceSource.includes('getPlaytimeDataBackend')
@@ -705,9 +714,10 @@ try {
 		|| !desktopLibraryPlaytimeSource.includes('DESKTOP_PLAYTIME_SNAPSHOT_STORAGE_KEY')
 		|| !desktopLibraryPlaytimeSource.includes('readDesktopPlaytimeSnapshots()')
 		|| !desktopLibraryPlaytimeSource.includes('persistDesktopPlaytimeSnapshots()')
-		|| !desktopLibraryPlaytimeSource.includes("setDesktopPlaytimeField(app, 'minutes_playtime_forever', forever)")
-		|| !desktopLibraryPlaytimeSource.includes("setDesktopPlaytimeField(app, 'minutes_playtime_last_two_weeks', recent)")
-		|| !desktopLibraryPlaytimeSource.includes("setDesktopPlaytimeField(app, 'rt_last_time_played', lastPlayedAt)")
+		|| !desktopLibraryPlaytimeSource.includes('patchDesktopLibraryHomePlaytimeCards(doc, snapshots)')
+		|| desktopLibraryPlaytimeSource.includes('setDesktopPlaytimeField')
+		|| desktopLibraryPlaytimeSource.includes('Object.defineProperty')
+		|| desktopLibraryPlaytimeSource.includes('queueDesktopPlaytimeStoreWrite')
 		|| desktopLibraryPlaytimeSource.includes('MILLENNIUM_STEAM_FORCE_RERENDER')
 		|| !desktopLibraryPlaytimeSource.includes('data-gdl-playtime-shortcut-id')
 		|| !desktopLibraryPlaytimeDomSource.includes('APP_PORTRAIT_CLASS_MODULE')
@@ -718,15 +728,16 @@ try {
 		|| !runtimeAppSource.includes('patchDesktopLibraryHomePlaytime(popupDoc)')
 		|| !runtimeAppSource.includes('syncDesktopLibraryHomePlaytimeDom(popupDoc)')
 		|| !runtimeAppSource.includes('linkedShortcutAlreadyVisible ? 0 : 350')) {
-		fail(desktopLibraryPlaytime, 'desktop Library Home must hydrate native shortcut playtime and synchronize only the matched card/detail text leaves without forcing a global React rerender');
+		fail(desktopLibraryPlaytime, 'desktop Library Home must preserve canonical snapshots and update only matched card text without any AppOverview writes or global React rerender');
 	}
 	if (!playtimeTrackerSource.includes('clearPlaytimeCacheAfter(')
 		|| !playtimeTrackerSource.includes('data-gdl-playtime-value="1"')
 		|| !playtimeTrackerSource.includes('container.dataset.gdlPlaytimeShortcutId = String(shortcutAppId)')
-		|| !playtimeTrackerSource.includes('isDesktopLibraryPlaytimeHydrated(app)')
+		|| !playtimeTrackerSource.includes('getInstantPlaytimeStats(shortcutAppId, steamAppId)')
+		|| !playtimeTrackerSource.includes('if (!isActiveShortcut() || !statsData) return;')
 		|| !playtimeTrackerSource.includes('findNativePlaytimeElements(doc)')
 		|| !playtimeTrackerSource.includes('detail.textContent = playtimeFormatted')
-		|| !desktopLibraryPlaytimeSource.includes('desktopPlaytimeHydratedApps.add(app)')) {
+		|| !playtimeTrackerSource.includes('if (detail.textContent !== playtimeFormatted)')) {
 		fail(playtimeTracker, 'session writes must invalidate cached stats and synchronize exactly one native or NativeGameLink-owned detail value');
 	}
 	if (!playtimeBackendSource.includes('if direct and STORE.sessions[direct] then return direct end')
@@ -747,6 +758,28 @@ try {
 	}
 } catch (error) {
   failures.push(`achievement regression checks: unable to read sources (${String(error)})`);
+}
+
+try {
+	const [library, app, progress, service, scanner, cleanup, warmup] = await Promise.all([
+		'features/library/runtime.ts', 'runtime/app.tsx', 'features/achievements/progress.ts',
+		'features/achievements/service.ts', 'features/shortcuts/native-add-autodetect.ts',
+		'features/library/sidebar-cleanup.ts', 'features/library/native-artwork-warmup.ts',
+	].map(file => fs.readFile(path.join(frontendRoot, file), 'utf8')));
+	if (/prioritizeShortcutLinkingAndArtwork|reconcileShortcutLaunchOptions/.test(library)
+		|| /syncMissingArtworkForMappedShortcuts|scheduleReconciliation/.test(app)) {
+		fail(frontendRoot, 'Library selection and startup must not repair artwork/icons or change shortcut launch options; these writes belong to linking or explicit actions');
+	}
+	if (/syncNativeAchievementProgressCache|mapCache\.(?:set|delete|clear)\s*\(/.test(progress + service)
+		|| /SetShortcutLaunchOptions|purgeShortcutCachesAndArtwork|updateMappingsChecked/.test(scanner)) {
+		fail(frontendRoot, 'background progress and shortcut detection must preserve native list models, global progress entries, shortcut identity and installed artwork');
+	}
+	if (/new (?:\w+\.)?MutationObserver|cleanupNonSteamPillsAndHeaders/.test(cleanup)
+		|| /addEventListener\(['"]pointerdown|__reactFiber\$|__reactInternalInstance\$/.test(warmup)) {
+		fail(frontendRoot, 'native game rows must have no plugin cleanup observer, automatic label hiding or artwork selection hooks');
+	}
+} catch (error) {
+	fail(frontendRoot, `unable to check native list isolation (${String(error)})`);
 }
 
 try {
@@ -831,16 +864,13 @@ try {
 	fail(customizationArtworkFile, `Personalización artwork checks could not read their sources (${String(error)})`);
 }
 
-// Native Library metadata/layout belong entirely to Steam. The one permitted
-// adapter remembers the user's global information-toggle intent and invokes the
-// semantic native button after a settled route; it must never mutate React DOM.
+// Native Library metadata, controls and layout belong entirely to Steam.
 try {
-	const [libraryRuntimeSource, nativeRouteSource, routeExitSource, runtimeAppSource, nativeInfoPreferenceSource] = await Promise.all([
+	const [libraryRuntimeSource, nativeRouteSource, routeExitSource, runtimeAppSource] = await Promise.all([
 		fs.readFile(path.join(frontendRoot, 'features', 'library', 'runtime.ts'), 'utf8'),
 		fs.readFile(path.join(frontendRoot, 'features', 'library', 'native-route.ts'), 'utf8'),
 		fs.readFile(path.join(frontendRoot, 'features', 'library', 'route-exit.ts'), 'utf8'),
 		fs.readFile(path.join(frontendRoot, 'runtime', 'app.tsx'), 'utf8'),
-		fs.readFile(path.join(frontendRoot, 'features', 'library', 'native-info-preference.ts'), 'utf8'),
 	]);
 	if (/if \(!noticeInfo\)\s*\{\s*handleLibraryNavigation\(doc\)/.test(libraryRuntimeSource)) {
 		fail(path.join(frontendRoot, 'features', 'library', 'runtime.ts'),
@@ -868,34 +898,15 @@ try {
 	const nativeBoundaryBlock = runtimeAppSource.match(/if \(isPublicSteamLibraryRoute\(popupDoc\)\) \{[\s\S]*?\n\s*\}/)?.[0] || '';
 	if (!nativeBoundaryBlock.includes('hasOwnedLibraryChrome(popupDoc)')
 		|| !nativeBoundaryBlock.includes('tryInjectLibraryData(popupDoc)')
-		|| !nativeBoundaryBlock.includes('reconcileNativeInfoPreference(popupDoc)')
+		|| runtimeAppSource.includes('reconcileNativeInfoPreference')
+		|| runtimeAppSource.includes('installLegacyAchievementCacheRepair')
 		|| nativeBoundaryBlock.includes('syncDesktopLibraryHomePlaytimeDom')
 		|| nativeBoundaryBlock.includes('captureNativeUiBlueprints')
 		|| runtimeAppSource.includes('native-info-guard')
 		|| runtimeAppSource.includes('stabilizeNativeInfoPanel')
 		|| libraryRuntimeSource.includes('findReactClassOwner')) {
 		fail(path.join(frontendRoot, 'runtime', 'app.tsx'),
-			'native Library pages may only reconcile the bounded information preference before bypassing all other NativeGameLink work');
-	}
-	const nativeInfoContract = [
-		'export function reconcileNativeInfoPreference(doc: Document)',
-		'export function disposeNativeInfoPreference(doc: Document)',
-		'findNativeInfoButton(doc)',
-		'isPublicSteamLibraryRoute(doc)',
-		"NATIVE_INFO_PREFERENCE_KEY = 'gdl_native_info_panel_expanded'",
-		'readNativeInfoPreference()',
-		'MAX_NATIVE_TOGGLES_PER_ROUTE = 3',
-		'panels.length === 1',
-		'state.stableSamples < 2',
-		'Date.now() - state.routeChangedAt < 240',
-		'button.click()',
-		"doc.addEventListener('click', state.onClick, true)",
-	].every(token => nativeInfoPreferenceSource.includes(token));
-	if (!nativeInfoContract
-		|| !runtimeAppSource.includes('disposeNativeInfoPreference(popupDoc)')
-		|| /(?:innerHTML|outerHTML|classList\.(?:add|remove|toggle)|style\.|setAttribute\(|appendChild\(|insertBefore\(|replaceChildren\(|MutationObserver|findReactClassOwner)/.test(nativeInfoPreferenceSource)) {
-		fail(path.join(frontendRoot, 'features', 'library', 'native-info-preference.ts'),
-			'native information persistence must be route-stable, bounded, semantic and free of React-owned DOM mutations');
+			'native Library pages may only retire owned remnants; native controls and achievement caches must never be refreshed or toggled');
 	}
 	const ownedRouteCleanupBlock = libraryRuntimeSource.match(
 		/function cleanupOwnedLibraryChromeAfterRouteExit\(doc: Document\): void \{[\s\S]*?\n\}/,

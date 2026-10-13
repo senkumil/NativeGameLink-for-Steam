@@ -163,7 +163,7 @@ function ActivityEventCard({
 }): React.ReactElement {
 	const event = classes.ActivityEvent;
 	const type = item.event_type ? eventTypeLabel(Number(item.event_type)) : (item.feedlabel || gdlText('feed_news', 'News'));
-	const description = newsExcerpt(item.contents || '', 260);
+	const description = newsExcerpt(item.contents || '', 260) || loc('AppActivity_RecommendedGame_ReadMore', 'Read more');
 	const imageUrl = item.image
 		|| data.game?.header_image
 		|| `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${shortcut.steamAppId}/header.jpg`;

@@ -1,20 +1,18 @@
 import { getMappedShortcuts, getShortcutAppById, getShortcutPlaytimeMinutes } from '../../steam/shortcuts';
-import { fetchPlaytimeStatsBatch, type PlaytimeStats, setInstantPlaytimeStats } from './service';
+import { fetchPlaytimeStatsBatch, type PlaytimeStats } from './service';
 import { formatPlaytimeMinutes } from './format';
 import { isShortcutPlaytimeTrackingEnabled } from './playtime-settings';
+import { APP_PORTRAIT_CLASS_MODULE } from '../../steam/css';
+import { elementsWithCssModuleClass, isRenderedElement } from '../../steam/native-dom';
+import { isLibrarySidebarNode } from '../../steam/library-sidebar';
+import { runWhenLibrarySidebarIdle } from '../../steam/sidebar-interaction';
+import { isPublicSteamLibraryRoute, routedSteamAppId } from '../library/native-route';
 import {
 	patchDesktopLibraryHomePlaytimeCards,
 	type DesktopPlaytimeDomSnapshot,
 } from './library-home-dom';
 
-type DesktopPlaytimeKey =
-	| 'minutes_playtime_forever'
-	| 'minutes_playtime_last_two_weeks'
-	| 'rt_last_time_played'
-	| 'rt_recent_activity_time';
-
 interface DesktopPlaytimeRefreshResult {
-	changed: boolean;
 	shortcutAppId: number;
 	title: string;
 	minutesForever: number;
@@ -46,11 +44,6 @@ function readDesktopPlaytimeSnapshots(): Map<number, DesktopPlaytimeDomSnapshot>
 				minutesRecent,
 				lastPlayedAt,
 			});
-			setInstantPlaytimeStats(shortcutAppId, {
-				minutesForever,
-				minutesLastTwoWeeks: minutesRecent,
-				lastPlayedAt: lastPlayedAt || null,
-			});
 		}
 	} catch {}
 	return snapshots;
@@ -65,13 +58,20 @@ function persistDesktopPlaytimeSnapshots(): void {
 }
 
 const desktopPlaytimeSnapshots = readDesktopPlaytimeSnapshots();
-const desktopPlaytimeHydratedApps = new WeakSet<object>();
+/** Shelf text can use local snapshots; the shared AppOverview remains owned
+ * by Steam because changing it also invalidates the virtual sidebar list. */
+export function isDesktopLibraryHomePlaytimeVisible(doc: Document): boolean {
+	if (!doc.body || doc.hidden || doc.defaultView?.closed || routedSteamAppId(doc) !== null
+		|| isPublicSteamLibraryRoute(doc)) return false;
+	const classes = APP_PORTRAIT_CLASS_MODULE().classes;
+	return [classes.LibraryItemBox, classes.PlayedRecent].some(css =>
+		elementsWithCssModuleClass(doc, css).some(element => !element.closest('[id^="gdl-"]')
+			&& !isLibrarySidebarNode(element) && isRenderedElement(doc, element)));
+}
 
-/** Distinguish a value supplied by NativeGameLink from playtime Steam already
- * provided. The detail fallback must not mistake our AppOverview hydration for
- * an independent native source and then remove its own synchronized widget. */
-export function isDesktopLibraryPlaytimeHydrated(app: unknown): boolean {
-	return Boolean(app && typeof app === 'object' && desktopPlaytimeHydratedApps.has(app as object));
+function isCurrentHomeShortcut(doc: Document, shortcut: { id: number; steamAppId: string }, app: unknown): boolean {
+	return isDesktopLibraryHomePlaytimeVisible(doc) && getShortcutAppById(shortcut.id) === app
+		&& getMappedShortcuts().some(current => current.id === shortcut.id && current.steamAppId === shortcut.steamAppId);
 }
 
 function normalizedWholeNumber(value: unknown): number {
@@ -79,37 +79,8 @@ function normalizedWholeNumber(value: unknown): number {
 	return Number.isFinite(number) ? Math.max(0, Math.round(number)) : 0;
 }
 
-export function setDesktopPlaytimeField(target: any, key: DesktopPlaytimeKey, value: number): boolean {
-	const current = normalizedWholeNumber(target?.[key]);
-	if (value <= current) return false;
-	let changed = false;
-	const keysToUpdate: string[] = [key];
-	if (key === 'minutes_playtime_forever') keysToUpdate.push('m_nPlaytimeForever', 'nPlaytimeForever');
-	else if (key === 'minutes_playtime_last_two_weeks') keysToUpdate.push('m_nPlaytime2Weeks');
-	else if (key === 'rt_last_time_played') keysToUpdate.push('m_rtimeLastPlayed', 'rtime_last_played');
-	else if (key === 'rt_recent_activity_time') keysToUpdate.push('m_rtimeRecentActivity');
-
-	for (const k of keysToUpdate) {
-		try {
-			target[k] = value;
-			if (normalizedWholeNumber(target[k]) >= value) changed = true;
-		} catch {}
-
-		try {
-			const ownDescriptor = Object.getOwnPropertyDescriptor(target, k);
-			Object.defineProperty(target, k, {
-				configurable: true,
-				enumerable: ownDescriptor?.enumerable ?? true,
-				writable: true,
-				value,
-			});
-			if (normalizedWholeNumber(target[k]) >= value) changed = true;
-		} catch {}
-	}
-	return changed;
-}
-
 async function refreshDesktopShortcutPlaytime(
+	doc: Document,
 	shortcut: { id: number; title: string; steamAppId: string },
 	fallback: PlaytimeStats | null,
 ): Promise<DesktopPlaytimeRefreshResult> {
@@ -119,8 +90,7 @@ async function refreshDesktopShortcutPlaytime(
 
 	const refresh = (async (): Promise<DesktopPlaytimeRefreshResult> => {
 		const app = getShortcutAppById(shortcut.id);
-		if (!app) return {
-			changed: false,
+		if (!app || !isCurrentHomeShortcut(doc, shortcut, app)) return {
 			shortcutAppId: shortcut.id,
 			title: shortcut.title,
 			minutesForever: 0,
@@ -131,19 +101,20 @@ async function refreshDesktopShortcutPlaytime(
 		const nativeMinutes = knownNativeMinutes > 0
 			? knownNativeMinutes
 			: await getShortcutPlaytimeMinutes(shortcut.id);
+		if (!isCurrentHomeShortcut(doc, shortcut, app)) return {
+			shortcutAppId: shortcut.id, title: shortcut.title,
+			minutesForever: 0, minutesRecent: 0, lastPlayedAt: 0,
+		};
 		if (!fallback && !nativeMinutes) return {
-			changed: false,
 			shortcutAppId: shortcut.id,
 			title: shortcut.title,
 			minutesForever: 0,
 			minutesRecent: 0,
 			lastPlayedAt: 0,
 		};
-		if (Number(fallback?.minutesForever || 0) > 0) desktopPlaytimeHydratedApps.add(app);
 
-		// Never reduce a value Steam already knows. The canonical NativeGameLink
-		// sessions fill only the zero/older shortcut values that Steam leaves on
-		// desktop Library Home cards.
+		// Merge native values into our snapshot without writing to the shared
+		// observable that also supplies every icon and row in the game list.
 		const forever = Math.max(
 			normalizedWholeNumber(app.minutes_playtime_forever),
 			normalizedWholeNumber(nativeMinutes),
@@ -158,15 +129,7 @@ async function refreshDesktopShortcutPlaytime(
 			normalizedWholeNumber(fallback?.lastPlayedAt),
 		);
 
-		let changed = false;
-		if (setDesktopPlaytimeField(app, 'minutes_playtime_forever', forever)) changed = true;
-		if (setDesktopPlaytimeField(app, 'minutes_playtime_last_two_weeks', recent)) changed = true;
-		if (lastPlayedAt > 0) {
-			if (setDesktopPlaytimeField(app, 'rt_last_time_played', lastPlayedAt)) changed = true;
-			if (setDesktopPlaytimeField(app, 'rt_recent_activity_time', lastPlayedAt)) changed = true;
-		}
 		return {
-			changed,
 			shortcutAppId: shortcut.id,
 			title: shortcut.title,
 			minutesForever: forever,
@@ -186,59 +149,21 @@ async function refreshDesktopShortcutPlaytime(
 /** Reapply the last resolved values to cards Steam mounted after the async
  * startup read completed. This is synchronous and performs no backend I/O. */
 export function syncDesktopLibraryHomePlaytimeDom(doc: Document): void {
-	const snapshots = Array.from(desktopPlaytimeSnapshots.values());
-	for (const snapshot of snapshots) {
-		const app = getShortcutAppById(snapshot.shortcutAppId);
-		if (!app) continue;
-		try { (app as any).canonicalAppType = 1; } catch {}
-		try { (app as any).controller_support = 2; } catch {}
-		try { (app as any).xbox_controller_support = 2; } catch {}
-		try { (app as any).gamepad_preferred = true; } catch {}
-		try {
-			const proto = Object.getPrototypeOf(app);
-			if (proto && typeof proto.BIsShortcut === 'function' && !proto.BIsShortcut.__gdlDesktopWrapped) {
-				const orig = proto.BIsShortcut;
-				const wrapped = function (this: any) {
-					if (this && (Number(this.appid) >= 2147483648 || Number(this.app_type) === 1073741824)) {
-						return false;
-					}
-					return orig.call(this);
-				};
-				(wrapped as any).__gdlDesktopWrapped = true;
-				try {
-					Object.defineProperty(proto, 'BIsShortcut', {
-						configurable: true,
-						writable: true,
-						value: wrapped,
-					});
-				} catch {
-					try {
-						Object.defineProperty(app, 'BIsShortcut', {
-							configurable: true,
-							writable: true,
-							value: wrapped,
-						});
-					} catch {}
-				}
-			}
-		} catch {}
-		if (snapshot.minutesForever <= 0) continue;
-		desktopPlaytimeHydratedApps.add(app);
-		setDesktopPlaytimeField(app, 'minutes_playtime_forever', snapshot.minutesForever);
-		setDesktopPlaytimeField(app, 'minutes_playtime_last_two_weeks', snapshot.minutesRecent);
-		if (Number(snapshot.lastPlayedAt || 0) > 0) {
-			setDesktopPlaytimeField(app, 'rt_last_time_played', Number(snapshot.lastPlayedAt));
-			setDesktopPlaytimeField(app, 'rt_recent_activity_time', Number(snapshot.lastPlayedAt));
-		}
-	}
+	if (!isDesktopLibraryHomePlaytimeVisible(doc)) return;
+	void runWhenLibrarySidebarIdle(doc, 'desktop-playtime-snapshots', () => syncHomePlaytimeSnapshots(doc)).catch(() => {});
+}
+
+function syncHomePlaytimeSnapshots(doc: Document): void {
+	if (!isDesktopLibraryHomePlaytimeVisible(doc)) return;
+	const mappedIds = new Set(getMappedShortcuts().map(shortcut => shortcut.id));
+	const snapshots = Array.from(desktopPlaytimeSnapshots.values()).filter(snapshot =>
+		mappedIds.has(snapshot.shortcutAppId) && snapshot.minutesForever > 0);
 	patchDesktopLibraryHomePlaytimeCards(doc, snapshots);
 }
 
-/** Hydrate Steam Desktop's native AppOverview model for linked non-Steam
- * shortcuts. Library Home renders both "Total" and "Last two weeks" directly
- * from these fields; updating only the detail-page DOM cannot affect the shelf. */
+/** Refresh exact Home-card text without modifying Steam's AppOverview models. */
 export async function patchDesktopLibraryHomePlaytime(doc: Document): Promise<void> {
-	if (!doc.body || doc.hidden) return;
+	if (!isDesktopLibraryHomePlaytimeVisible(doc)) return;
 	const shortcuts = getMappedShortcuts();
 	if (shortcuts.length === 0) return;
 	// Paint the last backend-confirmed values before the first IPC round trip.
@@ -250,8 +175,10 @@ export async function patchDesktopLibraryHomePlaytime(doc: Document): Promise<vo
 		title: shortcut.title,
 		steamAppId: shortcut.steamAppId,
 	})));
+	if (!isDesktopLibraryHomePlaytimeVisible(doc)) return;
 	const results = await Promise.all(shortcuts.map(shortcut =>
-		refreshDesktopShortcutPlaytime(shortcut, fallbacks.get(shortcut.id) ?? null)));
+		refreshDesktopShortcutPlaytime(doc, shortcut, fallbacks.get(shortcut.id) ?? null)));
+	if (!isDesktopLibraryHomePlaytimeVisible(doc) || !results.some(result => result.minutesForever > 0)) return;
 	for (const result of results) {
 		if (result.minutesForever <= 0) continue;
 			desktopPlaytimeSnapshots.set(result.shortcutAppId, {
@@ -263,7 +190,12 @@ export async function patchDesktopLibraryHomePlaytime(doc: Document): Promise<vo
 			});
 	}
 	persistDesktopPlaytimeSnapshots();
-	syncDesktopLibraryHomePlaytimeDom(doc);
+	await runWhenLibrarySidebarIdle(doc, 'desktop-playtime-cards', () => {
+		if (isDesktopLibraryHomePlaytimeVisible(doc)) {
+			patchDesktopLibraryHomePlaytimeCards(doc, Array.from(desktopPlaytimeSnapshots.values()));
+		}
+	});
+	if (!isDesktopLibraryHomePlaytimeVisible(doc)) return;
 
 	// The detail-page fallback is NativeGameLink-owned DOM. Keep it aligned with the
 	// same resolved value used by Library Home.

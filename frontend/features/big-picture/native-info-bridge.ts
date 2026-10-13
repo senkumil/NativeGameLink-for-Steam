@@ -1,8 +1,11 @@
 import type { SteamGameData } from '../../domain/types';
 import { backendLog } from '../../api/backend';
-import { getShortcutAppById, toSignedShortcutAppId } from '../../steam/shortcuts';
+import { toSignedShortcutAppId } from '../../steam/shortcuts';
 import { resolveNativeAppDetailsStore } from '../../steam/gamepad/components/AppDetailsNativeComponents';
 import type { MappedShortcut } from './types';
+import { steamUIModeService } from '../../steam/ui/SteamUIModeService';
+import { routedSteamAppId } from '../library/native-route';
+import { getCommittedShortcutSteamAppId } from '../shortcuts/registry';
 
 type PropertySnapshot = PropertyDescriptor | null;
 
@@ -10,11 +13,7 @@ type ActiveNativeInfoTarget = {
 	shortcut: MappedShortcut;
 	game: SteamGameData | null;
 	signature: string;
-};
-
-type AppClassificationState = {
-	app: any;
-	modShortcutMethod: PropertySnapshot;
+	generation: number;
 };
 
 type StoreBridgeState = {
@@ -26,9 +25,19 @@ type StoreBridgeState = {
 };
 
 const activeTargets = new WeakMap<Window, ActiveNativeInfoTarget>();
-const classificationStates = new WeakMap<Document, AppClassificationState>();
 const storeBridgeByWindow = new WeakMap<Window, StoreBridgeState>();
 const rerenderTimers = new WeakMap<Document, ReturnType<typeof setTimeout>>();
+let targetGeneration = 0;
+
+function isCurrentInfoTarget(doc: Document, shortcut: MappedShortcut): boolean {
+	try {
+		const view = doc.defaultView, raw = Number(shortcut.id), id = raw < 0 ? raw >>> 0 : raw;
+		return Boolean(view && !view.closed && view.document === doc && doc.body?.isConnected && !doc.hidden
+			&& steamUIModeService.isGamepadUI(doc) && Number.isInteger(raw) && raw >= -2147483648 && raw <= 4294967295
+			&& id >= 2147483648 && routedSteamAppId(doc) === id
+			&& getCommittedShortcutSteamAppId(id) === String(shortcut.steamAppId));
+	} catch { return false; }
+}
 
 function ownDescriptor(target: any, key: string): PropertySnapshot {
 	try { return Object.getOwnPropertyDescriptor(target, key) || null; } catch { return null; }
@@ -39,46 +48,6 @@ function restoreOwnDescriptor(target: any, key: string, snapshot: PropertySnapsh
 		if (snapshot) Object.defineProperty(target, key, snapshot);
 		else delete target[key];
 	} catch {}
-}
-
-function setTemporaryValue(target: any, key: string, value: unknown): void {
-	try {
-		const current = Object.getOwnPropertyDescriptor(target, key);
-		if (current && current.configurable === false && current.writable === false) return;
-		Object.defineProperty(target, key, {
-			configurable: true,
-			enumerable: current?.enumerable ?? true,
-			writable: true,
-			value,
-		});
-	} catch {
-		try { target[key] = value; } catch {}
-	}
-}
-
-function patchActiveShortcutClassification(doc: Document, shortcut: MappedShortcut): void {
-	const previous = classificationStates.get(doc);
-	const app = getShortcutAppById(shortcut.id, doc);
-	if (previous?.app === app) return;
-	if (previous) restoreActiveShortcutClassification(doc);
-	if (!app) return;
-	const state: AppClassificationState = {
-		app,
-		modShortcutMethod: ownDescriptor(app, 'BIsModOrShortcut'),
-	};
-	classificationStates.set(doc, state);
-	// Do not change app_type or BIsShortcut: artwork and launch routing depend on them.
-	if (typeof app.BIsModOrShortcut === 'function' || state.modShortcutMethod) {
-		setTemporaryValue(app, 'BIsModOrShortcut', function (): boolean { return false; });
-	}
-}
-
-function restoreActiveShortcutClassification(doc: Document): void {
-	const state = classificationStates.get(doc);
-	if (!state) return;
-	classificationStates.delete(doc);
-
-	restoreOwnDescriptor(state.app, 'BIsModOrShortcut', state.modShortcutMethod);
 }
 
 function gameSignature(shortcut: MappedShortcut, game: SteamGameData | null): string {
@@ -143,7 +112,7 @@ function installStoreBridge(doc: Document): void {
 	storeBridgeByWindow.set(win, bridge);
 	store.GetAppData = function (appId: number): any {
 		const target = activeTargets.get(win);
-		if (!target) return originalGetAppData.call(this, appId);
+		if (!target || !isCurrentInfoTarget(doc, target.shortcut)) return originalGetAppData.call(this, appId);
 		const requested = Number(appId);
 		const unsigned = target.shortcut.id < 0 ? (target.shortcut.id >>> 0) : target.shortcut.id;
 		const signed = toSignedShortcutAppId(unsigned);
@@ -178,13 +147,17 @@ function installStoreBridge(doc: Document): void {
 }
 
 function requestNativeInfoRerender(doc: Document): void {
+	const view = doc.defaultView;
+	const target = view && activeTargets.get(view);
+	if (!view || !target || !isCurrentInfoTarget(doc, target.shortcut)) return;
 	const existing = rerenderTimers.get(doc);
 	if (existing) clearTimeout(existing);
 	const timer = setTimeout(() => {
 		rerenderTimers.delete(doc);
-		const win = doc.defaultView as any;
-		try { win?.MILLENNIUM_STEAM_FORCE_RERENDER?.(); } catch {}
-		try { if (win !== window) (window as any).MILLENNIUM_STEAM_FORCE_RERENDER?.(); } catch {}
+		const current = activeTargets.get(view);
+		if (current?.generation !== target.generation || current.signature !== target.signature
+			|| !isCurrentInfoTarget(doc, current.shortcut)) return;
+		try { (view as any).MILLENNIUM_STEAM_FORCE_RERENDER?.(); } catch {}
 	}, 40);
 	rerenderTimers.set(doc, timer);
 }
@@ -203,14 +176,17 @@ function isNativeInfoSurfaceActive(doc: Document): boolean {
 export function activateNativeGameInfoBridge(doc: Document, shortcut: MappedShortcut, game: SteamGameData | null): void {
 	const win = doc.defaultView;
 	if (!win) return;
+	if (!isCurrentInfoTarget(doc, shortcut)) { deactivateNativeGameInfoBridge(doc); return; }
 	installStoreBridge(doc);
-	patchActiveShortcutClassification(doc, shortcut);
+	// Keep enrichment inside GetAppData's metadata view. Steam's real overview
+	// uses BIsModOrShortcut to request and preserve icon_data across replacements.
+	// Reclassifying that shared object makes sidebar icons disappear on recycling.
 	const signature = gameSignature(shortcut, game);
 	const previous = activeTargets.get(win);
-	activeTargets.set(win, { shortcut, game, signature });
+	const generation = previous?.shortcut.id === shortcut.id && previous.shortcut.steamAppId === shortcut.steamAppId
+		? previous.generation : ++targetGeneration;
+	activeTargets.set(win, { shortcut, game, signature, generation });
 	if (game && previous && previous.signature !== signature && isNativeInfoSurfaceActive(doc)) {
-		requestNativeInfoRerender(doc);
-	} else if (!doc.body && previous?.signature !== signature) {
 		requestNativeInfoRerender(doc);
 	}
 }
@@ -223,7 +199,6 @@ export function deactivateNativeGameInfoBridge(doc: Document): void {
 		if (bridge?.store.GetAppData === bridge?.wrapper && bridge) restoreOwnDescriptor(bridge.store, 'GetAppData', bridge.originalDescriptor);
 		storeBridgeByWindow.delete(win);
 	}
-	restoreActiveShortcutClassification(doc);
 	const timer = rerenderTimers.get(doc);
 	if (timer) clearTimeout(timer);
 	rerenderTimers.delete(doc);

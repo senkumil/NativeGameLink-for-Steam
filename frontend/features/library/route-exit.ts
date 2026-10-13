@@ -27,6 +27,7 @@ const OWNED_LIBRARY_SELECTORS = [
 	'.gdl-trading-cards-help-popup',
 	'#gdl-manual-link-notice-button-row',
 	'[data-gdl-cloud-status]',
+	'[data-gdl-cloud-stats]',
 	'[data-gdl-game-info-button="1"]',
 	'[data-gdl-playtime="1"]',
 	'#gdl-achievement-sidebar-style',

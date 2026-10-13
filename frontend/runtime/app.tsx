@@ -4,7 +4,7 @@ import { backendLog } from '../api/backend';
 import { mappings, loadMappings } from '../core/mappings';
 import { clearGameDataCache, warmupAllMappedGameData } from '../core/game-data';
 import { pruneCacheStorage, setProtectedCacheAppIds } from '../core/cache';
-import { getSteamLanguage, subscribeSteamLanguageChange, startSteamLanguageWatcher, stopSteamLanguageWatcher, officialSteamText, setLocalizationDocumentProvider } from '../steam/localization';
+import { getSteamLanguage, subscribeSteamLanguageChange, startSteamLanguageWatcher, stopSteamLanguageWatcher, setLocalizationDocumentProvider } from '../steam/localization';
 import { steamUIModeService } from '../steam/ui/SteamUIModeService';
 import { steamComponents } from '../steam/modules/SteamComponentResolver';
 import { SettingsContent } from '../settings/SettingsContent';
@@ -12,13 +12,16 @@ import { clearShortcutRuntimeCaches, findActiveShortcutAppId, isSteamLibraryActi
 import { clearLibraryAssetCaches, warmupAllMappedLibraryAssets } from '../features/library/artwork';
 import { clearCommunityItemCaches } from '../features/library/community-items';
 import { clearSocialRuntimeCaches, configureSocialRuntimeHost } from '../features/library/social';
-import { configureLibraryRuntimeHost, disposeLibraryRuntime, findNonSteamNotice, getCurrentInjectedAppId, getCurrentInjectedShortcutAppId, handleLibraryNavigation, refreshLibraryArtwork, resetLibraryInjection, tryInjectLibraryData } from '../features/library/runtime';
+import { cancelPendingLibraryPaint, configureLibraryRuntimeHost, disposeLibraryRuntime, findNonSteamNotice, getCurrentInjectedAppId, getCurrentInjectedShortcutAppId, handleLibraryNavigation, refreshLibraryArtwork, resetLibraryInjection, tryInjectLibraryData } from '../features/library/runtime';
 import { DisposableRegistry } from '../core/disposables';
-import { configureShortcutRuntimeHost, disposeCustomizationArtwork, mutationMayContainProperties, scheduleReconciliation, startNativeAddAutoDetector, stopNativeAddAutoDetector, tryInjectCustomizationArtwork, tryInjectPropertiesField } from '../features/shortcuts/runtime';
+import { mutationIsWithinSelector } from '../core/dom';
+import { configureShortcutRuntimeHost, disposeCustomizationArtwork, mutationMayContainProperties, startNativeAddAutoDetector, stopNativeAddAutoDetector, tryInjectCustomizationArtwork, tryInjectPropertiesField } from '../features/shortcuts/runtime';
 import { GDL_INJECTED } from '../features/library/constants';
 import { activateBigPicture, deactivateBigPicture, getBigPictureDocument, isBigPictureActive, refreshBigPicture } from '../features/big-picture/runtime';
 import { captureNativeUiBlueprints, clearNativeUiBlueprints } from '../steam/native-dom';
-import { syncEarlyLinkedCloudStatus } from '../features/library/cloud-status';
+import { installEarlyLinkedPlaybar, type EarlyLinkedPlaybar } from '../features/library/early-playbar';
+import { syncEarlyLinkedNotice } from '../features/library/early-notice';
+import { installNativeArtworkWarmup } from '../features/library/native-artwork-warmup';
 import { resetResolvedCssClassModules } from '../steam/css';
 import {
 	clearLocalAchievementCache, configureAchievementRuntimeHost, disposeAchievementRuntime,
@@ -26,44 +29,26 @@ import {
 	unregisterNativeAchievementToastWindow, showAchievementToast, startFirstLaunchAchievementWatcher,
 	stopFirstLaunchAchievementWatcher,
 } from '../features/achievements/runtime';
-import { startPlaytimeTracker, stopPlaytimeTracker, syncEarlyLinkedPlaytime } from '../features/playtime/tracker';
-import { patchDesktopLibraryHomePlaytime, syncDesktopLibraryHomePlaytimeDom } from '../features/playtime/library-home';
+import { startPlaytimeTracker, stopPlaytimeTracker } from '../features/playtime/tracker';
+import { isDesktopLibraryHomePlaytimeVisible, patchDesktopLibraryHomePlaytime, syncDesktopLibraryHomePlaytimeDom } from '../features/playtime/library-home';
 import { mutationMayContainDesktopPlaytime } from '../features/playtime/library-home-dom';
 import { processPendingLinkJobs } from '../features/shortcuts/link-job-queue';
 import { clearShortcutDetectionCache } from '../features/shortcuts/detection';
 import { mutationMayContainNonSteamNotice } from '../features/library/notice';
 import { isPublicSteamLibraryRoute, libraryRouteIdentity } from '../features/library/native-route';
-import { disposeNativeInfoPreference, reconcileNativeInfoPreference } from '../features/library/native-info-preference';
 import { finishLibraryRouteExit, hasOwnedLibraryChrome } from '../features/library/route-exit';
 import { disposeLinkedGamePrefetch, restartLinkedGamePrefetch, startLinkedGamePrefetch } from '../features/library/prefetch';
-import { installGhostSidebarCleanup } from '../features/library/sidebar-cleanup';
+import { disposeGhostSidebarCleanup, installGhostSidebarCleanup } from '../features/library/sidebar-cleanup';
+import { withoutLibrarySidebarMutations } from '../steam/library-sidebar';
+import { installLibrarySidebarInteraction } from '../steam/sidebar-interaction';
 import { adoptExistingSteamWindows, getCanonicalDesktopPopup, isDesktopSteamWindow, resolveSteamWindowContext } from './existing-windows';
 import { installMappingRefresh } from './mapping-refresh';
 import { installArtworkBatchRefresh } from './artwork-batch-refresh';
-import { syncMissingArtworkForMappedShortcuts } from '../features/library/artwork-sync';
 import { installBrowserProtection, disposeAllBrowserProtection } from '../steam/browser-protection';
+import { disposeTradingCardUI } from '../features/library/trading-cards';
+import { disposeCopiedFeedbackCleanup, scheduleCopiedFeedbackCleanup } from './copied-feedback';
 let mainWindowDoc: Document | null = null;
 setLocalizationDocumentProvider(() => mainWindowDoc);
-function normalizedDomText(value: unknown): string { return String(value || '').replace(/\s+/g, ' ').trim().toLocaleLowerCase(); }
-function currentCopiedFeedbackLabels(): Set<string> {
-	return new Set(['copied!', 'copied', '¡copiado!', 'copiado!', 'copiado', normalizedDomText(officialSteamText('Copied!')), normalizedDomText(officialSteamText('Copied'))].filter(Boolean));
-}
-function sweepCopiedFeedbackTooltips(doc: Document): void {
-	if (!doc?.body) return;
-	const labels = currentCopiedFeedbackLabels();
-	if (labels.size === 0) return;
-	try {
-		const candidates = doc.querySelectorAll<HTMLElement>('div, span, p, [class*="tooltip" i], [class*="popup" i], [class*="toast" i], [class*="copied" i], [class*="badge" i], [class*="bubble" i]');
-		for (const el of Array.from(candidates)) {
-			const text = normalizedDomText(el.textContent);
-			if (!labels.has(text) || el.closest('button, a, input, textarea, [role="button"]')) continue;
-			let target: HTMLElement = el, parent = el.parentElement;
-			while (parent && parent !== doc.body && normalizedDomText(parent.textContent) === text) { target = parent; parent = parent.parentElement; }
-			for (const p of ['display', 'visibility', 'opacity', 'pointer-events']) target.style.setProperty(p, p === 'display' ? 'none' : p === 'visibility' ? 'hidden' : '0', 'important');
-		}
-	} catch {}
-}
-const scheduleCopiedFeedbackCleanup = (doc: Document, _roots?: Iterable<Node>): void => sweepCopiedFeedbackTooltips(doc);
 const observedDocs = new WeakSet<Document>();
 const activeSteamDocuments = new Set<Document>();
 const documentLifecycles = new Set<DisposableRegistry>();
@@ -147,7 +132,7 @@ function windowCreated(context: any): void {
 		lifecycle.listen(popupWin, 'beforeunload', disposeWindow, { once: true });
 		lifecycle.listen(popupWin, 'unload', disposeWindow, { once: true });
 	}
-	lifecycle.add(() => { disposeLocalAchievementUI(popupDoc); disposeCustomizationArtwork(popupDoc); disposeNativeInfoPreference(popupDoc); });
+	lifecycle.add(() => { disposeLocalAchievementUI(popupDoc); disposeCustomizationArtwork(popupDoc); disposeTradingCardUI(popupDoc); disposeGhostSidebarCleanup(popupDoc); disposeCopiedFeedbackCleanup(popupDoc); cancelPendingLibraryPaint(popupDoc); });
 	lifecycle.add(installBrowserProtection(popupWin, popupDoc));
 	const winTitle = `${popupName} ${popupTitle}`.trim();
 	if (isOverlayWindow) {
@@ -167,11 +152,15 @@ function windowCreated(context: any): void {
 		// desktop and Big Picture documents observe the same file change.
 		installLocalAchievementUI(popupDoc);
 	}
+	let earlyPlaybar: EarlyLinkedPlaybar | null = null;
 	if (isMainWindow) {
 		mainWindowDoc = popupDoc;
+		lifecycle.add(installLibrarySidebarInteraction(popupDoc, true));
+		syncEarlyLinkedNotice(popupDoc);
 		syncDesktopLibraryHomePlaytimeDom(popupDoc);
-		syncEarlyLinkedCloudStatus(popupDoc);
-		syncEarlyLinkedPlaytime(popupDoc);
+		lifecycle.add(installNativeArtworkWarmup(popupDoc));
+		earlyPlaybar = installEarlyLinkedPlaybar(popupDoc);
+		lifecycle.add(() => earlyPlaybar?.dispose());
 		void processPendingLinkJobs(mainWindowDoc);
 		installLocalAchievementUI(popupDoc);
 		scheduleCopiedFeedbackCleanup(popupDoc);
@@ -200,13 +189,13 @@ function windowCreated(context: any): void {
 	});
 	let lastNavUrl = libraryRouteIdentity(popupDoc);
 	const schedulePlaytimeRefresh = (immediate = false): void => {
-		if (!isMainWindow || popupDoc.hidden || playtimeTimer) return;
+		if (!isMainWindow || popupDoc.hidden || playtimeTimer || !isDesktopLibraryHomePlaytimeVisible(popupDoc)) return;
 		const elapsed = Date.now() - lastPlaytimeRefreshAt;
 		const delay = immediate ? 0 : Math.max(0, 10000 - elapsed);
 		playtimeTimer = setTimeout(() => {
 			playtimeTimer = null;
 			lastPlaytimeRefreshAt = Date.now();
-			void patchDesktopLibraryHomePlaytime(popupDoc).catch(e => backendLog('Desktop Library playtime refresh error: ' + e));
+			if (isDesktopLibraryHomePlaytimeVisible(popupDoc)) void patchDesktopLibraryHomePlaytime(popupDoc).catch(e => backendLog('Desktop Library playtime refresh error: ' + e));
 		}, delay);
 	};
 	let wasBigPictureSurface = isBigPictureSurface();
@@ -236,17 +225,14 @@ function windowCreated(context: any): void {
 			// their full-text/DOM scanners against SP Desktop on every Library
 			// mutation created needless startup work and retained large React trees.
 			// Keep desktop injection restricted to actual Library surfaces.
-			// Native metadata and layout remain Steam-owned. The only native action is
-			// reconciling the user's information-toggle preference through Steam's button.
+			// Native metadata, controls and layout remain entirely Steam-owned.
 			if (isPublicSteamLibraryRoute(popupDoc)) {
-				reconcileNativeInfoPreference(popupDoc);
 				if (hasOwnedLibraryChrome(popupDoc)) {
 					void tryInjectLibraryData(popupDoc).catch(e => backendLog('Library route retirement error: ' + e));
 				}
 				return;
 			}
-			syncDesktopLibraryHomePlaytimeDom(popupDoc);
-			captureNativeUiBlueprints(popupDoc, { skip: () => Boolean(findNonSteamNotice(popupDoc) || popupDoc.getElementById(GDL_INJECTED)) });
+			earlyPlaybar?.sync();
 			void tryInjectLibraryData(popupDoc).catch(e => backendLog('Library injection error: ' + e));
 			schedulePlaytimeRefresh(reason !== 'mutation');
 			return;
@@ -256,44 +242,35 @@ function windowCreated(context: any): void {
 		tryInjectPropertiesField(popupDoc, popupTitle);
 		tryInjectCustomizationArtwork(popupDoc, popupTitle);
 	};
-	const isGdlOwnedNode = (node: Node, fallback: Node): boolean => {
-		const element = (node.nodeType === Node.ELEMENT_NODE ? node as Element : node.parentElement)
-			|| (fallback.nodeType === Node.ELEMENT_NODE ? fallback as Element : fallback.parentElement);
-		return Boolean(element?.closest?.('[id^="gdl-"], [data-gdl-hidden], [data-gdl-shortcut-app-id]'));
-	};
-	const isGdlOnlyMutation = (records: MutationRecord[]): boolean => records.length > 0 && records.every(record => {
-		if (isGdlOwnedNode(record.target, record.target)) return true;
-		const changed = [...Array.from(record.addedNodes), ...Array.from(record.removedNodes)];
-		return changed.length > 0 && changed.every(node => isGdlOwnedNode(node, record.target));
-	});
+	const isGdlOnlyMutation = (record: MutationRecord): boolean => mutationIsWithinSelector(record,
+		'[id^="gdl-"], [data-gdl-hidden], [data-gdl-shortcut-app-id], [data-gdl-cloud-status], [data-gdl-cloud-stats], [data-gdl-playtime]');
 	// Do not invalidate the page merely because a library row was pressed: Steam
 	// also emits pointerdown for the already-selected row. Actual URL/DOM route
 	// signals below are authoritative and prevent native-page cleanup flicker.
-	const observer = new MutationObserver((records) => {
+	const observer = new MutationObserver((mutations) => {
 		const currentUrl = libraryRouteIdentity(popupDoc);
 		if (currentUrl && currentUrl !== lastNavUrl) {
 			lastNavUrl = currentUrl;
 			if (mutationTimer) { clearTimeout(mutationTimer); mutationTimer = null; }
 			if (isMainWindow) {
 				handleLibraryNavigation(popupDoc);
-				syncEarlyLinkedCloudStatus(popupDoc);
-				syncEarlyLinkedPlaytime(popupDoc);
+				earlyPlaybar?.sync();
 			}
 			runInjection('navigation');
 			return;
 		}
+		const records = (isMainWindow ? withoutLibrarySidebarMutations(mutations) : mutations)
+			.filter(record => !isGdlOnlyMutation(record));
+		if (records.length === 0) return;
 		if (isMainWindow && isPublicSteamLibraryRoute(popupDoc)) {
 			// Steam may reveal its native links row before updating the route URL.
 			// Retire only stale gdl-* nodes and ignore the rest of this mutation.
 			runInjection('mutation');
 			return;
 		}
-		// Synchronously mount Cloud Status and Playtime at 0ms as soon as Steam renders
-		// GameStatsSection with LastPlayed/Playtime for a linked shortcut,
-		// eliminating late pop-in and layout shift on the first frame.
+		// Playbar content and visibility have their own synchronous, scoped
+		// observer. Keep this metadata observer out of its update cycle.
 		if (isMainWindow) {
-			syncEarlyLinkedCloudStatus(popupDoc);
-			syncEarlyLinkedPlaytime(popupDoc);
 			const playtimeRoots = records.flatMap(record => [record.target, ...Array.from(record.addedNodes)]);
 			if (mutationMayContainDesktopPlaytime(playtimeRoots)) syncDesktopLibraryHomePlaytimeDom(popupDoc);
 			const roots = records.flatMap(record => Array.from(record.addedNodes));
@@ -302,7 +279,6 @@ function windowCreated(context: any): void {
 		// Rendering a linked page creates several DOM mutations of its own. They
 		// are already complete, so feeding them back into the navigation observer
 		// used to schedule redundant injection/cleanup passes and visible flicker.
-		if (isGdlOnlyMutation(records)) return;
 		const addedRoots = records.flatMap(record => Array.from(record.addedNodes));
 		if (mutationMayContainNonSteamNotice(addedRoots) || mutationMayContainProperties(addedRoots)) {
 			if (mutationTimer) { clearTimeout(mutationTimer); mutationTimer = null; }
@@ -324,7 +300,7 @@ function windowCreated(context: any): void {
 			const currentUrl = libraryRouteIdentity(popupDoc);
 			if (currentUrl && currentUrl !== lastNavUrl) {
 				lastNavUrl = currentUrl;
-				if (isMainWindow) { handleLibraryNavigation(popupDoc); syncEarlyLinkedCloudStatus(popupDoc); }
+				if (isMainWindow) { handleLibraryNavigation(popupDoc); earlyPlaybar?.sync(); }
 			}
 			runInjection('visibility');
 		} catch {}
@@ -336,7 +312,7 @@ function windowCreated(context: any): void {
 			if (!currentUrl || currentUrl === lastNavUrl) return;
 			lastNavUrl = currentUrl;
 			if (mutationTimer) { clearTimeout(mutationTimer); mutationTimer = null; }
-			if (isMainWindow) { handleLibraryNavigation(popupDoc); syncEarlyLinkedCloudStatus(popupDoc); }
+			if (isMainWindow) { handleLibraryNavigation(popupDoc); earlyPlaybar?.sync(); }
 			runInjection('navigation');
 		} catch {}
 	}, 2500);
@@ -365,9 +341,7 @@ function windowCreated(context: any): void {
 	}
 	const isPropertiesWindow = !isMainWindow && /properties|propiedades|propriedades|propriétés|eigenschaften|proprietà|shortcut/i.test(popupTitle || popupDoc.title || '');
 	const linkedShortcutAlreadyVisible = (isMainWindow && Boolean(findNonSteamNotice(popupDoc))) || isPropertiesWindow;
-	lifecycle.timeout(() => {
-		runInjection('startup');
-	}, linkedShortcutAlreadyVisible ? 0 : 350);
+	lifecycle.timeout(() => runInjection('startup'), linkedShortcutAlreadyVisible ? 0 : 350);
 }
 function safeStartup(label: string, action: () => void): void {
 	try { action(); }
@@ -384,7 +358,13 @@ export default definePlugin(() => {
 	installBrowserProtection(window, window.document);
 	safeStartup('cache protection', () => setProtectedCacheAppIds(Object.values(mappings)));
 	setTimeout(() => safeStartup('cache pruning', () => pruneCacheStorage()), 750);
-	safeStartup('library runtime host', () => configureLibraryRuntimeHost({ getMainWindowDoc: () => resolveMainWindowDocument() }));
+	safeStartup('library runtime host', () => configureLibraryRuntimeHost({
+		getMainWindowDoc: () => resolveMainWindowDocument(),
+		prepareLinkedPage: (doc) => {
+			syncDesktopLibraryHomePlaytimeDom(doc);
+			captureNativeUiBlueprints(doc, { skip: () => Boolean(findNonSteamNotice(doc) || doc.getElementById(GDL_INJECTED)) });
+		},
+	}));
 	safeStartup('achievement runtime host', () => configureAchievementRuntimeHost({
 		getCurrentInjectedAppId, getCurrentInjectedShortcutAppId,
 		findNonSteamNotice: (doc) => { const info = findNonSteamNotice(doc); return info ? { title: info.title } : null; },
@@ -430,12 +410,14 @@ export default definePlugin(() => {
 		void processPendingLinkJobs(mainWindowDoc);
 		const targetDoc = resolveMainWindowDocument();
 		if (targetDoc) {
+			installEarlyLinkedPlaybar(targetDoc).sync();
 			installGhostSidebarCleanup(targetDoc);
 			tryInjectLibraryData(targetDoc).catch(e => backendLog('Post-startup library refresh error: ' + e));
 		}
 		const bigPictureDoc = getBigPictureDocument();
 		if (bigPictureDoc) void refreshBigPicture(bigPictureDoc).catch(e => backendLog('Big Picture refresh error: ' + e));
-		deferStartup('startup artwork reconciliation', () => { void syncMissingArtworkForMappedShortcuts(); scheduleReconciliation(5000); }, 2200);
+		// Viewing the Library must not rewrite shortcut identity, icons or grid
+		// files. Those writes belong to linking and explicit artwork actions.
 	}).catch((e) => {
 		console.error('[GDL] Failed to load mappings from backend:', e);
 		deferStartup('playtime tracker fallback', () => startPlaytimeTracker(), 700);
@@ -453,7 +435,7 @@ export default definePlugin(() => {
 	const onPlaytimeChanged = (): void => {
 		const doc = resolveMainWindowDocument();
 		if (doc) {
-			syncEarlyLinkedPlaytime(doc);
+			installEarlyLinkedPlaybar(doc).sync();
 			void patchDesktopLibraryHomePlaytime(doc).catch(() => {});
 			void tryInjectLibraryData(doc).catch(() => {});
 		}

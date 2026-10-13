@@ -32,7 +32,7 @@ function blueprintKey(key: NativeUiBlueprintKey): string {
 	return `${steamLanguageSync() || 'english'}:${key}`;
 }
 
-function hasNativeUiBlueprint(key: NativeUiBlueprintKey): boolean {
+export function hasNativeUiBlueprint(key: NativeUiBlueprintKey): boolean {
 	return nativeUiBlueprints.has(blueprintKey(key));
 }
 
@@ -72,6 +72,7 @@ function captureNativePlaybarTypography(element: HTMLElement): NativePlaybarTypo
 function applyTypographyValues(element: HTMLElement, values?: NativeTypographyValues): void {
 	if (!values) return;
 	for (const [property, value] of Object.entries(values)) {
+		if (element.style.getPropertyValue(property) === value && element.style.getPropertyPriority(property) === 'important') continue;
 		element.style.setProperty(property, value, 'important');
 	}
 }
@@ -179,6 +180,18 @@ export function isRenderedElement(doc: Document, element: HTMLElement): boolean 
 		&& style?.display !== 'none' && style?.visibility !== 'hidden');
 }
 
+/** Steam keeps hidden sizing states inside the Cloud container even when no
+ * active status exists. Inspect the stat itself; this structural check also
+ * works on detached blueprint clones before they are mounted. */
+export function findVisibleCloudStatusStat(root: HTMLElement): HTMLElement | null {
+	const ps = PLAYBAR_CLASSES();
+	return elementsWithCssModuleClass(root, ps.GameStat).find(stat => {
+		if (hasCssModuleClass(stat, ps.SuperimposedGridItems) && !hasCssModuleClass(stat, ps.Visible)) return false;
+		return elementsWithCssModuleClass(stat, ps.PlayBarLabel).length > 0
+			&& elementsWithCssModuleClass(stat, ps.PlayBarDetailLabel).length > 0;
+	}) || null;
+}
+
 export interface CaptureNativeUiBlueprintOptions {
 	skip?: () => boolean;
 }
@@ -254,7 +267,11 @@ export function captureNativeUiBlueprints(doc: Document, options: CaptureNativeU
 
 	if (!hasNativeUiBlueprint(NATIVE_UI_BLUEPRINT_KEYS.cloudStatus)) try {
 		const nativeCloud = elementsWithCssModuleClass(doc, ps.PlayBarCloudStatusContainer)
-			.find(el => !el.closest('[data-gdl-cloud-status]') && isRenderedElement(doc, el));
+			.find(el => {
+				if (el.closest('[data-gdl-cloud-status]')) return false;
+				const stat = findVisibleCloudStatusStat(el);
+				return Boolean(stat && isRenderedElement(doc, stat));
+			});
 		if (nativeCloud) saveNativeUiBlueprint(NATIVE_UI_BLUEPRINT_KEYS.cloudStatus, nativeCloud);
 	} catch {}
 
@@ -340,12 +357,17 @@ export function buildNativeCloudBlueprint(doc: Document): HTMLElement | null {
 	if (!wrapper) return null;
 	const ps = PLAYBAR_CLASSES();
 	if (ps.PlayBarCloudStatusContainer && !hasCssModuleClass(wrapper, ps.PlayBarCloudStatusContainer)) return null;
+	const stat = findVisibleCloudStatusStat(wrapper);
+	if (!stat) return null;
+	for (const reserve of elementsWithCssModuleClass(wrapper, ps.GameStat)) {
+		if (reserve !== stat) reserve.remove();
+	}
 	wrapper.removeAttribute('id');
 	wrapper.dataset.gdlCloudStatus = '1';
 	wrapper.dataset.gdlNativeBlueprint = '1';
 	wrapper.title = loc('AppDetails_CloudStatus_Tooltip_Synchronized', 'Your Steam Cloud files are synchronized for this app.');
-	const label = elementsWithCssModuleClass(wrapper, ps.PlayBarLabel)[0];
-	const detail = elementsWithCssModuleClass(wrapper, ps.PlayBarDetailLabel)[0];
+	const label = elementsWithCssModuleClass(stat, ps.PlayBarLabel)[0];
+	const detail = elementsWithCssModuleClass(stat, ps.PlayBarDetailLabel)[0];
 	if (label) label.textContent = loc('AppDetails_SectionTitle_CloudStatus', 'Cloud status');
 	if (detail) detail.textContent = loc('AppDetails_CloudStatus_Synchronized', 'Up to date');
 	return wrapper;

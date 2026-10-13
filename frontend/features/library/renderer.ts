@@ -21,8 +21,10 @@ import {
 	communityItemsSignature,
 	renderCommunityContentHtml,
 } from './community-view';
-import { disposeTradingCardPreview } from './trading-cards';
+import { disposeTradingCardUI } from './trading-cards';
 import { isLegacyGame } from './legacy-games';
+import { runWhenLibrarySidebarIdle } from '../../steam/sidebar-interaction';
+import { ownsCurrentLinkedPrimaryLinks } from './render-session';
 
 export interface LinkedGameRenderContext {
 	shortcutAppId: string | null;
@@ -40,7 +42,6 @@ const INJECTED_SECTION_IDS = [
 	'gdl-trading-cards-section',
 	'gdl-dlc-section',
 	'gdl-workshop-section',
-	'gdl-playbar-achievements',
 	'gdl-link-bar',
 	'gdl-community-content',
 	'gdl-historical-info-section',
@@ -50,10 +51,13 @@ const INJECTED_SECTION_IDS = [
 const controllerWatchers = new WeakMap<Document, () => void>();
 
 function cleanupPreviousRender(doc: Document, preserveLinkBar = false): void {
+	// The header can already have mounted this destination's links before the
+	// metadata columns exist. A layout retry must keep that same visible node.
+	preserveLinkBar = ownsCurrentLinkedPrimaryLinks(doc) || preserveLinkBar;
 	controllerWatchers.get(doc)?.();
 	controllerWatchers.delete(doc);
-	removeNativeGameChrome(doc, false, true);
-	disposeTradingCardPreview(doc);
+	removeNativeGameChrome(doc, false, true, true, true);
+	disposeTradingCardUI(doc);
 	const community = doc.getElementById('gdl-community-content');
 	if (community instanceof HTMLElement) disposeCommunitySection(community);
 	for (const id of INJECTED_SECTION_IDS) {
@@ -133,6 +137,7 @@ export function renderLinkedGamePage(
 	mainContentStack.appendChild(activity);
 	const primaryLinks = createPrimaryLinksBar(doc, layout, {
 		steamAppId,
+		shortcutAppId: context.shortcutAppId || undefined,
 		isDelisted: data.is_delisted === true,
 		hasWorkshop: capabilities.hasWorkshop,
 		hasDlc: capabilities.dlcIds.length > 0,
@@ -170,15 +175,19 @@ export function renderLinkedGamePage(
 	};
 	const initialInfo = steamNativeGameInfo(data, steamAppId, initialModelAssets);
 	ensureNativeGameChrome(doc, initialInfo);
+	const ownsMountedActivity = (): boolean => context.isCurrent() && activity.isConnected
+		&& doc.getElementById(GDL_INJECTED) === activity
+		&& activity.dataset.gdlSteamAppId === steamAppId
+		&& (activity.dataset.gdlShortcutAppId || null) === context.shortcutAppId;
 	void getModernLibraryAssets(steamAppId).then(async modernAssets => {
-		if (!context.isCurrent()) return;
+		if (!ownsMountedActivity()) return;
 		const resolvedLinkedPortrait = context.shortcutAppId
 			? linkedShortcutPortrait(context.shortcutAppId, steamAppId, modernAssets?.portrait || '')
 			: modernAssets?.portrait || '';
 		const portrait = isLegacy
 			? await resolveLegacyInfoPortrait(context.shortcutAppId, steamAppId, resolvedLinkedPortrait)
 			: resolvedLinkedPortrait;
-		if (!context.isCurrent()) return;
+		if (!ownsMountedActivity()) return;
 		const resolvedAssets = isLegacy ? {
 			...(modernAssets || {}),
 			portrait,
@@ -186,8 +195,11 @@ export function renderLinkedGamePage(
 			...(modernAssets || {}),
 			portrait: portrait || modernAssets?.portrait || '',
 		};
-		ensureNativeGameChrome(doc, steamNativeGameInfo(data, steamAppId, resolvedAssets));
-		refreshHistoricalSidebarSections(doc, layout, data, steamAppId, modernAssets);
+		await runWhenLibrarySidebarIdle(doc, 'library-assets-chrome', () => {
+			if (!ownsMountedActivity()) return;
+			ensureNativeGameChrome(doc, steamNativeGameInfo(data, steamAppId, resolvedAssets));
+			refreshHistoricalSidebarSections(doc, layout, data, steamAppId, modernAssets);
+		});
 	}).catch(() => {});
 
 	activity.dataset.gdlLayoutComplete = '1';

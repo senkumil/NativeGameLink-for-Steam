@@ -16,6 +16,7 @@ import {
 	highlightedAchievementNames,
 } from '../achievements/rarity';
 import type { BigPictureDetailData, MappedShortcut } from './types';
+import { getCommittedShortcutSteamAppId } from '../shortcuts/registry';
 
 export interface AchievementsSectionProps {
 	shortcut: MappedShortcut;
@@ -46,7 +47,11 @@ export function syncAchievementsToNativeStore(
 	achievementsData: any,
 	achievementStore?: any,
 ): void {
-	if (!appDetailsStore || !appId || !achievementsData) return;
+	const rawId = Number(appId), shortcutId = rawId >>> 0;
+	if (!appDetailsStore || !achievementsData || !Number.isInteger(rawId)
+		|| rawId < -2147483648 || rawId > 4294967295 || shortcutId < 2147483648) return;
+	const mappedId = getCommittedShortcutSteamAppId(shortcutId);
+	if (!mappedId || String(achievementsData.metadata_appid || achievementsData.appid) !== mappedId) return;
 	try {
 		ensureAppDetailsStoreGuarded(appDetailsStore);
 		const appData = appDetailsStore.GetAppData(appId);
@@ -105,18 +110,18 @@ export function NativeBigPictureAchievements(props: AchievementsSectionProps): R
 	const achievements = props.data.achievements;
 	const items = achievements?.achievements || [];
 	if (props.hideIfEmpty && items.length === 0 && !props.hydrating) return null;
+	const numericAppId = Number(props.shortcut.id || 0);
+	if (!Number.isInteger(numericAppId) || numericAppId < 2147483648 || numericAppId > 4294967295
+		|| getCommittedShortcutSteamAppId(numericAppId) !== String(props.shortcut.steamAppId)) {
+		return null;
+	}
 
 	const NativeAchievements = resolveNativeAchievementsSectionComponent(props.document);
 	const store = resolveNativeAppDetailsStore(props.document);
 	const achievementStore = resolveNativeAchievementStore(props.document);
-	const numericAppId = Number(props.shortcut.steamAppId || props.shortcut.id || 0);
 
 	if (NativeAchievements && store && numericAppId > 0) {
 		syncAchievementsToNativeStore(store, numericAppId, achievements, achievementStore);
-		const shortcutId = Number(props.shortcut.id || 0);
-		if (shortcutId > 0 && shortcutId !== numericAppId) {
-			syncAchievementsToNativeStore(store, shortcutId, achievements, achievementStore);
-		}
 		return (
 			<props.NativeDetailsBoundary
 				key={`native-achievements-${numericAppId}-${achievements?.unlocked ?? 0}-${items.length}`}

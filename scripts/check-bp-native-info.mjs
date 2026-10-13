@@ -2,7 +2,16 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
-const app={appid:3000000001,app_type:1073741824,canonicalAppType:1,BIsShortcut(){return true;},BIsModOrShortcut(){return true;}};
+class AppOverview {
+  constructor(appid, iconData) { this.appid=appid;this.app_type=1073741824;this.canonicalAppType=1;this.icon_data=iconData;this.icon_data_format='png'; }
+  BIsShortcut(){return this.app_type===1073741824;}
+  BIsModOrShortcut(){return this.app_type===1073741824;}
+  // Steam preserves local shortcut icons through these methods when its store
+  // replaces an AppOverview. Classification must stay native for this to work.
+  GetPreservedState(){return this.BIsModOrShortcut()&&this.icon_data?.length>0?{icon_data:this.icon_data,icon_data_format:this.icon_data_format}:undefined;}
+  RestorePreservedState(state){if(state?.icon_data&&this.icon_data===undefined){this.icon_data=state.icon_data;this.icon_data_format=state.icon_data_format;}}
+}
+let app=new AppOverview(3000000001,'c3RhYmxlLWljb24=');
 const originalShortcut=app.BIsShortcut,originalMod=app.BIsModOrShortcut;
 const base={details:{unAppID:3000000001},customImageInfo:{hero:'local-hero',logo:'local-logo'},associationData:{rgDevelopers:[]},descriptionsData:{strSnippet:''}};
 const official={details:{unAppID:1593500},customImageInfo:{hero:'wrong-for-shortcut'}};
@@ -10,8 +19,9 @@ const store={GetAppData(id){return id===1593500?official:base;},GetDescriptions(
 const originalGetter=store.GetAppData;
 let renders=0;const timers=new Map();let nextTimer=0;
 const win={MILLENNIUM_STEAM_FORCE_RERENDER(){renders++;}};
-const doc={defaultView:win};
-const context=vm.createContext({exports:{},window:win,encodeURIComponent,setTimeout:fn=>{timers.set(++nextTimer,fn);return nextTimer;},clearTimeout:id=>timers.delete(id),require:()=>({backendLog(){},getShortcutAppById:()=>app,toSignedShortcutAppId:id=>id|0,resolveNativeAppDetailsStore:()=>store})});
+const doc={defaultView:win,body:{isConnected:true},routeId:app.appid,querySelector:()=>({textContent:'Información'}),getElementById:()=>null};
+win.document=doc;
+const context=vm.createContext({exports:{},window:win,encodeURIComponent,setTimeout:fn=>{timers.set(++nextTimer,fn);return nextTimer;},clearTimeout:id=>timers.delete(id),require:()=>({backendLog(){},getShortcutAppById:()=>app,toSignedShortcutAppId:id=>id|0,resolveNativeAppDetailsStore:()=>store,steamUIModeService:{isGamepadUI:()=>true},routedSteamAppId:target=>target.routeId,getCommittedShortcutSteamAppId:id=>id===app.appid?'1593500':null})});
 vm.runInContext(ts.transpileModule(fs.readFileSync('frontend/features/big-picture/native-info-bridge.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText,context);
 const {activateNativeGameInfoBridge:activate,deactivateNativeGameInfoBridge:deactivate}=context.exports;
 const shortcut={id:app.appid,title:'God of War',steamAppId:'1593500'};
@@ -19,8 +29,9 @@ const game={name:'God of War',short_description:'A journey',developers:['Santa M
 const flush=()=>{for(const fn of timers.values())fn();timers.clear();};
 activate(doc,shortcut,game);flush();
 for(let i=0;i<20;i++){activate(doc,shortcut,{...game});flush();}
-assert.equal(renders,1,'Tab changes must not force repeated global redraws');
-assert.equal(app.app_type,1073741824);assert.equal(app.BIsShortcut,originalShortcut);assert.equal(app.BIsModOrShortcut(),false);
+assert.equal(renders,0,'Initial mounting and tab changes must not force redraws');
+assert.equal(app.app_type,1073741824);assert.equal(app.BIsShortcut,originalShortcut);assert.equal(app.BIsModOrShortcut,originalMod);assert.equal(app.BIsModOrShortcut(),true);
+assert.equal(Object.hasOwn(app,'BIsModOrShortcut'),false,'The shared native overview must never receive a classification override');
 assert.equal(store.GetDescriptions(app.appid).strSnippet,'A journey');
 assert.equal(store.GetAssociations(app.appid).rgDevelopers[0].strName,'Santa Monica Studio');
 assert.equal(store.GetAppData(app.appid).customImageInfo,base.customImageInfo);
@@ -32,6 +43,18 @@ assert.equal(store.GetAppData(app.appid),stable,'Signed/unsigned requests must r
 base.customImageInfo={hero:'updated-local'};assert.equal(store.GetAppData(app.appid).customImageInfo,base.customImageInfo,'Live local artwork must not be frozen in a copied snapshot');
 store.GetAppData(app.appid).customImageInfo={hero:'native-write'};assert.equal(base.customImageInfo.hero,'native-write','Native writes must reach the real store');
 assert.equal(store.GetAppData(app.appid).details.nSteamDeckCompatibility,undefined,'Controller support is not Deck certification');
+let iconRequests=0;
+const iconUrl=overview=>overview.icon_data?`data:image/${overview.icon_data_format};base64,${overview.icon_data}`:overview.BIsModOrShortcut()&&overview.icon_data===undefined?(iconRequests++,null):null;
+const originalIconUrl=iconUrl(app);
+for(let i=0;i<100;i++){
+  const preserved=app.GetPreservedState();
+  app=new AppOverview(app.appid);
+  app.RestorePreservedState(preserved);
+  activate(doc,shortcut,{...game});flush();
+  assert.equal(app.BIsModOrShortcut,originalMod,'Store replacement retains native classification');
+  assert.equal(iconUrl(app),originalIconUrl,'Store replacement preserves the loaded sidebar icon');
+}
+assert.equal(iconRequests,0,'Loaded icons must not be requested again after store replacements');
 deactivate(doc);assert.equal(store.GetAppData,originalGetter);assert.equal(app.BIsModOrShortcut,originalMod);assert.equal(app.BIsShortcut,originalShortcut);
-activate(doc,shortcut,game);deactivate(doc);flush();assert.equal(renders,1,'Leaving cancels pending redraw');
-console.log('Big Picture native info passed: 20 tab refreshes/one initial redraw, native description and association getters, local artwork identity, signed IDs and cleanup.');
+activate(doc,shortcut,game);deactivate(doc);flush();assert.equal(renders,0,'Leaving cancels pending redraw');
+console.log('Big Picture native info passed: 20 tab refreshes without forced redraws, 100 overview replacements preserving loaded icons, native description and association getters, local artwork identity, signed IDs and cleanup.');

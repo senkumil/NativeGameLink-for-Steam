@@ -1,6 +1,7 @@
 import type { ComponentType } from 'react';
 import { backendLog } from '../../../api/backend';
 import { steamWebpackRuntime } from '../../modules/SteamWebpackRuntime';
+import { isMappingSnapshotVerified, mappings, shortcutMappingKey } from '../../../core/mappings';
 
 export interface NativeFriendsProps {
 	details: { unAppID: number };
@@ -583,12 +584,24 @@ export interface NativeAchievementsSectionProps {
 	details: { unAppID: number };
 }
 
+const appDetailsGuardRestores = new Map<any, () => void>();
+
 export function ensureAppDetailsStoreGuarded(store: any): void {
 	if (!store || store.__ngl_achievements_guarded) return;
 	try {
 		const origGetAchievements = store.GetAchievements;
 		if (typeof origGetAchievements === 'function') {
-			store.GetAchievements = function (appId: number) {
+			const descriptor = Object.getOwnPropertyDescriptor(store, 'GetAchievements');
+			const marker = Object.getOwnPropertyDescriptor(store, '__ngl_achievements_guarded');
+			store.GetAchievements = function (appId: number, ...args: any[]) {
+				const rawId = Number(appId), shortcutId = rawId >>> 0;
+				// Steam's public achievements must retain the original method, data
+				// identity and lazy RequestAchievements path, including missing data.
+				if (!Number.isInteger(rawId) || rawId < -2147483648 || rawId > 4294967295
+					|| shortcutId < 2147483648 || !isMappingSnapshotVerified()
+					|| !/^\d+$/.test(String(mappings[shortcutMappingKey(shortcutId)] || ''))) {
+					return origGetAchievements.call(this, appId, ...args);
+				}
 				try {
 					const appData = this.GetAppData(appId);
 					if (appData) {
@@ -606,9 +619,17 @@ export function ensureAppDetailsStoreGuarded(store: any): void {
 						}
 					}
 				} catch {}
-				return origGetAchievements.call(this, appId);
+				return origGetAchievements.call(this, appId, ...args);
 			};
+			const wrapper = store.GetAchievements;
 			store.__ngl_achievements_guarded = true;
+			appDetailsGuardRestores.set(store, () => {
+				if (store.GetAchievements !== wrapper) return;
+				if (descriptor) Object.defineProperty(store, 'GetAchievements', descriptor);
+				else delete store.GetAchievements;
+				if (marker) Object.defineProperty(store, '__ngl_achievements_guarded', marker);
+				else delete store.__ngl_achievements_guarded;
+			});
 			backendLog('[NGL][Gamepad] Guarded native AppDetailsStore.GetAchievements to prevent undefined crash');
 		}
 	} catch (e) {
@@ -732,6 +753,8 @@ export function resolveNativeConfigContext(doc?: Document): any | null {
 }
 
 export function clearNativeComponentsCache(): void {
+	for (const restore of appDetailsGuardRestores.values()) try { restore(); } catch {}
+	appDetailsGuardRestores.clear();
 	cachedRuntimeIdentity = null;
 	cachedFriendsComponent = undefined;
 	cachedActivityComponent = undefined;

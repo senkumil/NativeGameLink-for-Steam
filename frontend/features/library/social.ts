@@ -4,6 +4,7 @@ export { configureSocialRuntimeHost } from './social/host';
 export { friendDataSignature, getCachedFriendData, getFriendData, renderFriendsSection, hydrateFriendPersonas } from './social/friends';
 export { populateActivityFeed } from './social/activity';
 export {
+	activityFeedContentSignature,
 	applyUnifiedActivityFeed,
 	renderUnifiedActivityFeed,
 	renderUnifiedActivityFeedSnapshot,
@@ -13,8 +14,10 @@ export { setupStatusPostBox } from './social/status';
 
 import { clearActivityFeedCaches } from './social/feed';
 import { clearPersonaCache } from './social/personas';
+import { clearEmptyFriendResults } from './social/friends';
 
 export function clearSocialRuntimeCaches(): void {
+	clearEmptyFriendResults();
 	clearPersonaCache();
 	clearActivityFeedCaches();
 }

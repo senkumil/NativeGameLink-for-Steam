@@ -6,9 +6,21 @@ import { clearNativeInfoSessionState, ensureNativeInfoButton, ensureNativeInfoPa
 import { steamNativeGameInfo as buildSteamNativeGameInfo } from './native-game-model';
 import { ensureNativeGameInfoStyles } from './styles';
 import { restoreLinkedPlaybarVisibility } from '../../steam/playbar-visibility';
-import { isPublicSteamLibraryRoute } from './native-route';
+import { isPublicSteamLibraryRoute, routedSteamAppId } from './native-route';
+import { paintedNativePlaybar, paintedNativeStats } from '../../steam/library-details';
+import { getCommittedShortcutSteamAppId } from '../shortcuts/registry';
+import { removeObsoletePlaybarAchievements } from './playbar-achievement-cleanup';
 
 let currentNativeGameInfo: NativeGameInfo | null = null;
+const documentInfo = new WeakMap<Document, { shortcutId: number; model: NativeGameInfo }>();
+
+/** A model from another shortcut, including one linked to the same Store AppID,
+ * must never seed the currently committed header. */
+export function getCurrentNativeGameInfoForDocument(doc: Document, shortcutId: number): NativeGameInfo | null {
+	const current = documentInfo.get(doc);
+	return current?.shortcutId === shortcutId && current.model.key === getCommittedShortcutSteamAppId(shortcutId)
+		? current.model : null;
+}
 
 /**
  * Build the language-independent semantic model used by Steam-native library chrome.
@@ -27,7 +39,11 @@ export function ensureNativeGameChrome(doc: Document, model: NativeGameInfo): vo
 		removeNativeGameChrome(doc, true);
 		return;
 	}
+	const shortcutId = routedSteamAppId(doc);
+	if (!shortcutId || shortcutId < 2147483648 || getCommittedShortcutSteamAppId(shortcutId) !== model.key
+		|| (!paintedNativePlaybar(doc, shortcutId) && !paintedNativeStats(doc, shortcutId).length)) return;
 	currentNativeGameInfo = model;
+	documentInfo.set(doc, { shortcutId, model });
 	ensureNativeGameInfoStyles(doc);
 
 	try {
@@ -49,17 +65,20 @@ export function ensureNativeGameChrome(doc: Document, model: NativeGameInfo): vo
 
 }
 
-export function removeNativeGameChrome(doc: Document, clearModel = false, preserveCloudStatus = false): void {
-	restoreLinkedPlaybarVisibility(doc);
+export function removeNativeGameChrome(doc: Document, clearModel = false, preserveCloudStatus = false, preserveAchievements = false, preserveInfo = false): void {
+	const shortcutId = routedSteamAppId(doc);
+	const keepInfo = Boolean(preserveInfo && shortcutId && shortcutId >= 2147483648
+		&& getCurrentNativeGameInfoForDocument(doc, shortcutId)
+		&& (paintedNativePlaybar(doc, shortcutId) || paintedNativeStats(doc, shortcutId).length));
+	const keptAchievements = removeObsoletePlaybarAchievements(doc, preserveAchievements);
+	if (!keptAchievements) restoreLinkedPlaybarVisibility(doc);
 	try {
 		doc.getElementById('gdl-library-style-sentinel')?.remove();
-		doc.getElementById('gdl-achievement-playbar-style')?.remove();
 	} catch {}
 	if (!preserveCloudStatus) removeCloudStatus(doc);
-	removeNativeInfoButton(doc);
-	removeNativeInfoPanel(doc);
-	doc.querySelectorAll('[data-gdl-playbar-achievements="1"], #gdl-playbar-achievements').forEach(element => element.remove());
-	if (clearModel) clearNativeGameChromeState();
+	if (!keepInfo) { removeNativeInfoButton(doc); removeNativeInfoPanel(doc); }
+	if (!keepInfo) documentInfo.delete(doc);
+	if (clearModel && !keepInfo) clearNativeGameChromeState();
 }
 
 /** Clear only NativeGameLink's in-memory linked-game model. No Steam DOM or React
@@ -68,6 +87,8 @@ export function clearNativeGameChromeState(): void {
 	currentNativeGameInfo = null;
 	clearNativeInfoSessionState();
 }
+
+export function forgetNativeGameInfoDocument(doc: Document): void { documentInfo.delete(doc); }
 
 export function getCurrentNativeGameInfo(): NativeGameInfo | null {
 	return currentNativeGameInfo;

@@ -29,12 +29,13 @@ function requestKey(shortcutAppId: number, title: string, steamAppId?: string): 
 
 function parsePlaytimeStats(parsed: any): PlaytimeStats | null {
 	if (!parsed || typeof parsed !== 'object' || !parsed.ok) return null;
-	const secondsForever = Math.max(0, Number(parsed.seconds_forever || parsed.total_seconds || 0));
+	const nonnegative = (value: unknown): number => Number.isFinite(Number(value)) ? Math.max(0, Number(value)) : 0;
+	const secondsForever = nonnegative(parsed.seconds_forever || parsed.total_seconds || 0);
 	return {
 		totalSeconds: secondsForever,
-		minutesForever: Math.max(0, Number(parsed.minutes_forever || 0)),
-		minutesLastTwoWeeks: Math.max(0, Number(parsed.minutes_last_two_weeks || 0)),
-		lastPlayedAt: parsed.last_played_at ? Number(parsed.last_played_at) : null,
+		minutesForever: nonnegative(parsed.minutes_forever || 0),
+		minutesLastTwoWeeks: nonnegative(parsed.minutes_last_two_weeks || 0),
+		lastPlayedAt: nonnegative(parsed.last_played_at) || null,
 	};
 }
 
@@ -65,14 +66,49 @@ async function fetchSinglePlaytimeStats(lookup: PlaytimeLookup): Promise<Playtim
 	}
 }
 
-const instantPlaytimeStats = new Map<number, PlaytimeStats>();
+const PLAYTIME_SNAPSHOT_STORAGE_KEY = 'gdl_playtime_stats_snapshot_v1';
+interface InstantPlaytimeSnapshot { steamAppId: string; stats: PlaytimeStats }
+const instantPlaytimeStats = new Map<number, InstantPlaytimeSnapshot>();
 
-export function getInstantPlaytimeStats(shortcutAppId: number): PlaytimeStats | null {
-	return instantPlaytimeStats.get(shortcutAppId) ?? null;
+// Only backend-confirmed sessions belong in this cache. Steam's temporary
+// shortcut values and the Library Home maximum are not canonical session data.
+try {
+	const raw = localStorage.getItem(PLAYTIME_SNAPSHOT_STORAGE_KEY);
+	const parsed = raw ? JSON.parse(raw) : null;
+	if (parsed?.version === 1 && Array.isArray(parsed.values)) {
+		for (const item of parsed.values.slice(-MAX_PLAYTIME_CACHE_ENTRIES)) {
+			const id = Number(item.shortcutAppId);
+			const stats = item.stats;
+			if (!Number.isInteger(id) || id <= 0 || !stats || ![stats.minutesForever, stats.minutesLastTwoWeeks]
+				.every(value => typeof value === 'number' && Number.isFinite(value) && value >= 0)) continue;
+			if (stats.lastPlayedAt !== null && (!Number.isFinite(stats.lastPlayedAt) || stats.lastPlayedAt <= 0)) continue;
+			instantPlaytimeStats.set(id, { steamAppId: String(item.steamAppId || ''), stats });
+		}
+	}
+} catch {}
+
+function persistInstantPlaytimeStats(): void {
+	try {
+		const values = Array.from(instantPlaytimeStats, ([shortcutAppId, snapshot]) => ({ shortcutAppId, ...snapshot }));
+		localStorage.setItem(PLAYTIME_SNAPSHOT_STORAGE_KEY, JSON.stringify({ version: 1, values }));
+	} catch {}
 }
 
-export function setInstantPlaytimeStats(shortcutAppId: number, stats: PlaytimeStats): void {
-	instantPlaytimeStats.set(shortcutAppId, stats);
+export function getInstantPlaytimeStats(shortcutAppId: number, steamAppId?: string): PlaytimeStats | null {
+	const snapshot = instantPlaytimeStats.get(shortcutAppId);
+	if (!snapshot || (steamAppId && snapshot.steamAppId !== steamAppId)) return null;
+	return snapshot.stats;
+}
+
+export function setInstantPlaytimeStats(shortcutAppId: number, stats: PlaytimeStats, steamAppId = ''): void {
+	const snapshot = { steamAppId, stats };
+	if (JSON.stringify(instantPlaytimeStats.get(shortcutAppId)) === JSON.stringify(snapshot)) return;
+	instantPlaytimeStats.delete(shortcutAppId);
+	instantPlaytimeStats.set(shortcutAppId, snapshot);
+	while (instantPlaytimeStats.size > MAX_PLAYTIME_CACHE_ENTRIES) {
+		instantPlaytimeStats.delete(instantPlaytimeStats.keys().next().value!);
+	}
+	persistInstantPlaytimeStats();
 }
 
 /** Resolve a complete Library shelf through one backend IPC. The single-item
@@ -104,17 +140,12 @@ export async function fetchPlaytimeStatsBatch(lookups: PlaytimeLookup[]): Promis
 				for (const item of Array.isArray(parsed?.items) ? parsed.items : []) {
 					const stats = parsePlaytimeStats(item);
 					resolved.set(String(item.key || ''), stats);
-					const rawId = Number(item.shortcut_app_id);
-					if (stats && Number.isFinite(rawId) && rawId > 0) {
-						instantPlaytimeStats.set(rawId, stats);
-					}
 				}
 				return resolved;
 			} catch {
 				await Promise.all(missing.map(async item => {
 					const stats = await fetchSinglePlaytimeStats(item);
 					resolved.set(requestKey(item.shortcutAppId, item.title, item.steamAppId), stats);
-					if (stats) instantPlaytimeStats.set(item.shortcutAppId, stats);
 				}));
 				return resolved;
 			}
@@ -127,8 +158,11 @@ export async function fetchPlaytimeStatsBatch(lookups: PlaytimeLookup[]): Promis
 			};
 			entry.request = batch.then(values => {
 				const stats = values.get(key) ?? null;
-				if (stats) instantPlaytimeStats.set(item.shortcutAppId, stats);
-				return generation === playtimeRequestGeneration && playtimeStatsRequests.get(key) === entry ? stats : null;
+				if (generation === playtimeRequestGeneration && playtimeStatsRequests.get(key) === entry) {
+					if (stats) setInstantPlaytimeStats(item.shortcutAppId, stats, item.steamAppId || '');
+					return stats;
+				}
+				return null;
 			});
 			playtimeStatsRequests.set(key, entry);
 		}
@@ -171,4 +205,12 @@ export function invalidatePlaytimeStatsCache(
 		const [shortcutAppId, steamAppId] = key.split('|', 3);
 		if (shortcutIds.has(shortcutAppId) || steamIds.has(steamAppId)) playtimeStatsRequests.delete(key);
 	}
+	let changed = false;
+	for (const [shortcutAppId, snapshot] of instantPlaytimeStats) {
+		if (shortcutIds.has(String(shortcutAppId)) || steamIds.has(snapshot.steamAppId)) {
+			instantPlaytimeStats.delete(shortcutAppId);
+			changed = true;
+		}
+	}
+	if (changed) persistInstantPlaytimeStats();
 }

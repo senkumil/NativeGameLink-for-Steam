@@ -7,6 +7,7 @@ import { gdlText, loc, steamIntlLocale } from '../../../steam/localization';
 import { extractSteamIdFromValue, fetchAuthenticatedCommunityActivity } from '../../../steam/social';
 import { cachePersona, getCachedPersona, hasCachedPersona } from './personas';
 import { socialRuntimeHost } from './host';
+import { runWhenLibrarySidebarIdle } from '../../../steam/sidebar-interaction';
 import {
 	applyUnifiedActivityFeed,
 	hasFreshFriendActivitySnapshot,
@@ -380,7 +381,7 @@ export async function populateActivityFeed(
 ): Promise<void> {
 	if (!doc || !steamAppId) return;
 	const isCurrent = (): boolean => {
-		if (guard?.isCurrent()) return true;
+		if (guard) return guard.isCurrent();
 		const currentAppId = socialRuntimeHost().getCurrentInjectedAppId();
 		const docAppId = doc.getElementById('gdl-library-injected')?.dataset?.gdlSteamAppId;
 		return (currentAppId === steamAppId || docAppId === steamAppId);
@@ -388,6 +389,7 @@ export async function populateActivityFeed(
 	const shortcutAppId = guard?.shortcutAppId ?? socialRuntimeHost().getCurrentInjectedShortcutAppId();
 	const numericAppId = Number.parseInt(steamAppId, 10);
 	if (!Number.isFinite(numericAppId) || numericAppId <= 0) return;
+	if (!isCurrent()) return;
 	// The initial route paint already reused this snapshot. Re-querying Steam's
 	// activity store here would wait up to 4.8 seconds and then replace identical
 	// feed DOM on every visit.
@@ -565,27 +567,30 @@ export async function populateActivityFeed(
 		}
 	}
 
-	const feedEl = doc.getElementById('gdl-activity-feed');
-	const root = feedEl?.closest('#gdl-library-injected') as HTMLElement | null;
-	if (feedEl && root?.dataset.gdlSteamAppId === steamAppId
-		&& (!shortcutAppId || root.dataset.gdlShortcutAppId === shortcutAppId)
-		&& isCurrent()) {
-		applyUnifiedActivityFeed(
-			feedEl,
-			steamAppId,
-			shortcutAppId,
-			newsItems,
-			headerImage,
-			friendItems
-		);
-		markFriendActivitySnapshotChecked(steamAppId);
-		setupPostDeleteHandlers(
-			doc,
-			steamAppId,
-			shortcutAppId,
-			newsItems,
-			headerImage
-		);
-		backendLog('Activity feed rendered with friends & news: ' + friendItems.length + ' friend event(s)');
-	}
+	await runWhenLibrarySidebarIdle(doc, 'secondary-activity', () => {
+		if (!isCurrent()) return;
+		const feedEl = doc.getElementById('gdl-activity-feed');
+		const root = feedEl?.closest('#gdl-library-injected') as HTMLElement | null;
+		if (feedEl && root?.dataset.gdlSteamAppId === steamAppId
+			&& (!shortcutAppId || root.dataset.gdlShortcutAppId === shortcutAppId)
+			&& isCurrent()) {
+			applyUnifiedActivityFeed(
+				feedEl,
+				steamAppId,
+				shortcutAppId,
+				newsItems,
+				headerImage,
+				friendItems
+			);
+			markFriendActivitySnapshotChecked(steamAppId);
+			setupPostDeleteHandlers(
+				doc,
+				steamAppId,
+				shortcutAppId,
+				newsItems,
+				headerImage
+			);
+			backendLog('Activity feed rendered with friends & news: ' + friendItems.length + ' friend event(s)');
+		}
+	});
 }

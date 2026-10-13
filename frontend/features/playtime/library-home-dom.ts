@@ -5,6 +5,11 @@ import {
 	isRenderedElement,
 } from '../../steam/native-dom';
 import { loc, steamIntlLocale } from '../../steam/localization';
+import { isLibrarySidebarNode } from '../../steam/library-sidebar';
+
+function isHomeCardElement(element: Element): boolean {
+	return !isLibrarySidebarNode(element) && !element.closest('[popover="manual"]');
+}
 
 export interface DesktopPlaytimeDomSnapshot {
 	shortcutAppId: number;
@@ -23,9 +28,9 @@ export function mutationMayContainDesktopPlaytime(roots: Iterable<Node>): boolea
 		const element = root.nodeType === Node.ELEMENT_NODE
 			? root as Element
 			: root.parentElement;
-		if (!element) continue;
-		if (elementsWithCssModuleClass(element, classes.PlayedRecent).length > 0
-			|| elementsWithCssModuleClass(element, classes.PlayedTotal).length > 0) return true;
+		if (!element || !isHomeCardElement(element)) continue;
+		if (elementsWithCssModuleClass(element, classes.PlayedRecent).some(isHomeCardElement)
+			|| elementsWithCssModuleClass(element, classes.PlayedTotal).some(isHomeCardElement)) return true;
 	}
 	return false;
 }
@@ -121,10 +126,10 @@ export function patchDesktopLibraryHomePlaytimeCards(
 	if (!doc.body || snapshots.length === 0) return;
 	const classes = APP_PORTRAIT_CLASS_MODULE().classes;
 	const recentValues = elementsWithCssModuleClass(doc, classes.PlayedRecent)
-		.filter(value => isRenderedElement(doc, value));
+		.filter(value => isHomeCardElement(value) && isRenderedElement(doc, value));
 	for (const recentValue of recentValues) {
 		const card = candidateCard(recentValue, classes.LibraryItemBox);
-		if (!card || card.closest('[id^="gdl-"]')) continue;
+		if (!card || !isHomeCardElement(card) || card.closest('[id^="gdl-"]')) continue;
 		const snapshot = snapshots.find(candidate =>
 			candidate.minutesForever > 0 && cardMatchesShortcut(card, candidate));
 		if (!snapshot) continue;

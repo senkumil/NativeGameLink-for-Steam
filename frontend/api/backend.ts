@@ -177,3 +177,4 @@ export const factoryResetBackend = callable<[{ request_json: string }], string>(
 export const readCustomLogoPositionBackend = callable<[{ shortcut_app_id: string }], string>('read_custom_logo_position');
 export const saveCustomLogoPositionBackend = callable<[{ request_json: string }], string>('save_custom_logo_position');
 export const readLogoLayoutImagesBackend = callable<[{ shortcut_app_id: string }], string>('read_logo_layout_images');
+export const readShortcutLogoInventoryBackend = callable<[{ request_json: string }], string>('read_shortcut_logo_inventory');

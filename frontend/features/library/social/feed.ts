@@ -589,7 +589,7 @@ export function renderUnifiedActivityFeed(
 				const label = eventType > 0
 					? eventTypeLabel(eventType)
 					: (item.feedlabel || (isPatchNoteItem(item) ? gdlText('feed_patch_notes', 'Minor Update / Patch Notes') : gdlText('feed_news', 'News')));
-				const preview = newsExcerpt(item.contents);
+				const preview = newsExcerpt(item.contents) || loc('AppActivity_RecommendedGame_ReadMore', 'Read more');
 				const thumbUrl = item.image || fallbackImage;
 				const firstId = !firstNewsMarked ? ' id="gdl-first-news-item"' : '';
 				firstNewsMarked = true;

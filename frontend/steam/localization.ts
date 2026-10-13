@@ -57,6 +57,7 @@ export const SPANISH_TRANSLATIONS: Record<string, string> = {
 	all_achievements_unlocked: '¡Has desbloqueado todos los logros! {unlocked}/{total}',
 	achievements_mine: 'MIS LOGROS',
 	achievements_global: 'LOGROS GLOBALES',
+	achievement_comparison_unavailable: 'Los logros de este amigo son privados o no están disponibles.',
 	hidden_achievement: 'Logro oculto',
 	hidden_achievement_desc: 'Sigue jugando para desbloquear este logro.',
 	show_details: 'Mostrar detalles',

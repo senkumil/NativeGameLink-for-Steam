@@ -8,9 +8,15 @@ import { fetchPlaytimeStatsBatch } from '../playtime/service';
 import { disposeBigPictureShortcutDetails, refreshBigPictureShortcutDetails } from './details';
 import { collectMappedShortcutApps } from './library-candidates';
 import { getBigPictureMappedShortcuts, invalidateBigPictureMappedShortcuts } from './mapped-shortcuts-cache';
-import { syncMissingArtworkForMappedShortcuts } from '../library/artwork-sync';
 import { defaultBigPictureModeEnabled, subscribePreferences } from '../../core/preferences';
 import { installBrowserProtection } from '../../steam/browser-protection';
+import { GamepadRerenderScheduler } from './rerender-scheduler';
+import { steamUIModeService } from '../../steam/ui/SteamUIModeService';
+
+function isLiveGamepadDocument(doc: Document): boolean {
+	const view = doc.defaultView;
+	return Boolean(view && !view.closed && view.document === doc && doc.body?.isConnected && steamUIModeService.isGamepadUI(doc));
+}
 function normalizedDomText(value: unknown): string {
 	return String(value ?? '').replace(/\s+/g, ' ').trim().toLocaleLowerCase();
 }
@@ -112,7 +118,7 @@ const bigPictureHomePlaytimeInFlight = new WeakSet<Document>();
 const bigPictureHomePlaytimeLastRun = new WeakMap<Document, number>();
 const BIG_PICTURE_HOME_PLAYTIME_MIN_INTERVAL_MS = 1500;
 export async function patchBigPictureHomePlaytime(doc: Document): Promise<void> {
-	if (!doc.body?.isConnected || doc.defaultView?.closed) return;
+	if (!isLiveGamepadDocument(doc)) return;
 	if (bigPictureHomePlaytimeInFlight.has(doc)) return;
 	const lastRun = bigPictureHomePlaytimeLastRun.get(doc) || 0;
 	if (Date.now() - lastRun < BIG_PICTURE_HOME_PLAYTIME_MIN_INTERVAL_MS) return;
@@ -127,7 +133,7 @@ export async function patchBigPictureHomePlaytime(doc: Document): Promise<void> 
 async function patchBigPictureHomePlaytimePass(doc: Document): Promise<void> {
 	if (!doc.body) return;
 	const generation = bigPictureGeneration;
-	const isCurrent = (): boolean => gdlBigPictureActive && gdlBigPictureDoc === doc && bigPictureGeneration === generation;
+	const isCurrent = (): boolean => gdlBigPictureActive && gdlBigPictureDoc === doc && bigPictureGeneration === generation && isLiveGamepadDocument(doc);
 	if (!isCurrent()) return;
 	const shortcuts = getBigPictureMappedShortcuts(doc);
 	if (shortcuts.length === 0) return;
@@ -173,7 +179,7 @@ async function patchBigPictureHomePlaytimePass(doc: Document): Promise<void> {
 	}));
 	if (!isCurrent()) return;
 	if (overviewChanged && !isBigPictureGameDetailSurface(doc)) {
-		requestBigPictureRerender();
+		requestBigPictureRerender(doc);
 	}
 	if (isBigPictureGameDetailSurface(doc)) return;
 
@@ -226,23 +232,12 @@ function isManagedBigPictureShortcutObject(app: any): boolean {
 	return false;
 }
 
-let lastRerenderTime = 0, hasRerenderedLibraryShims = false;
-let rerenderThrottleTimer: ReturnType<typeof setTimeout> | null = null;
+let hasRerenderedLibraryShims = false;
+const rerenderScheduler = new GamepadRerenderScheduler();
 
-function requestBigPictureRerender(): void {
-	const now = Date.now();
-	if (now - lastRerenderTime < 1500) {
-		if (!rerenderThrottleTimer) {
-			rerenderThrottleTimer = setTimeout(() => {
-				rerenderThrottleTimer = null;
-				lastRerenderTime = Date.now();
-				try { (window as any).MILLENNIUM_STEAM_FORCE_RERENDER?.(); } catch {}
-			}, 1500 - (now - lastRerenderTime));
-		}
-		return;
-	}
-	lastRerenderTime = now;
-	try { (window as any).MILLENNIUM_STEAM_FORCE_RERENDER?.(); } catch {}
+function requestBigPictureRerender(doc: Document | null = gdlBigPictureDoc): void {
+	const generation = bigPictureGeneration;
+	rerenderScheduler.request(doc, () => gdlBigPictureActive && gdlBigPictureDoc === doc && bigPictureGeneration === generation);
 }
 
 function installBigPicturePrototypeShim(app: any): void {
@@ -306,6 +301,7 @@ function setBigPicturePlaytimeField(target: any, key: BigPicturePlaytimeKey, val
 }
 
 export function mergeShortcutsIntoBigPictureLibrary(_doc: Document): void {
+	if (!isLiveGamepadDocument(_doc)) return;
 	const appStore = getSteamAppStore(_doc);
 	if (!appStore?.m_mapApps) return;
 	const mappedShortcuts = getBigPictureMappedShortcuts(_doc);
@@ -398,7 +394,7 @@ export function mergeShortcutsIntoBigPictureLibrary(_doc: Document): void {
 
 	if (changed && !isDefaultMode && !hasRerenderedLibraryShims && !isBigPictureGameDetailSurface(_doc)) {
 		hasRerenderedLibraryShims = true;
-		requestBigPictureRerender();
+		requestBigPictureRerender(_doc);
 	}
 }
 
@@ -426,26 +422,26 @@ export function restoreBigPictureShortcutState(): void {
 	bigPicturePropertyPatches.restore();
 	bigPictureShortcutState.clear();
 	gdlBigPictureMappedShortcutIds.clear();
-	requestBigPictureRerender();
 }
 
 let cleanupBigPictureBrowserProtection: (() => void) | null = null;
 
 export function activateBigPicture(doc: Document): void {
+	if (!isLiveGamepadDocument(doc)) return;
 	const sameDocument = gdlBigPictureActive && gdlBigPictureDoc === doc;
 	gdlBigPictureActive = true;
 	gdlBigPictureDoc = doc;
 	if (sameDocument) return;
+	rerenderScheduler.cancel();
 	bigPictureGeneration += 1;
 	cleanupBigPictureBrowserProtection?.();
 	cleanupBigPictureBrowserProtection = installBrowserProtection(doc.defaultView, doc);
-	void syncMissingArtworkForMappedShortcuts().catch(error => backendLog('Big Picture artwork reconciliation failed: ' + error));
 }
 
 export function deactivateBigPicture(): void {
 	bigPictureGeneration += 1;
 	hasRerenderedLibraryShims = false;
-	if (rerenderThrottleTimer) { clearTimeout(rerenderThrottleTimer); rerenderThrottleTimer = null; }
+	rerenderScheduler.cancel();
 	cleanupBigPictureBrowserProtection?.();
 	cleanupBigPictureBrowserProtection = null;
 	invalidateBigPictureMappedShortcuts(gdlBigPictureDoc);
@@ -467,14 +463,14 @@ const activeRefreshPromises = new WeakMap<Document, Promise<void>>();
 const lastRefreshCompletedAt = new WeakMap<Document, number>();
 
 export async function refreshBigPicture(doc: Document | null = gdlBigPictureDoc): Promise<void> {
-	if (!doc || !doc.body?.isConnected || doc.defaultView?.closed) return;
+	if (!doc || !isLiveGamepadDocument(doc)) return;
 	activateBigPicture(doc);
 	const activeRefreshPromise = activeRefreshPromises.get(doc);
 	if (activeRefreshPromise) return activeRefreshPromise;
 	const lastCompletedAt = lastRefreshCompletedAt.get(doc) || 0;
 	if (Date.now() - lastCompletedAt < 250) return;
 	const run = async () => {
-		if (!doc.body?.isConnected || doc.defaultView?.closed) return;
+		if (!isLiveGamepadDocument(doc)) return;
 		const detailRefresh = refreshBigPictureShortcutDetails(doc);
 		mergeShortcutsIntoBigPictureLibrary(doc);
 		if (!isBigPictureGameDetailSurface(doc)) {

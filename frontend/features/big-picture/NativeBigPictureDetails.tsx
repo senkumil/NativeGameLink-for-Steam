@@ -17,11 +17,23 @@ import {
 	resolveNativeReviewComponent,
 	resolveNativeNotesComponent,
 	resolveNativeWorkshopComponent,
-	resolveNativeAppDetails,
+	resolveNativeAppDetailsStore,
+	resolveNativeCommunityComponent,
 	resolveNativeConfigContext,
 	getNavContext,
 	resolveSteamNav,
+	resolveNativeFriendsComponent,
+	resolveNativeActivityComponent,
+	openNativePartnerEvent,
 } from '../../steam/gamepad/components/AppDetailsNativeComponents';
+import {
+	resolveNativeNavigatorContext,
+	resolveNativeQueryClientFallback,
+	collectHostContextBridge,
+	hasBridgedQueryClient,
+	type NativeContextBridgeEntry,
+	type NativeQueryClientFallback,
+} from '../../steam/gamepad/components/NativeHostContexts';
 import { FriendsSection, FallbackActivitySection } from './activity-section';
 import { NativeBigPictureAchievements } from './NativeBigPictureAchievements';
 import { openSteamNavigationUrl, extractCommunityYoutubeId } from '../../steam/navigation';
@@ -214,12 +226,25 @@ function ActivityTab(props: NativeDetailsProps): React.ReactElement {
 		event?.AppActivityDate,
 		event?.PartnerEventTextOnly_Icon
 	);
-	const friendsNode = (
+	const appid = Number(props.shortcut.steamAppId || 0);
+	const NativeFriends = NATIVE_STEAM_SECTIONS && appid > 0 ? resolveNativeFriendsComponent(props.document) : null;
+	const NativeActivity = NATIVE_STEAM_SECTIONS && appid > 0 ? resolveNativeActivityComponent(props.document) : null;
+	const host = NativeFriends || NativeActivity ? resolveNativeSectionHost(props.document) : null;
+	const nativeDetails = React.useMemo(() => ({ unAppID: appid }), [appid]);
+	const nativeFriendsShown = Boolean(host && NativeFriends);
+	const nativeActivityShown = Boolean(host && NativeActivity);
+
+	React.useEffect(() => {
+		backendLog(`[NGL][Gamepad] Activity tab for app ${appid}: friends=${nativeFriendsShown ? 'native' : 'custom'} activity=${nativeActivityShown ? 'native' : 'custom'}`
+			+ ` (friendsComponent=${Boolean(NativeFriends)} activityComponent=${Boolean(NativeActivity)} contexts=${host?.entries.length ?? 0} queryClient=${host ? (host.queryFallback ? 'fallback' : 'bridged') : 'missing'})`);
+	}, [appid, nativeFriendsShown, nativeActivityShown]);
+
+	const customFriends = (
 		<NativeDetailsBoundary name="friends" fallback={null}>
 			<FriendsSection data={props.data} shortcut={props.shortcut} classes={classes} SectionComponent={Section} document={props.document} />
 		</NativeDetailsBoundary>
 	);
-	const activityNode = (
+	const customActivity = (
 		<NativeDetailsBoundary name="activity" fallback={null}>
 			<FallbackActivitySection
 				key={`${props.shortcut.id}-${props.shortcut.steamAppId}`}
@@ -233,7 +258,159 @@ function ActivityTab(props: NativeDetailsProps): React.ReactElement {
 			/>
 		</NativeDetailsBoundary>
 	);
+	const friendsNode = host && NativeFriends ? (
+		<NativeDetailsBoundary key={`native-friends-${appid}`} name="native friends" fallback={customFriends}>
+			<NativeHostContexts document={props.document} host={host} steamAppId={appid}>
+				<NativeFriends details={nativeDetails} />
+			</NativeHostContexts>
+		</NativeDetailsBoundary>
+	) : customFriends;
+	// The status box is left out: Steam's posts a real status to friends for
+	// the linked app, which the user may not own.
+	const activityNode = host && NativeActivity ? (
+		<NativeDetailsBoundary key={`native-activity-${appid}`} name="native activity" fallback={customActivity}>
+			<NativeHostContexts document={props.document} host={host} steamAppId={appid}>
+				<NativeActivity appid={appid} showTextBox={false} />
+			</NativeHostContexts>
+		</NativeDetailsBoundary>
+	) : customActivity;
 	return <div className={nativeClasses('gdl-bp-activity-tab-content')}>{friendsNode}{activityNode}</div>;
+}
+
+// Renders Steam's own app-page sections for the linked Steam app. Set to false
+// to fall back to the extension's look-alike sections everywhere.
+const NATIVE_STEAM_SECTIONS = true;
+
+/** What Steam's sections need from the host page that our separate React root lacks. */
+interface NativeSectionHost {
+	entries: NativeContextBridgeEntry[];
+	queryFallback: NativeQueryClientFallback | null;
+	navigatorContext: any | null;
+	hostNavigator: any | null;
+}
+
+/**
+ * The host contexts Steam's sections need, or null when Steam's React Query
+ * client cannot be provided: the sections query through it and throw without one.
+ */
+function resolveNativeSectionHost(doc: Document): NativeSectionHost | null {
+	const nav = resolveSteamNav(doc);
+	const NavContext = nav?.navContext || getNavContext(doc);
+	const ConfigContext = resolveNativeConfigContext(doc);
+	const navigator = resolveNativeNavigatorContext(doc);
+	const bridged = collectHostContextBridge(doc, [NavContext, ConfigContext]);
+	const hostNavigatorEntry = navigator ? bridged.find(entry => entry.context === navigator.context) : undefined;
+	const entries = bridged.filter(entry => entry !== hostNavigatorEntry);
+	const queryFallback = hasBridgedQueryClient(entries) ? null : resolveNativeQueryClientFallback(doc);
+	if (!hasBridgedQueryClient(entries) && !queryFallback) return null;
+	return {
+		entries,
+		queryFallback,
+		navigatorContext: navigator?.context || null,
+		hostNavigator: hostNavigatorEntry?.value || navigator?.getGlobalNavigator() || null,
+	};
+}
+
+/**
+ * Steam's navigator, except that opening the linked app itself stays on the
+ * shortcut's page: a partner event opens Steam's event overlay there instead
+ * of navigating to the real app's page, which an unowned app does not have.
+ */
+function shortcutPageNavigator(doc: Document, base: any, steamAppId: number): any {
+	return new Proxy(base, {
+		get(target, prop) {
+			if (prop === 'App') {
+				return (appid: unknown, options?: { gidPartnerEvent?: unknown }) => {
+					if (Number(appid) !== steamAppId) return target.App(appid, options);
+					const gid = options?.gidPartnerEvent;
+					if (gid != null && gid !== '') openNativePartnerEvent(doc, steamAppId, String(gid));
+				};
+			}
+			const value = Reflect.get(target, prop, target);
+			return typeof value === 'function' ? value.bind(target) : value;
+		},
+	});
+}
+
+/** Re-provides the host page's contexts, with the navigator kept on the shortcut's page. */
+function NativeHostContexts({ document: doc, host, steamAppId, children }: { document: Document; host: NativeSectionHost; steamAppId: number; children: ReactNode }): React.ReactElement {
+	const navigator = React.useMemo(
+		() => (host.hostNavigator ? shortcutPageNavigator(doc, host.hostNavigator, steamAppId) : null),
+		[doc, host.hostNavigator, steamAppId]
+	);
+	let element = <>{children}</>;
+	if (host.navigatorContext && navigator) {
+		const NavigatorProvider = host.navigatorContext.Provider;
+		element = <NavigatorProvider value={navigator}>{element}</NavigatorProvider>;
+	}
+	for (const entry of host.entries) {
+		const Provider = entry.context.Provider;
+		element = <Provider value={entry.value}>{element}</Provider>;
+	}
+	if (host.queryFallback) {
+		const QueryProvider = host.queryFallback.Provider;
+		element = <QueryProvider client={host.queryFallback.client}>{element}</QueryProvider>;
+	}
+	return element;
+}
+
+/**
+ * One of Steam's own sections under the host contexts, or the extension's
+ * section when the native one is unavailable or throws.
+ */
+function NativeSection({ name, host, document: doc, steamAppId, fallback, children }: {
+	name: string;
+	host: NativeSectionHost | null;
+	document: Document;
+	steamAppId: number;
+	fallback: ReactNode;
+	children: ReactNode | null;
+}): React.ReactElement {
+	const custom = <NativeDetailsBoundary name={name} fallback={null}>{fallback}</NativeDetailsBoundary>;
+	if (!host || !children) return custom;
+	return (
+		<NativeDetailsBoundary key={`native-${name}-${steamAppId}`} name={`native ${name}`} fallback={custom}>
+			<NativeHostContexts document={doc} host={host} steamAppId={steamAppId}>{children}</NativeHostContexts>
+		</NativeDetailsBoundary>
+	);
+}
+
+/**
+ * Steam's AppDetails for an app id, registered the way Steam's app page does
+ * so the client loads them. Null until the client delivers details, which may
+ * never happen for an app this account does not own.
+ */
+function useNativeAppDetails(doc: Document, appid: number, label: string): any | null {
+	const [details, setDetails] = React.useState<any | null>(null);
+	React.useEffect(() => {
+		setDetails(null);
+		if (!NATIVE_STEAM_SECTIONS || !(appid > 0)) return undefined;
+		const store = resolveNativeAppDetailsStore(doc);
+		if (typeof store?.RegisterForAppData !== 'function') {
+			backendLog(`[NGL][Gamepad] AppDetailsStore unavailable for ${label} app ${appid}`);
+			return undefined;
+		}
+		let logged = false;
+		let handle: { unregister?: () => void } | null = null;
+		try {
+			handle = store.RegisterForAppData(appid, (value: any) => {
+				if (!value) return;
+				if (!logged) {
+					logged = true;
+					backendLog(`[NGL][Gamepad] AppDetails for ${label} app ${appid} loaded: dlc=${value.vecDLC?.length ?? 'n/a'} workshop=${Boolean(value.bWorkshopVisible)} developer=${value.strDeveloperName || value.strDeveloper || ''}`);
+				}
+				setDetails(value);
+			});
+		} catch (e) {
+			backendLog(`[NGL][Gamepad] AppDetails registration failed for ${label} app ${appid}: ${e}`);
+		}
+		const timer = setTimeout(() => { if (!logged) backendLog(`[NGL][Gamepad] AppDetails for ${label} app ${appid} not delivered after 5s`); }, 5000);
+		return () => {
+			clearTimeout(timer);
+			try { handle?.unregister?.(); } catch {}
+		};
+	}, [doc, appid, label]);
+	return details;
 }
 
 function AchievementsSection(props: NativeDetailsProps & { classes: NativeAppDetailsClasses; hideIfEmpty?: boolean }): React.ReactElement | null {
@@ -495,49 +672,48 @@ function NotesSection(props: NativeDetailsProps & { classes: NativeAppDetailsCla
 
 function StuffTab(props: NativeDetailsProps): React.ReactElement {
 	const classes = resolveNativeAppDetailsClasses(props.document);
+	const doc = props.document;
 	const appid = Number(props.shortcut.steamAppId || 0);
-	const overview = AppStoreAdapter.getAppOverview(appid) || { appid, display_name: props.shortcut.title };
-	const details = React.useMemo(() => resolveNativeAppDetails(props.document, appid) || { unAppID: appid, vecDLC: [] }, [props.document, appid]);
+	// Screenshots and notes belong to what the user plays, the shortcut; DLC,
+	// workshop and review belong to the real Steam app.
+	const shortcutAppId = Number(props.shortcut.id) >>> 0;
+	const shortcutOverview = AppStoreAdapter.getAppOverview(shortcutAppId) || AppStoreAdapter.getAppOverview(Number(props.shortcut.id));
+	const shortcutDetails = useNativeAppDetails(doc, shortcutAppId, 'shortcut');
+	const steamOverview = appid > 0 ? AppStoreAdapter.getAppOverview(appid) : null;
+	const steamDetails = useNativeAppDetails(doc, appid, 'Steam');
 
-	const NativeDLC = appid > 0 ? resolveNativeDLCComponent(props.document) : null;
-	const NativeScreenshots = appid > 0 ? resolveNativeScreenshotsComponent(props.document) : null;
-	const NativeReview = appid > 0 ? resolveNativeReviewComponent(props.document) : null;
-	const NativeNotes = appid > 0 ? resolveNativeNotesComponent(props.document) : null;
-	const NativeWorkshop = appid > 0 ? resolveNativeWorkshopComponent(props.document) : null;
+	const enabled = NATIVE_STEAM_SECTIONS && appid > 0;
+	const NativeDLC = enabled ? resolveNativeDLCComponent(doc) : null;
+	const NativeScreenshots = enabled ? resolveNativeScreenshotsComponent(doc) : null;
+	const NativeReview = enabled ? resolveNativeReviewComponent(doc) : null;
+	const NativeNotes = enabled ? resolveNativeNotesComponent(doc) : null;
+	const NativeWorkshop = enabled ? resolveNativeWorkshopComponent(doc) : null;
+	const host = NativeDLC || NativeScreenshots || NativeReview || NativeNotes || NativeWorkshop ? resolveNativeSectionHost(doc) : null;
+	const shortcutReady = Boolean(shortcutOverview && shortcutDetails);
 
+	React.useEffect(() => {
+		backendLog(`[NGL][Gamepad] Your Stuff tab for app ${appid}: host=${Boolean(host)} shortcutOverview=${Boolean(shortcutOverview)} steamOverview=${Boolean(steamOverview)}`
+			+ ` components dlc=${Boolean(NativeDLC)} screenshots=${Boolean(NativeScreenshots)} review=${Boolean(NativeReview)} notes=${Boolean(NativeNotes)} workshop=${Boolean(NativeWorkshop)}`);
+	}, [appid, Boolean(host), Boolean(shortcutOverview), Boolean(steamOverview)]);
+
+	const section = (name: string, fallback: ReactNode, native: ReactNode | null): React.ReactElement => (
+		<NativeSection name={name} host={host} document={doc} steamAppId={appid} fallback={fallback}>{native}</NativeSection>
+	);
+
+	// Steam's order: achievements, cards, DLC, workshop, screenshots, review, notes.
+	// Achievements and cards stay the extension's: Steam's would show this
+	// account's progress for the real app, not the shortcut's.
 	return (
 		<>
 			<AchievementsSection {...props} classes={classes} />
 			<TradingCardsSection {...props} classes={classes} />
-			{NativeScreenshots ? (
-				<NativeDetailsBoundary name="screenshots" fallback={<ScreenshotsSection {...props} classes={classes} />}>
-					<NativeScreenshots overview={overview} details={details} />
-				</NativeDetailsBoundary>
-			) : (
-				<ScreenshotsSection {...props} classes={classes} />
-			)}
-			{NativeNotes ? (
-				<NativeDetailsBoundary name="notes" fallback={<NotesSection {...props} classes={classes} />}>
-					<NativeNotes overview={overview} details={details} />
-				</NativeDetailsBoundary>
-			) : (
-				<NotesSection {...props} classes={classes} />
-			)}
-			{NativeDLC ? (
-				<NativeDetailsBoundary name="dlc" fallback={null}>
-					<NativeDLC details={details} showRemainder />
-				</NativeDetailsBoundary>
-			) : null}
-			{NativeWorkshop ? (
-				<NativeDetailsBoundary name="workshop" fallback={null}>
-					<NativeWorkshop details={details} />
-				</NativeDetailsBoundary>
-			) : null}
-			{NativeReview ? (
-				<NativeDetailsBoundary name="review" fallback={null}>
-					<NativeReview details={details} overview={overview} />
-				</NativeDetailsBoundary>
-			) : null}
+			{section('dlc', null, NativeDLC && steamDetails ? <NativeDLC details={steamDetails} showRemainder /> : null)}
+			{section('workshop', null, NativeWorkshop && steamDetails ? <NativeWorkshop details={steamDetails} /> : null)}
+			{section('screenshots', <ScreenshotsSection {...props} classes={classes} />,
+				NativeScreenshots && shortcutReady ? <NativeScreenshots overview={shortcutOverview} details={shortcutDetails} /> : null)}
+			{section('review', null, NativeReview && steamDetails && steamOverview ? <NativeReview details={steamDetails} overview={steamOverview} /> : null)}
+			{section('notes', <NotesSection {...props} classes={classes} />,
+				NativeNotes && shortcutReady ? <NativeNotes overview={shortcutOverview} details={shortcutDetails} /> : null)}
 		</>
 	);
 }
@@ -563,7 +739,20 @@ function FallbackCommunitySection({ props, classes }: { props: NativeDetailsProp
 
 function CommunityTab(props: NativeDetailsProps): React.ReactElement {
 	const classes = resolveNativeAppDetailsClasses(props.document);
-	return <FallbackCommunitySection props={props} classes={classes} />;
+	const appid = Number(props.shortcut.steamAppId || 0);
+	const NativeCommunity = NATIVE_STEAM_SECTIONS && appid > 0 ? resolveNativeCommunityComponent(props.document) : null;
+	const host = NativeCommunity ? resolveNativeSectionHost(props.document) : null;
+
+	React.useEffect(() => {
+		backendLog(`[NGL][Gamepad] Community tab for app ${appid}: ${NativeCommunity && host ? 'native' : 'custom'} (component=${Boolean(NativeCommunity)} host=${Boolean(host)})`);
+	}, [appid, Boolean(NativeCommunity && host)]);
+
+	return (
+		<NativeSection name="community" host={host} document={props.document} steamAppId={appid}
+			fallback={<FallbackCommunitySection props={props} classes={classes} />}>
+			{NativeCommunity ? <NativeCommunity appid={appid} /> : null}
+		</NativeSection>
+	);
 }
 
 function SafeTabFallback(props: NativeDetailsProps): React.ReactElement {

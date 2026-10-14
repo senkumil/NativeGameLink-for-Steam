@@ -199,7 +199,7 @@ function FallbackAchievementsSection(props: AchievementsSectionProps): ReactElem
 			{earned.length > 0 && locked.length > 0 ? (
 				<>
 					<div className={native?.LockedAchievementsLabel}>
-						{loc('AppDetails_Achievements_Locked', 'Logros bloqueados')}
+						{loc('AppDetails_Achievements_Locked', 'Locked Achievements')}
 					</div>
 					<FallbackAchievementCarousel
 						items={locked}
@@ -223,7 +223,7 @@ function FallbackAchievementsSection(props: AchievementsSectionProps): ReactElem
 					style={{ marginTop: '12px', display: 'inline-flex' }}
 				>
 					<props.NativeButton {...clickProps(onOpenAchievements)}>
-						{loc('AppDetails_Achievements_ViewAll', 'Ver todos los logros')} ({unlocked}/{total})
+						{loc('AppDetails_ViewAllAchievements', 'View My Achievements')} ({unlocked}/{total})
 					</props.NativeButton>
 				</props.NativeFocusable>
 			) : null}

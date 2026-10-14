@@ -10,11 +10,16 @@ import { getCachedPersona } from '../library/social/personas';
 import { dismissBigPictureFocusRing } from './gamepad-nav';
 import { EXIT_TEXT_EDITOR_EVENT } from './editable-target';
 import { showSteamVirtualKeyboard, hideSteamVirtualKeyboard } from '../../steam/gamepad/virtual-keyboard';
+import { openNativePartnerEvent, resolvePartnerEventGid } from '../../steam/gamepad/components/AppDetailsNativeComponents';
 import type { BigPictureDetailData, MappedShortcut } from './types';
 
 const NativeFocusable = Focusable as React.ComponentType<any>;
 const NativeButton = DialogButton as React.ComponentType<any>;
 const NativeIcons = IconsModule as Record<string, React.ComponentType<any>>;
+
+// Steam partner event types that choose the GamepadUI activity tile.
+const SMALL_UPDATE_EVENT_TYPE = 12;
+const REGULAR_UPDATE_EVENT_TYPE = 13;
 
 function nativeClasses(...values: Array<string | null | false | undefined>): string | undefined {
 	const value = values.filter(Boolean).join(' ');
@@ -34,7 +39,7 @@ function newsDayKey(item: NewsItem): string {
 
 function newsDayLabel(item: NewsItem): string {
 	const timestamp = Number(item.date || 0);
-	if (timestamp <= 0) return loc('AppDetails_Activity_Recent', 'Reciente');
+	if (timestamp <= 0) return loc('GameList_View_Recent', 'Recent');
 	try {
 		const date = new Date(timestamp * 1000);
 		return new Intl.DateTimeFormat(steamIntlLocale(), {
@@ -94,7 +99,7 @@ function showNativeNewsModal(doc: Document, item: NewsItem, imageUrl: string | u
 		dismissBigPictureFocusRing(doc);
 		handle?.Close();
 	};
-	const title = item.title || loc('AppDetails_SectionTitle_News', 'Noticias');
+	const title = item.title || loc('StartPage_News', 'News');
 	const type = item.event_type ? eventTypeLabel(Number(item.event_type)) : (item.feedlabel || gdlText('feed_news', 'News'));
 	const date = newsDate(item);
 	const paragraphs = newsModalParagraphs(item.contents || '');
@@ -117,7 +122,7 @@ function showNativeNewsModal(doc: Document, item: NewsItem, imageUrl: string | u
 									<p key={`${item.gid || item.title}-${index}`} className={paragraph.startsWith('• ') ? 'gdl-bp-news-modal-bullet' : undefined}>
 										{paragraph}
 									</p>
-								)) : <p>{loc('AppDetails_Activity_NoDescription', 'No hay más detalles disponibles.')}</p>}
+								)) : <p>{gdlText('news_no_description', 'No further details are available.')}</p>}
 							</div>
 						</div>
 						<div className="gdl-bp-news-modal-footer">
@@ -126,11 +131,11 @@ function showNativeNewsModal(doc: Document, item: NewsItem, imageUrl: string | u
 									className="gdl-bp-news-modal-open"
 									{...clickProps(() => { close(); openSteamNavigationUrl(doc, item.url); })}
 								>
-									{loc('AppDetails_ViewNewsOnline', 'Ver en Steam')}
+									{loc('AppActivity_RecommendedGame_ReadMore', 'Read More')}
 								</NativeButton>
 							) : null}
 							<NativeButton className="gdl-bp-news-modal-close gdl-bp-news-modal-close-btn" {...clickProps(close)}>
-								{loc('Button_Close', 'Cerrar')}
+								{loc('Generic_Close', 'Close')}
 							</NativeButton>
 						</div>
 					</div>
@@ -162,19 +167,29 @@ function ActivityEventCard({
 	document: Document;
 }): React.ReactElement {
 	const event = classes.ActivityEvent;
-	const type = item.event_type ? eventTypeLabel(Number(item.event_type)) : (item.feedlabel || gdlText('feed_news', 'News'));
+	const eventType = Number(item.event_type || 0);
+	const type = eventType ? eventTypeLabel(eventType) : (item.feedlabel || gdlText('feed_news', 'News'));
 	const description = newsExcerpt(item.contents || '', 260) || loc('AppActivity_RecommendedGame_ReadMore', 'Read more');
-	const imageUrl = item.image
+	// Like Steam, tiles show only the event's own art; the header is the reader's hero.
+	const tileImageUrl = item.image || '';
+	const modalImageUrl = tileImageUrl
 		|| data.game?.header_image
 		|| `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${shortcut.steamAppId}/header.jpg`;
-	const activate = () => showNativeNewsModal(document, item, imageUrl, classes);
+	// Open news in Steam's own event overlay; our reader is the fallback.
+	const activate = () => {
+		void resolvePartnerEventGid(shortcut.steamAppId, item).then(gid => {
+			if (gid && openNativePartnerEvent(document, shortcut.steamAppId, gid)) return;
+			showNativeNewsModal(document, item, modalImageUrl, classes);
+		}, () => showNativeNewsModal(document, item, modalImageUrl, classes));
+	};
 
-	if (imageUrl) {
+	// GamepadUI: small updates (12) get text-only tiles, other events medium tiles.
+	if (eventType !== SMALL_UPDATE_EVENT_TYPE) {
 		return (
-			<div className={nativeClasses(event?.Event, event?.PartnerEvent, event?.PartnerEventMediumImage)}>
+			<div className={nativeClasses(event?.PartnerEventMediumImage, event?.PartnerEvent, eventType === REGULAR_UPDATE_EVENT_TYPE && event?.PartnerEventUpdate, event?.Event)}>
 				<NativeFocusable focusable onActivate={activate} {...clickProps(activate)} className={event?.PartnerEventMediumImage_Container}>
 					<div className={event?.PartnerEventMediumImage_Contents}>
-						<div className={event?.MediumImageContainer}><img className={event?.PartnerEventMediumImage_Image} src={imageUrl} alt="" /></div>
+						{tileImageUrl ? <div className={event?.MediumImageContainer}><img className={event?.PartnerEventMediumImage_Image} src={tileImageUrl} alt="" /></div> : null}
 						<div className={event?.PartnerEventMediumImage_TextColumn}>
 							<div className={event?.PartnerEventType}>{type}</div>
 							<div className={event?.PartnerEventMediumImage_Title}>{item.title}</div>
@@ -186,7 +201,7 @@ function ActivityEventCard({
 		);
 	}
 	return (
-		<div className={nativeClasses(event?.Event, event?.PartnerEvent, event?.PartnerEventTextOnly)}>
+		<div className={nativeClasses(event?.PartnerEventTextOnly, event?.PartnerEvent, event?.Event)}>
 			<NativeFocusable focusable onActivate={activate} {...clickProps(activate)} className={event?.PartnerEventTextOnly_Container}>
 				<div className={event?.PartnerEventTextOnly_Icon}>{NativeIcons.Patch ? <NativeIcons.Patch /> : null}</div>
 				<div className={event?.PartnerEventTextOnly_TextColumn}>
@@ -220,7 +235,7 @@ function PostTextEntry({
 	const composerRef = React.useRef<HTMLElement | null>(null);
 	const textareaRef = React.useRef<HTMLElement | null>(null);
 	const user = React.useMemo(() => getCurrentSteamUser(document || window.document), [document]);
-	const placeholder = loc('AppActivity_StatusUpdate_Post', 'Diles algo sobre este juego a tus amigos...');
+	const placeholder = loc('AppActivity_StatusUpdate_Post', 'Say something about this game to your friends...');
 
 	const resolveKeyboardTarget = React.useCallback((candidate?: unknown): HTMLElement | null => {
 		const direct = candidate && typeof candidate === 'object' && typeof (candidate as any).matches === 'function'
@@ -245,7 +260,7 @@ function PostTextEntry({
 			id: `post-${Date.now()}`,
 			text: trimmed,
 			timestamp: Math.floor(Date.now() / 1000),
-			user_name: user.name || loc('AppActivity_StatusUpdate_CurrentUser', 'Tú'),
+			user_name: user.name || gdlText('current_user', 'You'),
 			user_avatar: user.avatar || '',
 		};
 		saveLocalActivityPost(steamAppId, newPost, shortcutAppId);
@@ -388,12 +403,12 @@ export function FriendsSection(props: {
 	);
 
 	return (
-		<Section classes={props.classes} label={loc('AppDetails_Friends_Title', 'Amigos')} className={nativeClasses(native?.FriendsSection, 'gdl-bp-friends-section-parity')}>
+		<Section classes={props.classes} label={loc('AppDetails_FriendsSection_Title', 'Friends')} className={nativeClasses(native?.FriendsSection, 'gdl-bp-friends-section-parity')}>
 			<div
 				className={nativeClasses(native?.FriendsContainer, native?.Friends, native?.FriendsPlaying, 'gdl-bp-friends-grid-parity')}
 			>
-				{played.length > 0 ? renderSubsection(played, loc('AppDetails_Friends_PlayedPreviously_Header', 'Jugado(s) anteriormente')) : null}
-				{wishlisted.length > 0 ? renderSubsection(wishlisted, loc('AppDetails_Friends_OnWishlist', 'En su lista de deseados')) : null}
+				{played.length > 0 ? renderSubsection(played, loc('AppDetails_FriendsPlayed_Short', 'Played previously')) : null}
+				{wishlisted.length > 0 ? renderSubsection(wishlisted, loc('AppDetails_FriendsWishlisted_Short', 'On their wishlist')) : null}
 			</div>
 		</Section>
 	);
@@ -432,7 +447,7 @@ export function FallbackActivitySection(props: {
 	const LoadingContent = props.LoadingComponent;
 
 	return (
-		<Section classes={props.classes} label={loc('AppDetails_SectionTitle_Activity', 'Actividad')} className={activity?.ActivityFeedContainer} bodyClassName={activity?.InnerContainer}>
+		<Section classes={props.classes} label={loc('AppDetails_SectionTitle_Activity', 'Activity')} className={activity?.ActivityFeedContainer} bodyClassName={activity?.InnerContainer}>
 			<PostTextEntry
 				steamAppId={props.shortcut.steamAppId}
 				shortcutAppId={shortcutIdStr}
@@ -440,30 +455,6 @@ export function FallbackActivitySection(props: {
 				document={props.document}
 				onPostAdded={() => setPosts(loadLocalActivityPosts(props.shortcut.steamAppId, shortcutIdStr))}
 			/>
-			<div
-				className={event?.Headline}
-				style={{
-					display: 'flex',
-					justifyContent: 'flex-end',
-					marginTop: '4px',
-					marginBottom: '16px',
-				}}
-			>
-				<NativeFocusable
-					focusable
-					role="link"
-					onActivate={() => openSteamNavigationUrl(props.document, `https://steamcommunity.com/app/${props.shortcut.steamAppId}/allnews/`)}
-					{...clickProps(() => openSteamNavigationUrl(props.document, `https://steamcommunity.com/app/${props.shortcut.steamAppId}/allnews/`))}
-					style={{
-						fontSize: '13px',
-						color: '#8f98a0',
-						cursor: 'pointer',
-						textDecoration: 'none',
-					}}
-				>
-					<span>{loc('AppActivity_ViewLatestNews', 'Ver las últimas novedades')}</span>
-				</NativeFocusable>
-			</div>
 			{posts.slice(0, 4).map(post => (
 				<div key={post.id} className={props.classes.ActivityEvent?.Event} style={{ marginBottom: '16px' }}>
 					<NativeFocusable
@@ -532,7 +523,7 @@ export function FallbackActivitySection(props: {
 			{limit < news.length ? (
 				<div className={activity?.FetchMoreContainer} style={{ marginTop: '16px', marginBottom: '24px' }}>
 					<NativeButton onActivate={() => setLimit(value => value + 12)} {...clickProps(() => setLimit(value => value + 12))}>
-						{loc('AppDetails_Activity_LoadMore', 'Cargar más actividad')}
+						{loc('AppActivity_FetchMore', 'Load More Activity')}
 					</NativeButton>
 				</div>
 			) : null}

@@ -230,8 +230,6 @@ export function installBigPictureGamepadNavigation(
 				c.classList.remove('gpfocus');
 				delete c.dataset.focus;
 			}
-			targetControl.classList.add('gpfocus');
-			targetControl.dataset.focus = 'true';
 			targetControl.click();
 			return true;
 		}
@@ -275,9 +273,10 @@ export function installBigPictureGamepadNavigation(
 		return false;
 	};
 
+	// Steam's Focusable owns gpfocus; only clear markers this module set.
 	const clearStripFocus = (): void => {
-		strip.querySelectorAll<HTMLElement>('.gpfocus').forEach(el => { el.classList.remove('gpfocus'); delete el.dataset.focus; });
-		for (const c of controls.values()) { c.classList.remove('gpfocus'); delete c.dataset.focus; }
+		strip.querySelectorAll<HTMLElement>('[data-focus="true"]').forEach(el => { el.classList.remove('gpfocus'); delete el.dataset.focus; });
+		for (const c of controls.values()) { if (c.dataset.focus) { c.classList.remove('gpfocus'); delete c.dataset.focus; } }
 	};
 
 	const setFocusedElement = (target: HTMLElement | null, scope: HTMLElement = root): void => {
@@ -285,17 +284,9 @@ export function installBigPictureGamepadNavigation(
 		if (scope === root) getDocNavState(doc).lastFocusedElement = target;
 		try {
 			playSteamNavSound(1);
-			scope.querySelectorAll<HTMLElement>('.gpfocus').forEach(el => {
-				if (el !== target) {
-					el.classList.remove('gpfocus');
-					delete el.dataset.focus;
-				}
-			});
 			if (!target.hasAttribute('tabindex')) {
 				target.setAttribute('tabindex', '0');
 			}
-			target.classList.add('gpfocus');
-			target.dataset.focus = 'true';
 			target.focus({ preventScroll: true });
 			target.scrollIntoView({ behavior: 'auto', block: 'nearest', inline: 'nearest' });
 
@@ -320,6 +311,14 @@ export function installBigPictureGamepadNavigation(
 
 	const handleNavDirection = (direction: 'down' | 'up' | 'left' | 'right' | 'select' | 'back'): boolean => {
 		if (!isNonSteamActive(doc)) return false;
+
+		// Focus outside the panel (e.g. Steam's event overlay) is Steam's to move.
+		const owner = doc.activeElement as HTMLElement | null;
+		if (owner && owner !== doc.body && !root.contains(owner) && !strip.contains(owner)
+			&& !isInsidePlaybar() && !owner.closest('[id^="gdl-bp-"]')) {
+			hideFocusRing();
+			return false;
+		}
 
 		const modal = getActiveModal();
 		if (modal && !modal.id?.startsWith('gdl-bp-')) {
@@ -415,8 +414,6 @@ export function installBigPictureGamepadNavigation(
 				const tab = getActiveTab();
 				if (tab) {
 					tab.focus();
-					tab.classList.add('gpfocus');
-					tab.dataset.focus = 'true';
 					tab.scrollIntoView({ behavior: 'auto', block: 'nearest' });
 				}
 				return true;
@@ -427,7 +424,7 @@ export function installBigPictureGamepadNavigation(
 		if (direction === 'down') {
 			if (!modal && isInsidePlaybar()) {
 				const tab = getActiveTab();
-				if (tab) { tab.focus(); tab.classList.add('gpfocus'); tab.dataset.focus = 'true'; return true; }
+				if (tab) { tab.focus(); return true; }
 			}
 			if (!modal && isTabStripFocused()) {
 				clearStripFocus();
@@ -448,7 +445,7 @@ export function installBigPictureGamepadNavigation(
 		if (direction === 'up') {
 			if (!modal && isTabStripFocused()) {
 				const playBtn = doc.querySelector<HTMLElement>('[class*="PlayButton"], button[class*="Play"], .PlayButton');
-				if (playBtn) { clearStripFocus(); playBtn.focus(); playBtn.classList.add('gpfocus'); playBtn.dataset.focus = 'true'; return true; }
+				if (playBtn) { clearStripFocus(); playBtn.focus(); return true; }
 				return false;
 			}
 			if (!current) {
@@ -465,7 +462,7 @@ export function installBigPictureGamepadNavigation(
 				getDocNavState(doc).lastFocusedElement = null;
 				const tab = getActiveTab();
 				if (tab) {
-					playSteamNavSound(1); clearStripFocus(); tab.classList.add('gpfocus'); tab.dataset.focus = 'true'; tab.focus();
+					playSteamNavSound(1); clearStripFocus(); tab.focus();
 					tab.scrollIntoView({ behavior: 'auto', block: 'nearest' });
 					return true;
 				}
@@ -484,6 +481,74 @@ export function installBigPictureGamepadNavigation(
 	};
 
 	let pollNavigationSuppressedUntil = 0;
+
+	// Keep the focused item clear of the pinned header and the footer hint bar.
+	const FOOTER_CLEARANCE_PX = 96;
+	const HEADER_CLEARANCE_PX = 72;
+	let keepVisibleTimer: ReturnType<typeof setTimeout> | null = null;
+	const scrollParentOf = (element: HTMLElement): HTMLElement | null => {
+		for (let node = element.parentElement; node && node !== doc.body; node = node.parentElement) {
+			const overflowY = win.getComputedStyle(node).overflowY;
+			if ((overflowY === 'auto' || overflowY === 'scroll') && node.scrollHeight > node.clientHeight) return node;
+		}
+		return (doc.scrollingElement as HTMLElement | null) || doc.documentElement;
+	};
+	// Re-check once Steam's smooth scroll and late-loading images settle.
+	const KEEP_VISIBLE_FIRST_MS = 220;
+	const KEEP_VISIBLE_SETTLED_MS = 700;
+	const keepAboveFooter = (target: HTMLElement): void => {
+		if (keepVisibleTimer != null) clearTimeout(keepVisibleTimer);
+		keepVisibleTimer = setTimeout(() => {
+			bringIntoClearView(target, 'smooth');
+			keepVisibleTimer = setTimeout(() => {
+				keepVisibleTimer = null;
+				bringIntoClearView(target, 'auto');
+			}, KEEP_VISIBLE_SETTLED_MS - KEEP_VISIBLE_FIRST_MS);
+		}, KEEP_VISIBLE_FIRST_MS);
+	};
+	const bringIntoClearView = (target: HTMLElement, behavior: ScrollBehavior): void => {
+		if (!target.isConnected || doc.activeElement !== target) return;
+		const rect = target.getBoundingClientRect();
+		const viewportHeight = win.innerHeight;
+		// The playbar and tab strip stay pinned at the top while scrolling.
+		const stripRect = strip.isConnected ? strip.getBoundingClientRect() : null;
+		const topClearance = stripRect && stripRect.height > 0 && stripRect.bottom > 0 && stripRect.bottom < viewportHeight / 2
+			? Math.max(HEADER_CLEARANCE_PX, stripRect.bottom + 12)
+			: HEADER_CLEARANCE_PX;
+		let delta = 0;
+		if (rect.bottom > viewportHeight - FOOTER_CLEARANCE_PX) {
+			delta = rect.bottom - (viewportHeight - FOOTER_CLEARANCE_PX);
+			// A tall item keeps its top in view rather than its bottom.
+			if (rect.top - delta < topClearance) delta = rect.top - topClearance;
+		} else if (rect.top < topClearance) {
+			delta = rect.top - topClearance;
+		}
+		if (Math.abs(delta) < 1) return;
+		scrollParentOf(target)?.scrollBy({ top: delta, behavior });
+	};
+
+	// Steam usually navigates the panel itself, sometimes late. The fallback
+	// acts only if focus and tab are unchanged after the wait: long between
+	// panel items (avoids double moves), short from the tabs or playbar.
+	const NATIVE_NAV_GRACE_MS = 90;
+	const NATIVE_NAV_IN_PANEL_GRACE_MS = 450;
+	// Polled every 50 ms, so Steam may already have handled this press.
+	const NATIVE_NAV_EARLY_MS = 200;
+	let fallbackFocusing = false;
+	let lastSteamFocusAt = 0;
+	const deferToNativeNavigation = (fallback: () => void): void => {
+		const pressSeenAt = Date.now();
+		if (pressSeenAt - lastSteamFocusAt < NATIVE_NAV_EARLY_MS) return;
+		const focusBefore = doc.activeElement;
+		const tabBefore = getCurrentTabKey();
+		const grace = focusBefore && root.contains(focusBefore) ? NATIVE_NAV_IN_PANEL_GRACE_MS : NATIVE_NAV_GRACE_MS;
+		win.setTimeout(() => {
+			if (!isNonSteamActive(doc) || !root.isConnected) return;
+			if (lastSteamFocusAt > pressSeenAt || doc.activeElement !== focusBefore || getCurrentTabKey() !== tabBefore) return;
+			fallbackFocusing = true;
+			try { fallback(); } finally { fallbackFocusing = false; }
+		}, grace);
+	};
 
 	const onGlobalKeyDown = (event: KeyboardEvent) => {
 		if (!isNonSteamActive(doc)) return;
@@ -519,56 +584,36 @@ export function installBigPictureGamepadNavigation(
 		else if (key === 'Escape' || key === 'Backspace' || event.keyCode === 27 || event.keyCode === 8) dir = 'back';
 		else if (key === 'Tab') dir = event.shiftKey ? 'up' : 'down';
 
-		if (!dir) return;
+		// Activation always belongs to the Steam Focusable that holds focus.
+		if (!dir || dir === 'select') return;
+		// Back belongs to Steam except inside the extension's own overlays.
+		if (dir === 'back' && !getActiveModal()?.id?.startsWith('gdl-bp-')) return;
 		pollNavigationSuppressedUntil = Date.now() + 500;
 
 		// Native GamepadUI owns navigation while a text editor is active.
 		if (isEditableTextTarget(doc.activeElement)) return;
 
-		if (!getActiveModal() && isTabStripFocused()) {
-			if (dir === 'down') {
-				// Leave tab strip, enter the content panel at the first element
-				clearStripFocus();
-				const focusables = getFocusableElements(root);
-				if (focusables.length > 0) {
-					event.preventDefault();
-					event.stopPropagation();
-					setFocusedElement(focusables[0], root);
-					return;
-				}
-			} else if (dir === 'up') {
-				// Move from tab strip back to play button
-				const playBtn = doc.querySelector<HTMLElement>('[class*="PlayButton"], button[class*="Play"], .PlayButton');
-				if (playBtn) {
+		const navDir = dir;
+		deferToNativeNavigation(() => {
+			if (!getActiveModal() && isTabStripFocused()) {
+				if (navDir === 'down') {
+					// Leave tab strip, enter the content panel at the first element
 					clearStripFocus();
-					event.preventDefault();
-					event.stopPropagation();
-					playBtn.focus();
-					playBtn.classList.add('gpfocus');
-					playBtn.dataset.focus = 'true';
-					return;
+					const focusables = getFocusableElements(root);
+					if (focusables.length > 0) setFocusedElement(focusables[0], root);
+				} else if (navDir === 'up') {
+					// Move from tab strip back to play button
+					const playBtn = doc.querySelector<HTMLElement>('[class*="PlayButton"], button[class*="Play"], .PlayButton');
+					if (playBtn) { clearStripFocus(); playBtn.focus(); }
 				}
+				// Left/Right/Back on the tab strip belong to Steam's native tabstrip
+				return;
 			}
-			// When tab strip has focus, Left/Right/Select/Back belong 100% to Steam's native tabstrip
-			return;
-		}
-
-		const now = Date.now();
-		const navState = getDocNavState(doc);
-		if (now - navState.lastNavTime < NAV_COOLDOWN_MS) {
-			event.preventDefault();
-			event.stopPropagation();
-			return;
-		}
-
-		const handled = handleNavDirection(dir);
-		if (handled) {
-			navState.lastNavTime = now;
-			lastDirTime.set(dir, now);
-			dirHoldTime.set(dir, now);
-			event.preventDefault();
-			event.stopPropagation();
-		}
+			const now = Date.now();
+			const navState = getDocNavState(doc);
+			if (now - navState.lastNavTime < NAV_COOLDOWN_MS) return;
+			if (handleNavDirection(navDir)) navState.lastNavTime = now;
+		});
 	};
 
 	const onFocusIn = (event: FocusEvent) => {
@@ -579,6 +624,8 @@ export function installBigPictureGamepadNavigation(
 			hideFocusRing();
 			return;
 		}
+		if (!fallbackFocusing) lastSteamFocusAt = Date.now();
+		if (target && root.contains(target)) keepAboveFooter(target);
 		if (target && (root.contains(target) || (modal && modal.contains(target)))) {
 			getDocNavState(doc).lastFocusedElement = target;
 			for (const stale of Array.from((modal || root).querySelectorAll<HTMLElement>('[data-focus="true"]'))) {
@@ -590,10 +637,8 @@ export function installBigPictureGamepadNavigation(
 				hideFocusRing();
 				return;
 			}
-			target.classList.add('gpfocus');
-			target.dataset.focus = 'true';
 			showFocusRing(target);
-		} else if (target && (strip.contains(target) || isInsidePlaybar())) {
+		} else if (target) {
 			hideFocusRing();
 		}
 	};
@@ -666,32 +711,29 @@ export function installBigPictureGamepadNavigation(
 				const last = lastDirTime.get(name) || 0;
 				if (!hold) {
 					dirHoldTime.set(name, now);
-					if (now - navState.lastNavTime >= NAV_COOLDOWN_MS) { lastDirTime.set(name, now); navState.lastNavTime = now; handleNavDirection(dir); }
+					if (now - navState.lastNavTime >= NAV_COOLDOWN_MS) { lastDirTime.set(name, now); navState.lastNavTime = now; deferToNativeNavigation(() => handleNavDirection(dir)); }
 				} else if (now - hold > 420 && now - last > 160 && now - navState.lastNavTime >= 160) {
-					lastDirTime.set(name, now); navState.lastNavTime = now; handleNavDirection(dir);
+					lastDirTime.set(name, now); navState.lastNavTime = now; deferToNativeNavigation(() => handleNavDirection(dir));
 				}
 			}
 
-			const btnA = Boolean(gp.buttons[0]?.pressed);
-			if (!keyboardOwnsNavigation && btnA && !prevBtn.get(0) && now - navState.lastNavTime >= NAV_COOLDOWN_MS) {
-				navState.lastNavTime = now;
-				handleNavDirection('select');
-			}
-			prevBtn.set(0, btnA);
+			// A is left to the focused Focusable's onActivate.
 
+			// B is handled by Steam on the app page; only our overlays need it.
 			const btnB = Boolean(gp.buttons[1]?.pressed);
-			if (!keyboardOwnsNavigation && btnB && !prevBtn.get(1) && now - navState.lastNavTime >= NAV_COOLDOWN_MS) {
+			const ownOverlay = getActiveModal()?.id?.startsWith('gdl-bp-');
+			if (!keyboardOwnsNavigation && ownOverlay && btnB && !prevBtn.get(1) && now - navState.lastNavTime >= NAV_COOLDOWN_MS) {
 				navState.lastNavTime = now;
-				handleNavDirection('back');
+				deferToNativeNavigation(() => handleNavDirection('back'));
 			}
 			prevBtn.set(1, btnB);
 
 			const btnLB = Boolean(gp.buttons[4]?.pressed);
-			if (!keyboardOwnsNavigation && btnLB && !prevBtn.get(4) && !getActiveModal()) switchTabByOffset(-1);
+			if (!keyboardOwnsNavigation && btnLB && !prevBtn.get(4) && !getActiveModal()) deferToNativeNavigation(() => switchTabByOffset(-1));
 			prevBtn.set(4, btnLB);
 
 			const btnRB = Boolean(gp.buttons[5]?.pressed);
-			if (!keyboardOwnsNavigation && btnRB && !prevBtn.get(5) && !getActiveModal()) switchTabByOffset(1);
+			if (!keyboardOwnsNavigation && btnRB && !prevBtn.get(5) && !getActiveModal()) deferToNativeNavigation(() => switchTabByOffset(1));
 			prevBtn.set(5, btnRB);
 
 			const rY = gp.axes[3];

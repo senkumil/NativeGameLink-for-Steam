@@ -76,7 +76,7 @@ const bigPictureModules={
   react,'@steambrew/client':{IconsModule:{},Focusable(){},DialogButton(){}},
   '../../steam/localization':localization,'../../steam/navigation':{},'../library/news':context.exports,
   '../library/social/feed':{},'../library/social/personas':{},'./gamepad-nav':{},'./editable-target':{},
-  '../../steam/gamepad/virtual-keyboard':{},
+  '../../steam/gamepad/virtual-keyboard':{},'../../steam/gamepad/components/AppDetailsNativeComponents':{},
 };
 const bigPictureContext=vm.createContext({exports:{},require:name=>{
   if(!(name in bigPictureModules)) throw Error(name);return bigPictureModules[name];

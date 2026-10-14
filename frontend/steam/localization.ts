@@ -33,6 +33,10 @@ export function steamLocalizationManager(): any | null {
 }
 
 export const SPANISH_TRANSLATIONS: Record<string, string> = {
+	news_no_description: 'No hay más detalles disponibles.',
+	current_user: 'Tú',
+	community_no_content: 'No hay contenido de la comunidad disponible.',
+	loading: 'Cargando…',
 	controller_section_title: 'MANDOS',
 	controller_supported_xbox: 'Compatible con tu control de Xbox',
 	controller_supported_dualshock: 'Compatible con tu control DualShock',

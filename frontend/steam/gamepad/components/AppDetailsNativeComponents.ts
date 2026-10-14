@@ -1,5 +1,5 @@
 import type { ComponentType } from 'react';
-import { backendLog } from '../../../api/backend';
+import { backendLog, fetchPartnerEventsBackend } from '../../../api/backend';
 import { steamWebpackRuntime } from '../../modules/SteamWebpackRuntime';
 import { isMappingSnapshotVerified, mappings, shortcutMappingKey } from '../../../core/mappings';
 
@@ -451,6 +451,87 @@ export function openNativeAchievementsScreen(doc: Document, steamAppId: number |
 			return;
 		}
 	} catch {}
+}
+
+function isRouterHistory(value: any): boolean {
+	return Boolean(value && typeof value.push === 'function' && typeof value.listen === 'function' && value.location?.pathname);
+}
+
+/** Router history of the current GamepadUI page, read from React context
+ *  because webpack module ids change between Steam builds. */
+function resolveGamepadRouterHistory(doc: Document): any | null {
+	const start = doc.getElementById('gdl-bp-detail-root') || doc.querySelector('[role="tablist"]');
+	const key = start ? Object.keys(start).find(k => k.startsWith('__reactFiber') || k.startsWith('__reactInternalInstance')) : undefined;
+	for (let fiber = key ? (start as any)[key] : null; fiber; fiber = fiber.return) {
+		const value = fiber.memoizedProps?.value;
+		if (isRouterHistory(value?.history)) return value.history;
+		if (isRouterHistory(value?.navigator)) return value.navigator;
+		if (isRouterHistory(fiber.memoizedProps?.history)) return fiber.memoizedProps.history;
+	}
+	steamWebpackRuntime.captureRuntime(doc);
+	const view = (doc.defaultView as any) || null;
+	for (const module of steamWebpackRuntime.getAllModules(doc)) {
+		const windowStore = (module.exports as any)?.oy?.WindowStore;
+		if (!windowStore) continue;
+		const inst = windowStore.GetWindowInstanceFromWindow?.(view) || windowStore.GamepadUIMainWindowInstance;
+		if (isRouterHistory(inst?.History)) return inst.History;
+	}
+	return null;
+}
+
+/** Opens Steam's partner-event overlay on the current app page through its
+ *  `event_to_show` route state. */
+export function openNativePartnerEvent(doc: Document, steamAppId: number | string, eventGid: string): boolean {
+	const appid = Number(steamAppId);
+	if (!appid || !/^\d+$/.test(eventGid)) return false;
+	try {
+		const history = resolveGamepadRouterHistory(doc);
+		const location = history?.location;
+		if (typeof history?.replace !== 'function' || !location?.pathname) {
+			backendLog(`[NGL][Gamepad] Native partner event overlay unavailable: history=${Boolean(history)} path=${location?.pathname || ''}`);
+			return false;
+		}
+		const state = location.state && typeof location.state === 'object' ? location.state : {};
+		// Replace, not push: closing replaces the entry, so a push left a duplicate.
+		history.replace(location.pathname, { ...state, event_to_show: { appid, eventid: eventGid } });
+		backendLog(`[NGL][Gamepad] Opened native partner event ${eventGid} for app ${appid}`);
+		return true;
+	} catch (e) {
+		backendLog(`[NGL][Gamepad] Native partner event overlay failed: ${e}`);
+		return false;
+	}
+}
+
+const partnerEventIndex = new Map<string, Promise<Array<{ gid: string; title: string; date: number }>>>();
+
+function normalizedEventTitle(value: unknown): string {
+	return String(value || '').toLowerCase().replace(/<[^>]*>/g, ' ').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+}
+
+/** Partner-event id for a news item: from its store URL, else matched
+ *  against the app's partner events by title or post date. */
+export async function resolvePartnerEventGid(steamAppId: number | string, item: { url?: string; title?: string; date?: number }): Promise<string> {
+	const fromUrl = /\/news\/app\/\d+\/view\/(\d+)/.exec(String(item.url || ''))?.[1];
+	if (fromUrl) return fromUrl;
+	const appKey = String(steamAppId);
+	if (!/^\d+$/.test(appKey)) return '';
+	let index = partnerEventIndex.get(appKey);
+	if (!index) {
+		index = fetchPartnerEventsBackend({ steam_app_id: appKey, language: 'english' })
+			.then(raw => (JSON.parse(raw)?.items || [])
+				.map((e: any) => ({ gid: String(e.gid || ''), title: normalizedEventTitle(e.title), date: Number(e.date || 0) }))
+				.filter((e: { gid: string }) => /^\d+$/.test(e.gid)))
+			.catch((): Array<{ gid: string; title: string; date: number }> => []);
+		partnerEventIndex.set(appKey, index);
+	}
+	const events = await index;
+	if (events.length === 0) partnerEventIndex.delete(appKey);
+	const title = normalizedEventTitle(item.title);
+	const date = Number(item.date || 0);
+	const match = events.find(e => title && e.title === title)
+		|| events.find(e => date > 0 && Math.abs(e.date - date) < 6 * 60 * 60);
+	backendLog(`[NGL][Gamepad] Partner event for "${title.slice(0, 40)}" in app ${appKey}: ${match?.gid || 'none'} (${events.length} events)`);
+	return match?.gid || '';
 }
 
 let navContext: any = null;

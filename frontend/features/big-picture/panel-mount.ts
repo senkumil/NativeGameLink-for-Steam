@@ -452,7 +452,7 @@ export function ensureCloudDivider(doc: Document, strip: HTMLElement): HTMLEleme
 		divider.appendChild(labelSpan);
 	}
 	labelSpan.className = playbar.CloudStatusLabel || '';
-	labelSpan.textContent = `STEAM CLOUD: ${loc('AppDetails_CloudStatus_Synchronized', 'ACTUALIZADO').toUpperCase()}`;
+	labelSpan.textContent = `STEAM CLOUD: ${loc('AppDetails_CloudStatus_Synchronized', 'Up to date').toUpperCase()}`;
 	bindCloudDividerScroll(doc, strip, divider);
 	return divider;
 }
@@ -541,7 +541,7 @@ export function ensurePlaybarControllerStat(doc: Document, supportOverride?: Gam
 		stat.appendChild(label);
 	}
 	label.className = [playbar.PlayBarLabel, playbar.AchievementLabel].filter(Boolean).join(' ');
-	label.textContent = loc('AppDetails_SectionTitle_Controller', 'CONTROL').toUpperCase();
+	label.textContent = loc('AppDetails_SectionTitle_Controller', 'Controller').toUpperCase();
 
 	let row = stat.querySelector<HTMLElement>(':scope > div:last-child');
 	if (!row || row === label) {

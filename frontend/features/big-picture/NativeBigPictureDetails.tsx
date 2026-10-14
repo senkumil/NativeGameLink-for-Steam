@@ -106,7 +106,7 @@ function showNativeImageModal(doc: Document, title: string, imageUrl: string, cl
 		handle = showModal(
 			<ModalRoot onCancel={close} closeModal={close} bAllowFullSize bDisableBackgroundDismiss>
 				<img className={classes.Media?.ScreenshotModal} width="100%" src={imageUrl} alt={title} />
-				<NativeButton {...clickProps(close)}>{loc('Button_Close', 'Cerrar')}</NativeButton>
+				<NativeButton {...clickProps(close)}>{loc('Generic_Close', 'Close')}</NativeButton>
 			</ModalRoot>,
 			(doc.defaultView || doc.body) as EventTarget,
 			{ strTitle: title, bNeverPopOut: true, bHideMainWindowForPopouts: false },
@@ -136,7 +136,7 @@ function showNativeVideoModal(doc: Document, title: string, youtubeId: string, _
 					/>
 				</div>
 				<div className={nativeClasses('gdl-bp-video-modal-footer')}>
-					<NativeButton {...clickProps(close)}>{loc('Button_Close', 'Cerrar')}</NativeButton>
+					<NativeButton {...clickProps(close)}>{loc('Generic_Close', 'Close')}</NativeButton>
 				</div>
 			</ModalRoot>,
 			(doc.defaultView || doc.body) as EventTarget,
@@ -269,7 +269,7 @@ function TradingCardsSection(props: NativeDetailsProps & { classes: NativeAppDet
 	const maxLevel = badge?.level || (catalog?.badges && catalog.badges.length > 0 ? Math.max(...catalog.badges.map(b => Number(b.level || 0))) : 5);
 	const lvl = maxLevel || 5;
 	const xp = lvl * 100;
-	const badgeLevelLabel = loc('AppDetails_BadgeLevel', `Nivel ${lvl} (${xp} EXP)`).replace('%1$s', String(lvl)).replace('%2$s', String(xp));
+	const badgeLevelLabel = loc('AppDetails_BadgeLevel', `Level ${lvl}, XP: ${xp}`).replace('%1$s', String(lvl)).replace('%2$s', String(xp));
 	const native = props.classes.TradingCard;
 	const NativeTradingCard = resolveNativeTradingCardComponent(props.document);
 
@@ -292,7 +292,7 @@ function TradingCardsSection(props: NativeDetailsProps & { classes: NativeAppDet
 			</NativeFocusable>
 			<div className={native?.CardsSection}>
 				<div className={nativeClasses(native?.CardsLeft, native?.BadgeMaxed)}>
-					{loc('AppDetails_TradingCardsMaxed', 'INSIGNIA DE NIVEL MÁXIMO')}
+					{loc('AppDetails_TradingCardsMaxed', 'Congratulations! Badge at maximum level!')}
 				</div>
 				<NativeStrip name="NativeGameLink Trading Cards" className={native?.SummaryCarouselContainer}>
 					{cards.slice(0, 18).map((card, index) => {
@@ -349,13 +349,13 @@ function TradingCardsSection(props: NativeDetailsProps & { classes: NativeAppDet
 }
 
 function communityItems(data: BigPictureDetailData): CommunityContentItem[] {
-	const raw = data.community.length > 0 ? data.community : (data.game?.screenshots || []).map((shot, index) => ({ type: 'screenshot', image: shot.path_full || shot.path_thumbnail, title: `${loc('AppDetails_Community_Screenshot', 'Captura')} ${index + 1}` }));
+	const raw = data.community.length > 0 ? data.community : (data.game?.screenshots || []).map((shot, index) => ({ type: 'screenshot', image: shot.path_full || shot.path_thumbnail, title: `${loc('AppDetails_Screenshot', 'Screenshot')} ${index + 1}` }));
 	return raw.filter(item => Boolean(item && item.image));
 }
 
 function CommunityCard({ item, index, classes, document }: { item: CommunityContentItem; index: number; classes: NativeAppDetailsClasses; document: Document }): React.ReactElement {
 	const native = classes.Community;
-	const title = item.title || item.label || loc('AppDetails_Community_Screenshot', 'Contenido de la comunidad');
+	const title = item.title || item.label || loc('AppDetails_CommunityItem', 'Community Content');
 	const author = item.author_name ? <div className={native?.AuthorSection}>{item.author_avatar ? <img className={native?.Avatar} src={item.author_avatar} alt="" /> : null}<div className={native?.AuthorName}>{item.author_name}</div></div> : null;
 	const youtubeId = extractCommunityYoutubeId(item);
 
@@ -380,7 +380,7 @@ function CommunityCard({ item, index, classes, document }: { item: CommunityCont
 			<NativeFocusable focusable role="gridcell" data-size="Medium" data-id={`guide-${index}`} onActivate={onActivate} {...clickProps(onActivate)} className={nativeClasses(native?.CommunityItem, native?.Medium, 'gdl-bp-community-item')}>
 				<div className={native?.ChildItem}>
 					<div className={native?.Guide}>
-						<div className={native?.Header}>{loc('AppDetails_Community_Guide', 'Guía de la comunidad')}</div>
+						<div className={native?.Header}>{loc('AppDetails_Community_Guide', 'Community Guide')}</div>
 						<div className={native?.TopSection}><div className={native?.TopSectionInner}>
 							{item.image ? <div className={nativeClasses(native?.PreviewContainer, 'gdl-bp-community-preview-wrap')}><img className={nativeClasses(native?.Preview, 'gdl-bp-community-preview-img')} src={item.image} alt="" width="360" height="160" /></div> : null}
 							<div className={nativeClasses(native?.GuideTitle, 'gdl-bp-community-title')}>{title}</div>
@@ -445,13 +445,13 @@ function ScreenshotsSection(props: NativeDetailsProps & { classes: NativeAppDeta
 	return (
 		<Section
 			classes={props.classes}
-			label={loc('AppDetails_SectionTitle_Screenshots', 'Capturas y archivos multimedia')}
+			label={loc('AppDetails_SectionTitle_Screenshots', 'Screenshots')}
 			rightColumn
 		>
 			<NativeStrip name="Screenshots" className={mediaClasses?.Screenshots}>
 				{screenshots.slice(0, 12).map((shot, index) => {
 					const imgUrl = shot.path_full || shot.path_thumbnail;
-					const title = `${loc('AppDetails_Community_Screenshot', 'Captura')} ${index + 1}`;
+					const title = `${loc('AppDetails_Screenshot', 'Screenshot')} ${index + 1}`;
 					const open = (): void => showNativeImageModal(props.document, title, imgUrl, props.classes);
 					return (
 						<NativeFocusable
@@ -483,11 +483,11 @@ function NotesSection(props: NativeDetailsProps & { classes: NativeAppDetailsCla
 	return (
 		<Section
 			classes={props.classes}
-			label={loc('AppDetails_SectionTitle_GameNotes', 'Notas')}
+			label={loc('AppDetails_SectionTitle_GameNotes', 'Notes')}
 			rightColumn
 		>
 			<NativeButton {...clickProps(openNotes)}>
-				{loc('AppDetails_GameNotes_Open', 'Abrir notas del juego')}
+				{loc('AppDetails_NewNote', 'New Note')}
 			</NativeButton>
 		</Section>
 	);
@@ -551,9 +551,9 @@ function FallbackCommunitySection({ props, classes }: { props: NativeDetailsProp
 				<CommunityGrid items={items} classes={classes} document={props.document} />
 			) : (
 				<div className={nativeClasses(classes.Community?.NoContent, 'gdl-bp-community-empty')}>
-					<LoadingContent hydrating={props.hydrating} empty={loc('AppDetails_Community_NoContent', 'No hay contenido de la comunidad disponible.')} />
+					<LoadingContent hydrating={props.hydrating} empty={gdlText('community_no_content', 'No community content is available.')} />
 					<NativeButton {...clickProps(() => openSteamNavigationUrl(props.document, hubUrl))}>
-						{loc('AppDetails_Community_Hub', 'Ir al punto de encuentro')}
+						{loc('AppDetails_Links_Community', 'Community Hub')}
 					</NativeButton>
 				</div>
 			)}
@@ -568,7 +568,7 @@ function CommunityTab(props: NativeDetailsProps): React.ReactElement {
 
 function SafeTabFallback(props: NativeDetailsProps): React.ReactElement {
 	const classes = resolveNativeAppDetailsClasses(props.document);
-	return <Section classes={classes} label={props.shortcut.title}><LoadingContent hydrating={props.hydrating} empty={loc('Loading', 'Cargando…')} /></Section>;
+	return <Section classes={classes} label={props.shortcut.title}><LoadingContent hydrating={props.hydrating} empty={gdlText('loading', 'Loading…')} /></Section>;
 }
 
 export function NativeBigPictureDetails(props: NativeDetailsProps): React.ReactElement {

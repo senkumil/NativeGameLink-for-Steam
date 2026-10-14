@@ -1,5 +1,5 @@
 import type { ComponentType } from 'react';
-import { backendLog } from '../../../api/backend';
+import { backendLog, fetchPartnerEventsBackend } from '../../../api/backend';
 import { steamWebpackRuntime } from '../../modules/SteamWebpackRuntime';
 import { isMappingSnapshotVerified, mappings, shortcutMappingKey } from '../../../core/mappings';
 
@@ -293,109 +293,67 @@ let cachedReviewComponent: ComponentType<NativeReviewProps> | null | undefined;
 let cachedNotesComponent: ComponentType<NativeNotesProps> | null | undefined;
 let cachedWorkshopComponent: ComponentType<NativeWorkshopProps> | null | undefined;
 
-export function resolveNativeDLCComponent(doc?: Document): ComponentType<NativeDLCProps> | null {
-	ensureNativeComponentsRuntime(doc);
-	if (cachedDLCComponent !== undefined) return cachedDLCComponent;
+function moduleFactorySource(req: any, id: string | number): string {
+	try { return String(req?.m?.[id] || ''); } catch { return ''; }
+}
+
+/**
+ * Finds a Steam section component by its export key plus localization keys
+ * from its module source. Webpack ids and single-letter export names change
+ * between Steam builds, and a lone export name is too common to match alone.
+ */
+function resolveSectionByFingerprint<T>(doc: Document | undefined, exportKey: string, fingerprints: string[], label: string): ComponentType<T> | null {
 	steamWebpackRuntime.captureRuntime(doc);
 	const req = steamWebpackRuntime.getRequire(doc);
-	if (req) {
+	const matches = (source: string): boolean => fingerprints.every(fingerprint => source.includes(fingerprint));
+	for (const module of steamWebpackRuntime.getAllModules(doc)) {
+		const exp = module.exports as any;
+		if (!exp || typeof exp[exportKey] !== 'function' || !matches(moduleFactorySource(req, module.id))) continue;
+		backendLog(`[NGL][Gamepad] Resolved native ${label} component from module ${module.id}`);
+		return exp[exportKey] as ComponentType<T>;
+	}
+	for (const id of Object.keys(req?.m || {})) {
+		const source = moduleFactorySource(req, id);
+		if (!source.includes(`${exportKey}:()=>`) || !matches(source)) continue;
 		try {
-			const exp = req(3651);
-			if (exp && typeof exp.Kf === 'function') {
-				cachedDLCComponent = exp.Kf as ComponentType<NativeDLCProps>;
-				return cachedDLCComponent;
-			}
+			const exp = req(id);
+			if (typeof exp?.[exportKey] !== 'function') continue;
+			backendLog(`[NGL][Gamepad] Resolved native ${label} component from factory ${id}`);
+			return exp[exportKey] as ComponentType<T>;
 		} catch {}
 	}
-	cachedDLCComponent = null;
+	backendLog(`[NGL][Gamepad] Native ${label} component not found`);
 	return null;
+}
+
+export function resolveNativeDLCComponent(doc?: Document): ComponentType<NativeDLCProps> | null {
+	ensureNativeComponentsRuntime(doc);
+	if (cachedDLCComponent === undefined) cachedDLCComponent = resolveSectionByFingerprint<NativeDLCProps>(doc, 'Kf', ['#AppDetails_SectionTitle_DLC', '#AppDetails_ManageDLC'], 'DLC');
+	return cachedDLCComponent;
 }
 
 export function resolveNativeScreenshotsComponent(doc?: Document): ComponentType<NativeScreenshotsProps> | null {
 	ensureNativeComponentsRuntime(doc);
-	if (cachedScreenshotsComponent !== undefined) return cachedScreenshotsComponent;
-	steamWebpackRuntime.captureRuntime(doc);
-	const req = steamWebpackRuntime.getRequire(doc);
-	if (req) {
-		try {
-			const exp = req(57150);
-			if (exp && typeof exp.E === 'function') {
-				cachedScreenshotsComponent = exp.E as ComponentType<NativeScreenshotsProps>;
-				return cachedScreenshotsComponent;
-			}
-		} catch {}
-	}
-	cachedScreenshotsComponent = null;
-	return null;
+	if (cachedScreenshotsComponent === undefined) cachedScreenshotsComponent = resolveSectionByFingerprint<NativeScreenshotsProps>(doc, 'E', ['#AppDetails_SectionTitle_Screenshots', '#AppDetails_NoScreenshots'], 'Screenshots');
+	return cachedScreenshotsComponent;
 }
 
 export function resolveNativeReviewComponent(doc?: Document): ComponentType<NativeReviewProps> | null {
 	ensureNativeComponentsRuntime(doc);
-	if (cachedReviewComponent !== undefined) return cachedReviewComponent;
-	steamWebpackRuntime.captureRuntime(doc);
-	const req = steamWebpackRuntime.getRequire(doc);
-	if (req) {
-		try {
-			const exp = req(71333);
-			if (exp && typeof exp.h === 'function') {
-				cachedReviewComponent = exp.h as ComponentType<NativeReviewProps>;
-				return cachedReviewComponent;
-			}
-		} catch {}
-	}
-	cachedReviewComponent = null;
-	return null;
+	if (cachedReviewComponent === undefined) cachedReviewComponent = resolveSectionByFingerprint<NativeReviewProps>(doc, 'h', ['#AppDetails_Review_YourReview', '#AppDetails_Review_PlayedForTime'], 'Review');
+	return cachedReviewComponent;
 }
 
 export function resolveNativeNotesComponent(doc?: Document): ComponentType<NativeNotesProps> | null {
 	ensureNativeComponentsRuntime(doc);
-	if (cachedNotesComponent !== undefined) return cachedNotesComponent;
-	steamWebpackRuntime.captureRuntime(doc);
-	const req = steamWebpackRuntime.getRequire(doc);
-	if (req) {
-		try {
-			const exp = req(9066);
-			if (exp && typeof exp.E === 'function') {
-				cachedNotesComponent = exp.E as ComponentType<NativeNotesProps>;
-				return cachedNotesComponent;
-			}
-		} catch {}
-	}
-	cachedNotesComponent = null;
-	return null;
+	if (cachedNotesComponent === undefined) cachedNotesComponent = resolveSectionByFingerprint<NativeNotesProps>(doc, 'E', ['#AppDetails_SectionTitle_GameNotes', '#AppDetails_NewNote'], 'Notes');
+	return cachedNotesComponent;
 }
 
 export function resolveNativeWorkshopComponent(doc?: Document): ComponentType<NativeWorkshopProps> | null {
 	ensureNativeComponentsRuntime(doc);
-	if (cachedWorkshopComponent !== undefined) return cachedWorkshopComponent;
-	steamWebpackRuntime.captureRuntime(doc);
-	const req = steamWebpackRuntime.getRequire(doc);
-	if (req) {
-		try {
-			const exp = req(81452);
-			if (exp && typeof exp.y === 'function') {
-				cachedWorkshopComponent = exp.y as ComponentType<NativeWorkshopProps>;
-				return cachedWorkshopComponent;
-			}
-		} catch {}
-	}
-	cachedWorkshopComponent = null;
-	return null;
-}
-
-export function resolveNativeAppDetails(doc?: Document, appid?: number): any | null {
-	if (!appid) return null;
-	steamWebpackRuntime.captureRuntime(doc);
-	const req = steamWebpackRuntime.getRequire(doc);
-	if (req) {
-		try {
-			const exp = req(78057);
-			if (exp?.H && typeof exp.H.GetAppDetails === 'function') {
-				return exp.H.GetAppDetails(appid);
-			}
-		} catch {}
-	}
-	return null;
+	if (cachedWorkshopComponent === undefined) cachedWorkshopComponent = resolveSectionByFingerprint<NativeWorkshopProps>(doc, 'y', ['#AppDetails_SectionTitle_Workshop', '#AppDetails_WorkshopVisit'], 'Workshop');
+	return cachedWorkshopComponent;
 }
 
 export function openNativeAchievementsScreen(doc: Document, steamAppId: number | string): void {
@@ -451,6 +409,87 @@ export function openNativeAchievementsScreen(doc: Document, steamAppId: number |
 			return;
 		}
 	} catch {}
+}
+
+function isRouterHistory(value: any): boolean {
+	return Boolean(value && typeof value.push === 'function' && typeof value.listen === 'function' && value.location?.pathname);
+}
+
+/** Router history of the current GamepadUI page, read from React context
+ *  because webpack module ids change between Steam builds. */
+function resolveGamepadRouterHistory(doc: Document): any | null {
+	const start = doc.getElementById('gdl-bp-detail-root') || doc.querySelector('[role="tablist"]');
+	const key = start ? Object.keys(start).find(k => k.startsWith('__reactFiber') || k.startsWith('__reactInternalInstance')) : undefined;
+	for (let fiber = key ? (start as any)[key] : null; fiber; fiber = fiber.return) {
+		const value = fiber.memoizedProps?.value;
+		if (isRouterHistory(value?.history)) return value.history;
+		if (isRouterHistory(value?.navigator)) return value.navigator;
+		if (isRouterHistory(fiber.memoizedProps?.history)) return fiber.memoizedProps.history;
+	}
+	steamWebpackRuntime.captureRuntime(doc);
+	const view = (doc.defaultView as any) || null;
+	for (const module of steamWebpackRuntime.getAllModules(doc)) {
+		const windowStore = (module.exports as any)?.oy?.WindowStore;
+		if (!windowStore) continue;
+		const inst = windowStore.GetWindowInstanceFromWindow?.(view) || windowStore.GamepadUIMainWindowInstance;
+		if (isRouterHistory(inst?.History)) return inst.History;
+	}
+	return null;
+}
+
+/** Opens Steam's partner-event overlay on the current app page through its
+ *  `event_to_show` route state. */
+export function openNativePartnerEvent(doc: Document, steamAppId: number | string, eventGid: string): boolean {
+	const appid = Number(steamAppId);
+	if (!appid || !/^\d+$/.test(eventGid)) return false;
+	try {
+		const history = resolveGamepadRouterHistory(doc);
+		const location = history?.location;
+		if (typeof history?.replace !== 'function' || !location?.pathname) {
+			backendLog(`[NGL][Gamepad] Native partner event overlay unavailable: history=${Boolean(history)} path=${location?.pathname || ''}`);
+			return false;
+		}
+		const state = location.state && typeof location.state === 'object' ? location.state : {};
+		// Replace, not push: closing replaces the entry, so a push left a duplicate.
+		history.replace(location.pathname, { ...state, event_to_show: { appid, eventid: eventGid } });
+		backendLog(`[NGL][Gamepad] Opened native partner event ${eventGid} for app ${appid}`);
+		return true;
+	} catch (e) {
+		backendLog(`[NGL][Gamepad] Native partner event overlay failed: ${e}`);
+		return false;
+	}
+}
+
+const partnerEventIndex = new Map<string, Promise<Array<{ gid: string; title: string; date: number }>>>();
+
+function normalizedEventTitle(value: unknown): string {
+	return String(value || '').toLowerCase().replace(/<[^>]*>/g, ' ').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+}
+
+/** Partner-event id for a news item: from its store URL, else matched
+ *  against the app's partner events by title or post date. */
+export async function resolvePartnerEventGid(steamAppId: number | string, item: { url?: string; title?: string; date?: number }): Promise<string> {
+	const fromUrl = /\/news\/app\/\d+\/view\/(\d+)/.exec(String(item.url || ''))?.[1];
+	if (fromUrl) return fromUrl;
+	const appKey = String(steamAppId);
+	if (!/^\d+$/.test(appKey)) return '';
+	let index = partnerEventIndex.get(appKey);
+	if (!index) {
+		index = fetchPartnerEventsBackend({ steam_app_id: appKey, language: 'english' })
+			.then(raw => (JSON.parse(raw)?.items || [])
+				.map((e: any) => ({ gid: String(e.gid || ''), title: normalizedEventTitle(e.title), date: Number(e.date || 0) }))
+				.filter((e: { gid: string }) => /^\d+$/.test(e.gid)))
+			.catch((): Array<{ gid: string; title: string; date: number }> => []);
+		partnerEventIndex.set(appKey, index);
+	}
+	const events = await index;
+	if (events.length === 0) partnerEventIndex.delete(appKey);
+	const title = normalizedEventTitle(item.title);
+	const date = Number(item.date || 0);
+	const match = events.find(e => title && e.title === title)
+		|| events.find(e => date > 0 && Math.abs(e.date - date) < 6 * 60 * 60);
+	backendLog(`[NGL][Gamepad] Partner event for "${title.slice(0, 40)}" in app ${appKey}: ${match?.gid || 'none'} (${events.length} events)`);
+	return match?.gid || '';
 }
 
 let navContext: any = null;

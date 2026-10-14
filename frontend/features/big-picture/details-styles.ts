@@ -290,10 +290,11 @@ export function ensureBigPictureDetailStyles(doc: Document): void {
 /* Big Picture news / activity card modal. Keep Steam's ModalRoot and DialogButton,
  * but give the content a GamepadUI-scale reading surface instead of the narrow
  * desktop-like partner-event card that exposes raw BBCode and clips actions. */
+/* Fill Steam's ModalRoot frame instead of overflowing it. */
 .gdl-bp-news-modal-shell {
-	width: min(1120px, 82vw) !important;
-	max-width: 1120px !important;
-	min-width: min(760px, 78vw) !important;
+	width: 100% !important;
+	max-width: 100% !important;
+	min-width: 0 !important;
 	box-sizing: border-box !important;
 }
 .gdl-bp-news-modal-window {
@@ -401,10 +402,6 @@ export function ensureBigPictureDetailStyles(doc: Document): void {
 	box-sizing: border-box !important;
 }
 @media (max-width: 1100px) {
-	.gdl-bp-news-modal-shell {
-		width: 90vw !important;
-		min-width: 0 !important;
-	}
 	.gdl-bp-news-modal-content {
 		padding-inline: 22px !important;
 	}

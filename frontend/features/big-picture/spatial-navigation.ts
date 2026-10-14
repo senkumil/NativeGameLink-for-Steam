@@ -7,16 +7,15 @@ export interface SpatialTarget {
 	centerY: number;
 }
 
+// Interactive controls only. Content class patterns (e.g. PartnerEvent,
+// Thumbnail) also matched the text and images inside items.
 export const BIG_PICTURE_FOCUSABLE_SELECTOR = [
 	'[focusable]:not([focusable="false"])',
 	'[data-focusable]:not([data-focusable="false"])',
 	'[class*="Focusable"]:not([focusable="false"])',
 	'[role="button"]', '[role="link"]', '[role="gridcell"]', '[role="tab"]',
 	'[role="menuitem"]', '[role="checkbox"]', 'button', 'a[href]',
-	'input:not([type="hidden"])', 'textarea', 'select', '[tabindex]:not([tabindex="-1"])',
-	'[class*="CarouselItem"]', '[class*="CommunityItem"]', '[class*="Thumbnail"]',
-	'[class*="PostTextEntryArea"]', '[class*="FriendSectionItem"]',
-	'[class*="Card"][class*="Clickable"]', '[class*="Anchor"]', '[class*="PartnerEvent"]',
+	'input:not([type="hidden"])', 'textarea', 'select',
 	'.gdl-bp-friend-card', '.gdl-bp-post-entry-bar', '.gdl-bp-trading-card',
 	'.gdl-bp-badge-action', '.gdl-bp-view-all-achievements', '.gdl-bp-community-item',
 ].join(', ');

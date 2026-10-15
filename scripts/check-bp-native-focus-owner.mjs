@@ -1,3 +1,4 @@
+import './helpers/installed-steam-check.mjs';
 // Native navigation ownership uses installed presentation contracts. No Steam
 // stores, controllers, account APIs or live client windows are executed.
 import assert from 'node:assert/strict';

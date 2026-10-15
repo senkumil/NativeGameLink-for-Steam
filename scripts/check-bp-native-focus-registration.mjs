@@ -1,3 +1,4 @@
+import './helpers/installed-steam-check.mjs';
 // Steam's installed Focusable, hook/context core, navigation node, handle and
 // logical gamepad event modules with the production linked-page input gateway.
 // The navigation controller/Steam account backend are inert fixtures.

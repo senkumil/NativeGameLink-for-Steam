@@ -105,7 +105,8 @@
 		"@types/react-dom": "^19.1.9",
 		"@types/webpack": "^5.28.5",
 		"fengari": "^0.1.5",
-		"luaparse": "^0.3.1"
+		"luaparse": "^0.3.1",
+		"playwright": "1.64.1"
 	},
 	"type": "module",
 	"name": "nativegamelink-for-steam",

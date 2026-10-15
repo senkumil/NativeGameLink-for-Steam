@@ -27,7 +27,7 @@ const sources = Object.fromEntries([
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
 }).outputText]));
 const browser = await chromium.launch({ headless: true,
-  executablePath: 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe' });
+  executablePath: process.env.CLOUD_BROWSER_EXECUTABLE || (process.platform === 'win32' ? 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe' : undefined) });
 try {
   const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
   await page.route('**/*', route => route.abort());

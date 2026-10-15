@@ -13,7 +13,7 @@ const sources = Object.fromEntries(['gamepad-nav', 'navigation-session', 'spatia
   ts.transpileModule(fs.readFileSync(`frontend/features/big-picture/${name}.ts`, 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
   }).outputText]));
-const browser = await chromium.launch({ headless: true, executablePath: 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe' });
+const browser = await chromium.launch({ headless: true, executablePath: process.env.CLOUD_BROWSER_EXECUTABLE || (process.platform === 'win32' ? 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe' : undefined) });
 try {
   const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
   await page.route('**/*', route => route.abort());
@@ -113,6 +113,21 @@ try {
       cleanup(); native = false; cleanup = install('fallback');
       check(nav.getBigPictureNavigationAuthority(document) === 'fallback' && timers.size === 1,
         'Missing native navigation selects exactly one fallback engine');
+      const play = document.createElement('button'); play.className = 'PlayButton'; play.textContent = 'Play';
+      document.body.prepend(play);
+      let nativeLaunches = 0;
+      play.addEventListener('keydown', event => {
+        if (!event.defaultPrevented && (event.key === 'Enter' || event.key === ' ')) nativeLaunches++;
+      });
+      first.focus(); key('Enter'); firstClicks = 0;
+      play.focus();
+      for (const activation of ['Enter', ' ']) {
+        const event = new KeyboardEvent('keydown', { key: activation, bubbles: true, cancelable: true });
+        play.dispatchEvent(event);
+        check(!event.defaultPrevented, 'Native Play activation passes through during the owned navigation cooldown: ' + activation);
+      }
+      check(nativeLaunches === 2 && firstClicks === 0, 'Steam receives both launch keys without activating stale plugin content');
+      play.remove(); now += 600;
       const layout = spatial.collectFocusableLayout(root);
       check(!layout.some(item => item.element === disabled || item.element.id === 'inert-child'
         || item.element.parentElement.getAttribute('aria-hidden') === 'true'), 'Production spatial navigation excludes disabled, inert and hidden ancestor content');

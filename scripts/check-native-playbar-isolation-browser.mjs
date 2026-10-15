@@ -1,3 +1,4 @@
+import './helpers/installed-steam-check.mjs';
 // Scoped native ownership coverage: real app callbacks, early playbar and
 // route-exit cleanup with installed Steam CSS. Achievement polling, Info/link
 // coordinators and the full library runtime are stubs; Steam React is not run.

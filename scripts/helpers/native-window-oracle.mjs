@@ -1,3 +1,4 @@
+import './installed-steam-check.mjs';
 // Inspect installed code, then execute only its pure exact-window lookup in
 // fixture objects. Never initialize the native App/WindowStore/NavStore factory.
 import assert from 'node:assert/strict';

@@ -1,3 +1,4 @@
+import './helpers/installed-steam-check.mjs';
 // Real DOM/rendering/cache/ownership checks, isolated from the user's Steam UI.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';

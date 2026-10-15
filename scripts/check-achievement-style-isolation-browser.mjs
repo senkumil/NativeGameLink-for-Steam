@@ -1,3 +1,4 @@
+import './helpers/installed-steam-check.mjs';
 // Production styles and layout mutations in an isolated Edge document.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';

@@ -1,3 +1,4 @@
+import './helpers/installed-steam-check.mjs';
 // Real Steam-shipped React/ReactDOM, production linked screen, modal leases,
 // route guard and fallback navigation; no live Steam actions or account writes.
 import assert from 'node:assert/strict';

@@ -1,3 +1,4 @@
+import './helpers/installed-steam-check.mjs';
 // Real Chromium + installed Steam CSS: primary links must join the first committed
 // shortcut frame without metadata, and must never authorize a native Steam host.
 import assert from 'node:assert/strict';

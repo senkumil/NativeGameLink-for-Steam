@@ -550,6 +550,9 @@ export function installBigPictureGamepadNavigation(
 		else if (key === 'Tab') dir = event.shiftKey ? 'up' : 'down';
 
 		if (!dir) return;
+		// Steam owns launch activation, including immediately after leaving our
+		// panel. Never let the fallback cooldown swallow Play's Enter/Space.
+		if (!getActiveModal() && isInsidePlaybar() && dir !== 'down') return;
 		pollNavigationSuppressedUntil = Date.now() + 500;
 
 		// Native GamepadUI owns navigation while a text editor is active.

@@ -1,3 +1,4 @@
+import './helpers/installed-steam-check.mjs';
 // Production resolvers against the installed client's factory signatures.
 // Exports/stores are fixtures: no native factory or account API is executed.
 import assert from 'node:assert/strict';

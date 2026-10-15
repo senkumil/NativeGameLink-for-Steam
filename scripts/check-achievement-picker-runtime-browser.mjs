@@ -14,7 +14,7 @@ const source = ts.transpileModule(fs.readFileSync('frontend/features/shortcuts/a
 const errorSource = ts.transpileModule(fs.readFileSync('frontend/features/shortcuts/achievement-sync-errors.ts', 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
 }).outputText;
-const browser = await chromium.launch({ headless: true, executablePath: 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe' });
+const browser = await chromium.launch({ headless: true, executablePath: process.env.CLOUD_BROWSER_EXECUTABLE || (process.platform === 'win32' ? 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe' : undefined) });
 try {
   const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
   await page.setContent('<!doctype html><html><body style="background:#171d25;color:white;font:14px Arial"></body></html>');

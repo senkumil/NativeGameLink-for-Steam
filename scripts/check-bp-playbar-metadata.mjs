@@ -1,3 +1,4 @@
+import './helpers/installed-steam-check.mjs';
 // Production linked header/service in real Edge DOM and installed Steam CSS.
 // Native stores, account data and IPC are fixtures; no Steam account changes.
 import assert from 'node:assert/strict';

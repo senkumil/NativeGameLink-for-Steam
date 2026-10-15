@@ -1,3 +1,4 @@
+import './helpers/installed-steam-check.mjs';
 // Real runtime/loading/layout/renderer/activity/feed integration. Remote Store,
 // social and optional sidebar services are fixtures; Steam React is not run.
 import assert from 'node:assert/strict';

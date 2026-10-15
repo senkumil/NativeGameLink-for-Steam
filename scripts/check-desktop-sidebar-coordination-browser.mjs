@@ -1,3 +1,4 @@
+import './helpers/installed-steam-check.mjs';
 // Production desktop column/section coordination against installed Steam CSS.
 // Routes, controller SDK and content payloads are fixtures; no account writes.
 import assert from 'node:assert/strict';

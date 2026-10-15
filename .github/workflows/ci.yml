@@ -32,7 +32,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Install Chromium for portable browser tests
+        run: npx playwright install --with-deps chromium
+
       - name: Run full verification and production build
+        env:
+          NGL_INSTALLED_STEAM_CHECKS: unavailable
         run: npm run verify
 
       - name: Prepare clean/source release staging

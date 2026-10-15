@@ -16,13 +16,14 @@ import {
 	broadcastOptimisticAchievementUpdate,
 	cacheLocalAchievements,
 	ensureLocalPlaybarStat,
-	getCachedLocalAchievementsForGame,
+	getCachedLocalAchievementsForShortcut,
 	refreshLocalAchievementUI,
 	resetLocalAchievementToastBaseline,
 	setNextLaunchAchievementReplayEnabled,
 } from '../achievements/runtime';
 import { gdlText, steamLanguageSync } from '../../steam/localization';
 import { openAchievementPickerModal } from './achievement-picker-modal';
+import { steamSyncFailureMessage } from './achievement-sync-errors';
 
 const achievementOptionsMemoryCache = new Map<string, GameAchievementOptions>();
 const achievementPathMemoryCache = new Map<string, { configured?: boolean; path?: string; usable?: boolean }>();
@@ -402,7 +403,7 @@ export function bindShortcutAchievementSettings(context: ShortcutAchievementSett
 		if (!targetSteamAppId || !/^\d+$/.test(targetSteamAppId)) return;
 		const targetShortcutAppId = context.shortcutAppId() || targetSteamAppId;
 		const totalUnlocked = Math.max(0, offlineCount) + Math.max(0, onlineCount);
-		const base = getCachedLocalAchievementsForGame(targetSteamAppId, targetShortcutAppId);
+		const base = getCachedLocalAchievementsForShortcut(targetSteamAppId, targetShortcutAppId);
 		const total = base?.total || totalAchievements || (offlineAchievementsCount + onlineAchievementsCount) || 1;
 
 		let offEarned = 0;
@@ -669,16 +670,19 @@ export function bindShortcutAchievementSettings(context: ShortcutAchievementSett
 								lock: lockList,
 							}),
 						});
-						const res = parseIpcObject<{ ok?: boolean; unlocked_count?: number; locked_count?: number; error?: string }>(rawSync);
+						const res = parseIpcObject<{ ok?: boolean; noop?: boolean; unlocked_count?: number; locked_count?: number; error?: string }>(rawSync);
 						if (!res || !res.ok) {
 							throw new Error(res?.error || 'sync_failed');
 						}
-						optionsStatus.textContent = gdlText('game_achievement_picker_sync_success', 'Achievements synced successfully with your Steam account.');
+						optionsStatus.textContent = res.noop
+							? gdlText('game_achievement_picker_sync_no_changes', 'The selection already matches your Steam account. No changes were needed.')
+							: gdlText('game_achievement_picker_sync_success', 'Achievements synced successfully with your Steam account.');
 						optionsStatus.style.color = '#66c0f4';
-						refreshCurrentGame();
-					} catch {
-						optionsStatus.textContent = gdlText('game_achievement_picker_sync_failed', 'Failed to sync achievements with your Steam account (ensure the game is owned and Steam is running).');
+						if (!res.noop) refreshCurrentGame();
+					} catch (error) {
+						optionsStatus.textContent = steamSyncFailureMessage(error);
 						optionsStatus.style.color = '#d94126';
+						throw error;
 					}
 				},
 			});

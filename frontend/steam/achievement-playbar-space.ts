@@ -33,7 +33,7 @@ function hasInformationControl(doc: Document, buttons: HTMLElement): boolean {
  * control before metadata creates it, so achievements use their final width
  * from the first paint. Only the plugin's own stat receives this reservation. */
 export function syncAchievementPlaybarSpace(doc: Document): void {
-	const module = PLAYBAR_CLASS_MODULE();
+	const module = PLAYBAR_CLASS_MODULE(doc);
 	const classes = module.classes;
 	// The native MenuButton is 32px with a 10px trailing margin. The compatibility
 	// Info control is 40px and has no native margin when class discovery fails.

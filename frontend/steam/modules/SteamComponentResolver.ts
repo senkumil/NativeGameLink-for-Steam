@@ -1,4 +1,3 @@
-import { findTopAchievementCandidates, findTopAchievementSectionCandidates } from './signatures/achievements';
 import { findTopPlaybarCandidates } from './signatures/playbar';
 import { findTopGameInfoCandidates } from './signatures/gameInfo';
 import { findTopActivityCandidates } from './signatures/activity';
@@ -6,8 +5,6 @@ import { findTopNewsCandidates } from './signatures/news';
 import { findTopLinksCandidates } from './signatures/links';
 
 export type KnownSteamComponent =
-	| 'DesktopAchievementItem'
-	| 'DesktopAchievementSection'
 	| 'DesktopPlayButton'
 	| 'DesktopGameInfo'
 	| 'DesktopActivityCard'
@@ -22,16 +19,6 @@ class SteamComponentResolver {
 
 		let resolved: any = null;
 		switch (name) {
-			case 'DesktopAchievementItem': {
-				const best = findTopAchievementCandidates(1)[0];
-				resolved = best?.component || null;
-				break;
-			}
-			case 'DesktopAchievementSection': {
-				const best = findTopAchievementSectionCandidates(1)[0];
-				resolved = best?.component || null;
-				break;
-			}
 			case 'DesktopPlayButton': {
 				const best = findTopPlaybarCandidates(1)[0];
 				resolved = best?.component || null;
@@ -67,8 +54,6 @@ class SteamComponentResolver {
 
 	public prewarmComponents(): void {
 		const known: KnownSteamComponent[] = [
-			'DesktopAchievementItem',
-			'DesktopAchievementSection',
 			'DesktopPlayButton',
 			'DesktopGameInfo',
 			'DesktopActivityCard',

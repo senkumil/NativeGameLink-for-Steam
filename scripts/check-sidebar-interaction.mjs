@@ -40,7 +40,7 @@ class Element extends Target {
   }
 }
 function createClock() {
-  let time = 0, next = 0;
+  let time = 1000, next = 0;
   const timers = new Map();
   const setTimeout = (callback, delay = 0) => {
     const id = ++next; timers.set(id, { callback, due: time + Number(delay) }); return id;
@@ -81,7 +81,18 @@ function createDocument(clock) {
   for (const element of [sidebar, row, icon, details, detachedRow]) element.ownerDocument = doc;
   doc.frame = () => { const callbacks = [...frames.values()]; frames.clear(); callbacks.forEach(callback => callback(clock.now())); };
   const fire = (type, target = icon) => doc.fire(type, { target });
-  return { doc, view, sidebar, row, icon, details, detachedRow, detachedText, frames, fire };
+  // Runtime capture owns its own unload listener. Take that existing baseline
+  // before installing interaction so teardown must restore the exact callbacks.
+  webpackRuntime.captureRuntime(doc);
+  return { doc, view, sidebar, row, icon, details, detachedRow, detachedText, frames, fire,
+    listenersBefore: [listenerSnapshot(doc), listenerSnapshot(view)] };
+}
+function listenerSnapshot(target) {
+  return [...target.listeners].flatMap(([type, callbacks]) => [...callbacks.keys()].map(callback => [type, callback]));
+}
+function listenersRestored(scope, message) {
+  assertions++;
+  assert.deepEqual([listenerSnapshot(scope.doc), listenerSnapshot(scope.view)], scope.listenersBefore, message);
 }
 function loadModules(clock) {
   const cache = new Map();
@@ -93,9 +104,10 @@ function loadModules(clock) {
     const context = vm.createContext({ exports, console, Date: FakeDate, performance: { now: clock.now },
       setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout, Element, HTMLElement: Element,
       require: request => {
-        if (request === '@steambrew/client') return { findClassModule: predicate => classModules.find(predicate) };
+        if (request === '@steambrew/client') return { modules: new Map(classModules.map((exports, id) => [String(id), exports])) };
         if (!request.startsWith('.')) throw new Error(`Unexpected dependency ${request} in ${filename}`);
         const resolved = path.resolve(path.dirname(absolute), request);
+        if (resolved === path.resolve('frontend/api/backend')) return { backendLog() {} };
         return load(fs.existsSync(resolved) ? resolved : `${resolved}.ts`);
       },
     });
@@ -105,11 +117,12 @@ function loadModules(clock) {
     return exports;
   }
   return { interaction: load('frontend/steam/sidebar-interaction.ts'),
-    sidebar: load('frontend/steam/library-sidebar.ts'), paint: load('frontend/core/after-native-paint.ts') };
+    sidebar: load('frontend/steam/library-sidebar.ts'), paint: load('frontend/core/after-native-paint.ts'),
+    webpackRuntime: load('frontend/steam/modules/SteamWebpackRuntime.ts').steamWebpackRuntime };
 }
 const flush = async () => { for (let index = 0; index < 10; index++) await Promise.resolve(); };
 const clock = createClock();
-const { interaction, sidebar, paint } = loadModules(clock);
+const { interaction, sidebar, paint, webpackRuntime } = loadModules(clock);
 const { installLibrarySidebarInteraction: install, runWhenLibrarySidebarIdle: idle, cancelLibrarySidebarWork: cancel } = interaction;
 const scope = createDocument(clock);
 const dispose = install(scope.doc);
@@ -228,7 +241,7 @@ for (const stateChange of ['closed', 'replaced-document', 'replaced-view']) {
   if (stateChange === 'replaced-view') disappearing.doc.defaultView = {};
   clock.tick(180); await scheduled;
   equal(obsolete, 0, `${stateChange} cancels queued callbacks before they reach an obsolete Steam document`);
-  equal(disappearing.doc.listenerCount + disappearing.view.listenerCount, 0, `${stateChange} releases interaction listeners`);
+  listenersRestored(disappearing, `${stateChange} releases interaction listeners`);
   disappearingDispose();
 }
 
@@ -275,7 +288,7 @@ let afterDispose = 0;
 const discarded = idle(scope.doc, 'dispose', () => { afterDispose++; });
 dispose(); await discarded;
 equal(clock.timers.size, 0, 'disposal removes the quiet timer');
-equal(scope.doc.listenerCount + scope.view.listenerCount, 0, 'disposal removes document and window event listeners');
+listenersRestored(scope, 'disposal removes document and window event listeners');
 clock.tick(1000); await flush();
 equal(afterDispose, 0, 'disposed callbacks never mutate a detached Steam document');
 dispose();

@@ -7,7 +7,8 @@ import ts from 'typescript';
 
 const steamUi = process.env.STEAM_UI_DIR || 'C:/Program Files (x86)/Steam/steamui';
 const chunkPath = path.join(steamUi, 'chunk~2dcc5aaf7.js');
-const cssPath = path.join(steamUi, 'css/chunk~2dcc5aaf7.css');
+const cssPath = process.env.STEAM_PLAYBAR_CSS || ['css/sp.css', 'css/chunk~2dcc5aaf7.css']
+  .map(filename => path.join(steamUi, filename)).find(filename => fs.existsSync(filename));
 assert.ok(fs.existsSync(chunkPath), `Installed Steam library chunk is required: ${chunkPath}`);
 const chunk = fs.readFileSync(chunkPath, 'utf8');
 let assertions = 0;
@@ -55,7 +56,9 @@ const NativeModalRoot = Symbol('Steam ModalRoot');
 const NativeFocusContainer = Symbol('Steam Focusable');
 const NativeDialogButton = Symbol('Steam 64608.jn');
 const jsx = (type, props, key) => ({ type, props, key });
-const react = { useRef: current => ({ current }), cloneElement: (element, props) => ({ ...element, props: { ...element.props, ...props } }) };
+const react = { useRef: current => ({ current }),
+  createElement: (type, props, ...children) => ({ type, props: { ...props, children: children.length === 1 ? children[0] : children } }),
+  cloneElement: (element, props) => ({ ...element, props: { ...element.props, ...props } }) };
 const nativeContext = vm.createContext({ window: globalView, console: { error: (...args) => errors.push(args) } });
 
 function evaluateFactory(id, require) {
@@ -159,7 +162,7 @@ const artworkDependencies = {
   62540: { jsx, jsxs: jsx }, 63696: react, 44846: { IDH: () => false },
   64608: { jn: NativeDialogButton }, 50376: {}, 25517: classes, 36934: {},
   31084: {}, 88750: {}, 8573: {}, 48289: {}, 36464: {}, 46108: { we: token => token },
-  10606: { x_: NativeModalRoot }, 68608: {}, 33867: {},
+  10606: { x_: NativeModalRoot }, 68608: {}, 33867: {}, 34792: {},
   13869: { mK: (element, view, options) => { calls.push({ element, view, options }); return nativeModal.mK(element, view, options); } },
   60142: {}, 54644: {}, 72476: { Qn: () => false, TS: { LAUNCHER_TYPE: 0 } },
   69164: { Z: NativeFocusContainer }, 61657: { pR: { DIR_UP: 1, DIR_DOWN: 2 } }, 11010: {}, 11131: {},

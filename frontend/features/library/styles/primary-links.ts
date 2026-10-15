@@ -8,7 +8,7 @@ export function ensurePrimaryLinksStyles(doc: Document): void {
 			pointer-events: none !important;
 		}
 		#gdl-link-bar {
-			margin: 11px 20px 8px 20px !important;
+			margin: 11px 20px var(--gdl-native-links-bottom-gap, 36px) 20px !important;
 			width: calc(100% - 40px) !important;
 			box-sizing: border-box !important;
 			position: relative !important;

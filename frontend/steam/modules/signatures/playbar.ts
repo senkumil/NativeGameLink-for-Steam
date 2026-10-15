@@ -9,8 +9,8 @@ export interface PlaybarCandidate {
 	matchedSignatures: string[];
 }
 
-export function findTopPlaybarCandidates(maxResults = 3): PlaybarCandidate[] {
-	const modules = steamWebpackRuntime.getAllModules();
+export function findTopPlaybarCandidates(maxResults = 3, doc?: Document): PlaybarCandidate[] {
+	const modules = steamWebpackRuntime.getAllModules(doc);
 	const candidates: PlaybarCandidate[] = [];
 
 	for (const mod of modules) {

@@ -2,12 +2,16 @@ import type { NewsItem } from '../../../domain/types';
 import { DisposableRegistry } from '../../../core/disposables';
 import { escapeHtml } from '../../../core/text';
 import { POST_CLASSES } from '../../../steam/css';
+import { cssModuleTokens } from '../../../steam/native-dom';
 import { gdlText } from '../../../steam/localization';
 import { postStatusUpdate } from '../../../steam/social';
 import { steamUIModeService } from '../../../steam/ui/SteamUIModeService';
 import { showSteamVirtualKeyboard, hideSteamVirtualKeyboard } from '../../../steam/gamepad/virtual-keyboard';
+import { routedSteamAppId } from '../native-route';
+import { getCommittedShortcutSteamAppId } from '../../shortcuts/registry';
 import {
 	getCurrentSteamUser,
+	getRetainedActivityNews,
 	applyUnifiedActivityFeed,
 	saveLocalActivityPost,
 	setupPostDeleteHandlers,
@@ -39,6 +43,11 @@ export function setupStatusPostBox(
 	if (!statusArea) return;
 
 	const isGamepad = steamUIModeService.isGamepadUI(doc);
+	const ownsTarget = (): boolean => {
+		const route = routedSteamAppId(doc);
+		return wrapper.isConnected && (route === null ? isGamepad : route >= 2147483648
+			&& String(route) === String(shortcutAppId) && getCommittedShortcutSteamAppId(route) === steamAppId);
+	};
 
 	const lifecycle = new DisposableRegistry(() => {
 		doc.getElementById('gdl-emoticon-picker')?.remove();
@@ -46,13 +55,15 @@ export function setupStatusPostBox(
 	});
 	statusComposerLifecycles.set(doc, lifecycle);
 
-	const activeClass = POST_CLASSES().Active;
-	const enabledClass = POST_CLASSES().Enabled;
+	// Live Steam CSS modules can compose a hash with a semantic class name.
+	// DOMTokenList accepts one token at a time; a whole export aborts mounting.
+	const activeClasses = cssModuleTokens(POST_CLASSES(doc).Active);
+	const enabledClasses = cssModuleTokens(POST_CLASSES(doc).Enabled);
 	const container = (wrapper.querySelector('.gdl-status-box-container') as HTMLElement | null) || wrapper;
 	const syncPostButtonState = (): void => {
 		if (!postButton) return;
 		const enabled = statusArea.value.trim().length > 0;
-		postButton.classList.toggle(enabledClass, enabled);
+		for (const token of enabledClasses) postButton.classList.toggle(token, enabled);
 		postButton.classList.toggle('is-enabled', enabled);
 		postButton.toggleAttribute('data-gdl-enabled', enabled);
 		postButton.disabled = false;
@@ -76,12 +87,13 @@ export function setupStatusPostBox(
 	};
 
 	const setActive = (active: boolean): void => {
-		if (statusRow) statusRow.classList.toggle(activeClass, active);
+		if (statusRow) for (const token of activeClasses) statusRow.classList.toggle(token, active);
 		container.classList.toggle('gdl-composer-active', active);
 		autoResizeTextarea();
 	};
 
 	const submitPost = (): void => {
+		if (!ownsTarget()) return;
 		const text = statusArea.value.trim();
 		if (!text) return;
 		const user = getCurrentSteamUser(doc);
@@ -103,9 +115,10 @@ export function setupStatusPostBox(
 
 		const feedContainer = doc.getElementById('gdl-activity-feed');
 		if (feedContainer) {
+			const currentNews = getRetainedActivityNews(steamAppId) || newsItems;
 			delete feedContainer.dataset.gdlFeedSignature;
-			applyUnifiedActivityFeed(feedContainer, steamAppId, shortcutAppId, newsItems, fallbackImage);
-			setupPostDeleteHandlers(doc, steamAppId, shortcutAppId, newsItems, fallbackImage);
+			applyUnifiedActivityFeed(feedContainer, steamAppId, shortcutAppId, currentNews, fallbackImage);
+			setupPostDeleteHandlers(doc, steamAppId, shortcutAppId, currentNews, fallbackImage);
 		}
 	};
 
@@ -164,6 +177,7 @@ export function setupStatusPostBox(
 	// the browser to cancel the first click instead of following the link.
 	if (latestNewsButton) {
 		lifecycle.listen(latestNewsButton, 'mousedown', event => event.preventDefault());
+		lifecycle.listen(latestNewsButton, 'click', event => { if (!ownsTarget()) { event.preventDefault(); event.stopImmediatePropagation(); } }, true);
 	}
 
 	if (emoticonButton) {

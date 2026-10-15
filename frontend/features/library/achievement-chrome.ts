@@ -14,6 +14,15 @@ export interface LinkedAchievementChromeContext {
 	isCurrent: () => boolean;
 }
 
+/** Warm only this installation's snapshot; a Steam alias may describe another
+ * shortcut linked to the same public AppID and cannot satisfy this request. */
+export async function warmLocalAchievements(steamAppId: string, shortcutAppId: string | null): Promise<void> {
+	if (getCachedLocalAchievementsForShortcut(steamAppId, shortcutAppId)) return;
+	const data = await fetchLocalAchievementData(steamAppId, { stateAppId: shortcutAppId });
+	if (data?.found && String(data.metadata_appid || data.appid) === steamAppId
+		&& Array.isArray(data.achievements) && data.total > 0) cacheLocalAchievements(data, steamAppId, shortcutAppId);
+}
+
 /** All cached, IPC and native-cache paths share the same final ownership guard. */
 export async function finalizeLinkedAchievements(doc: Document, context: LinkedAchievementChromeContext): Promise<void> {
 	const target = linkedAchievementTarget(doc);

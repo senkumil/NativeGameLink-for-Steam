@@ -8,5 +8,8 @@ export function isEditableTextTarget(element: Element | null): boolean {
 		const type = (element.getAttribute('type') || 'text').toLowerCase();
 		return !['button', 'checkbox', 'radio', 'range', 'submit', 'reset', 'file', 'color', 'image'].includes(type);
 	}
-	return element.getAttribute('contenteditable') === 'true' || element.getAttribute('role') === 'textbox';
+	return element.getAttribute('contenteditable') === 'true'
+		|| (element as HTMLElement).isContentEditable === true
+		|| Boolean(element.closest('[contenteditable="true"], [contenteditable="plaintext-only"], [role="textbox"]'))
+		|| element.getAttribute('role') === 'textbox';
 }

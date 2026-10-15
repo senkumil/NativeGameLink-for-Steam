@@ -1,6 +1,7 @@
 import type { LocalAchievementItem } from '../../domain/types';
 import { escapeHtml } from '../../core/text';
 import { gdlText } from '../../steam/localization';
+import { steamSyncFailureMessage } from './achievement-sync-errors';
 
 export interface AchievementPickerModalOptions {
 	doc: Document;
@@ -23,6 +24,15 @@ export function openAchievementPickerModal(options: AchievementPickerModalOption
 
 	const selectedSet = new Set<string>(initialSelectedNames);
 	let sortMode: 'default' | 'online_first' | 'offline_first' = 'default';
+	let actionInFlight = false;
+	const steamOnly = Boolean(onSyncSteam && !onSave && !onExport);
+	const isReadOnly = (item: LocalAchievementItem): boolean => steamOnly && item.client_writable === false;
+	const selectEditable = (select: (item: LocalAchievementItem) => boolean): void => {
+		for (const item of items) {
+			if (isReadOnly(item)) continue;
+			if (select(item)) selectedSet.add(item.name); else selectedSet.delete(item.name);
+		}
+	};
 
 	const overlay = doc.createElement('div');
 	overlay.id = 'gdl-achievement-picker-overlay';
@@ -156,6 +166,7 @@ export function openAchievementPickerModal(options: AchievementPickerModalOption
 				<input class="gdl-picker-export-path" type="text" value="${escapeHtml(initialExportPath || '')}" placeholder="${escapeHtml(gdlText('game_achievement_path_placeholder', 'Example: D:\\Game\\achievements.json'))}" style="flex:1;min-width:0;padding:6px 10px;background:#10141a;border:1px solid rgba(255,255,255,0.12);border-radius:2px;color:#dcdedf;font-size:12px;outline:none;" />
 			</div>
 			` : ''}
+			<div class="gdl-picker-sync-error" role="status" hidden style="padding:8px 20px;color:#ff8b83;background:#161d27;"></div>
 			<div style="padding:12px 20px;border-top:1px solid rgba(255,255,255,0.08);background:#1e2837;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
 				<div class="gdl-picker-summary" style="font-size:12.5px;font-weight:500;color:#66c0f4;"></div>
 				<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
@@ -182,12 +193,22 @@ export function openAchievementPickerModal(options: AchievementPickerModalOption
 	const saveBtn = overlay.querySelector('.gdl-picker-save') as HTMLButtonElement | null;
 	const exportBtn = overlay.querySelector('.gdl-picker-export') as HTMLButtonElement | null;
 	const syncSteamBtn = overlay.querySelector('.gdl-picker-sync-steam') as HTMLButtonElement | null;
+	const syncError = overlay.querySelector('.gdl-picker-sync-error') as HTMLElement;
 	const cancelBtn = overlay.querySelector('.gdl-picker-cancel') as HTMLButtonElement;
 	const closeBtn = overlay.querySelector('.gdl-picker-close') as HTMLButtonElement;
 	const selectAllBtn = overlay.querySelector('.gdl-picker-btn-all') as HTMLButtonElement;
 	const deselectAllBtn = overlay.querySelector('.gdl-picker-btn-none') as HTMLButtonElement;
 	const selectOfflineBtn = overlay.querySelector('.gdl-picker-btn-offline') as HTMLButtonElement | null;
 	const selectOnlineBtn = overlay.querySelector('.gdl-picker-btn-online') as HTMLButtonElement | null;
+	const rowCache = new Map<string, { row: HTMLElement; update: () => void }>();
+	const setBusy = (busy: boolean): void => {
+		actionInFlight = busy;
+		for (const control of [saveBtn, exportBtn, syncSteamBtn, selectAllBtn, deselectAllBtn,
+			selectOfflineBtn, selectOnlineBtn, searchEl, exportPathInput]) {
+			if (control) control.disabled = busy;
+		}
+		listEl.setAttribute('aria-busy', String(busy));
+	};
 
 	const updateFilterButtons = (): void => {
 		selectAllBtn.classList.remove('active-filter');
@@ -240,12 +261,15 @@ export function openAchievementPickerModal(options: AchievementPickerModalOption
 			return;
 		}
 
-		listEl.replaceChildren();
+		const visibleRows: HTMLElement[] = [];
 		for (const item of visible) {
+			const cached = rowCache.get(item.name);
+			if (cached) { cached.update(); visibleRows.push(cached.row); continue; }
 			const isSelected = selectedSet.has(item.name);
 			const row = doc.createElement('div');
 			row.className = `gdl-picker-row${isSelected ? ' is-selected' : ''}`;
 			row.style.cssText = `display:flex;align-items:center;gap:14px;padding:8px 12px;border-radius:3px;cursor:pointer;border:1px solid ${isSelected ? 'rgba(26,159,255,0.45)' : 'rgba(255,255,255,0.04)'};background:${isSelected ? 'rgba(26,159,255,0.12)' : 'rgba(0,0,0,0.25)'};`;
+			if (isReadOnly(item)) { row.setAttribute('aria-disabled', 'true'); row.style.cursor = 'default'; }
 
 			const iconImg = doc.createElement('img');
 			iconImg.style.cssText = `width:44px;height:44px;flex:0 0 44px;object-fit:contain;border-radius:2px;transition:filter .15s ease,opacity .15s ease;${isSelected ? 'opacity:1;filter:none;box-shadow:0 0 6px rgba(26,159,255,0.4);' : 'opacity:0.35;filter:grayscale(100%);'}`;
@@ -270,6 +294,12 @@ export function openAchievementPickerModal(options: AchievementPickerModalOption
 				badge.textContent = 'Online';
 				titleRow.appendChild(badge);
 			}
+			if (item.client_writable === false) {
+				const badge = doc.createElement('span');
+				badge.style.cssText = 'font-size:10px;padding:1px 6px;border-radius:2px;background:rgba(214,178,76,0.15);color:#d6b24c;';
+				badge.textContent = gdlText('game_achievement_protected_badge', 'Protected by Steam');
+				titleRow.appendChild(badge);
+			}
 
 			const descText = doc.createElement('div');
 			descText.style.cssText = `font-size:11.5px;color:${isSelected ? '#acb2b8' : '#68737f'};margin-top:2px;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;`;
@@ -287,16 +317,42 @@ export function openAchievementPickerModal(options: AchievementPickerModalOption
 			row.appendChild(info);
 			row.appendChild(checkIndicator);
 
+			const update = (): void => {
+				const selected = selectedSet.has(item.name);
+				row.classList.toggle('is-selected', selected);
+				row.style.borderColor = selected ? 'rgba(26,159,255,0.45)' : 'rgba(255,255,255,0.04)';
+				row.style.background = selected ? 'rgba(26,159,255,0.12)' : 'rgba(0,0,0,0.25)';
+				const icon = selected ? (item.icon || item.icon_gray || '') : (item.icon_gray || item.icon || '');
+				if (iconImg.getAttribute('src') !== icon) iconImg.setAttribute('src', icon);
+				iconImg.style.opacity = selected ? '1' : '0.35';
+				iconImg.style.filter = selected ? 'none' : 'grayscale(100%)';
+				iconImg.style.boxShadow = selected ? '0 0 6px rgba(26,159,255,0.4)' : 'none';
+				titleText.style.color = selected ? '#ffffff' : '#8f98a0';
+				descText.style.color = selected ? '#acb2b8' : '#68737f';
+				checkIndicator.classList.toggle('gdl-check-active', selected);
+				checkIndicator.style.borderColor = selected ? '#1a9fff' : 'rgba(255,255,255,0.2)';
+				checkIndicator.style.background = selected ? '#1a9fff' : 'transparent';
+				const checkText = selected ? '✓' : '';
+				if (checkIndicator.textContent !== checkText) checkIndicator.textContent = checkText;
+			};
 			row.addEventListener('click', () => {
+				if (actionInFlight || isReadOnly(item)) return;
 				if (selectedSet.has(item.name)) {
 					selectedSet.delete(item.name);
 				} else {
 					selectedSet.add(item.name);
 				}
-				renderList();
+				if (sortMode === 'default') { update(); updateSummary(); updateFilterButtons(); }
+				else renderList();
 			});
-
-			listEl.appendChild(row);
+			rowCache.set(item.name, { row, update });
+			visibleRows.push(row);
+		}
+		// Selection changes update the existing icons and rows. Filtering/sorting
+		// only moves those same nodes, avoiding hundreds of new image elements.
+		const mountedRows = Array.from(listEl.children);
+		if (mountedRows.length !== visibleRows.length || visibleRows.some((row, index) => mountedRows[index] !== row)) {
+			listEl.replaceChildren(...visibleRows);
 		}
 		updateSummary();
 		updateFilterButtons();
@@ -304,6 +360,7 @@ export function openAchievementPickerModal(options: AchievementPickerModalOption
 
 	const close = (): void => {
 		overlay.remove();
+		rowCache.clear();
 	};
 
 	closeBtn.addEventListener('click', close);
@@ -315,78 +372,76 @@ export function openAchievementPickerModal(options: AchievementPickerModalOption
 		if ((event as KeyboardEvent).key === 'Escape') close();
 	});
 
-	searchEl.addEventListener('input', renderList);
+	searchEl.addEventListener('input', () => { if (!actionInFlight) renderList(); });
 
 	selectAllBtn.addEventListener('click', () => {
+		if (actionInFlight) return;
 		sortMode = 'default';
-		for (const item of items) selectedSet.add(item.name);
+		selectEditable(() => true);
 		renderList();
 	});
 
 	deselectAllBtn.addEventListener('click', () => {
+		if (actionInFlight) return;
 		sortMode = 'default';
-		selectedSet.clear();
+		selectEditable(() => false);
 		renderList();
 	});
 
 	selectOfflineBtn?.addEventListener('click', () => {
+		if (actionInFlight) return;
 		sortMode = 'offline_first';
-		selectedSet.clear();
-		for (const item of items) {
-			if (!item.is_online) selectedSet.add(item.name);
-		}
+		selectEditable(item => !item.is_online);
 		renderList();
 		listEl.scrollTop = 0;
 	});
 
 	selectOnlineBtn?.addEventListener('click', () => {
+		if (actionInFlight) return;
 		sortMode = 'online_first';
-		selectedSet.clear();
-		for (const item of items) {
-			if (item.is_online) selectedSet.add(item.name);
-		}
+		selectEditable(item => Boolean(item.is_online));
 		renderList();
 		listEl.scrollTop = 0;
 	});
 
 	saveBtn?.addEventListener('click', async () => {
-		if (!onSave) return;
-		saveBtn.disabled = true;
+		if (!onSave || actionInFlight) return;
+		setBusy(true);
 		saveBtn.textContent = gdlText('game_achievement_options_saving', 'Saving...');
 		try {
 			await onSave(Array.from(selectedSet));
 			close();
 		} catch {
-			saveBtn.disabled = false;
 			saveBtn.textContent = gdlText('game_achievement_picker_save', 'Save and apply');
-		}
+		} finally { setBusy(false); }
 	});
 
 	exportBtn?.addEventListener('click', async () => {
-		if (!onExport) return;
+		if (!onExport || actionInFlight) return;
 		const targetPath = (exportPathInput?.value || '').trim();
-		exportBtn.disabled = true;
+		setBusy(true);
 		exportBtn.textContent = gdlText('game_achievement_picker_exporting', 'Exporting and merging achievements...');
 		try {
 			await onExport(Array.from(selectedSet), targetPath || undefined);
 			close();
 		} catch {
-			exportBtn.disabled = false;
 			exportBtn.textContent = gdlText('game_achievement_picker_export', 'Export to achievements.json (Smart merge)');
-		}
+		} finally { setBusy(false); }
 	});
 
 	syncSteamBtn?.addEventListener('click', async () => {
-		if (!onSyncSteam) return;
-		syncSteamBtn.disabled = true;
+		if (!onSyncSteam || actionInFlight) return;
+		syncError.hidden = true;
+		setBusy(true);
 		syncSteamBtn.textContent = gdlText('game_achievement_picker_syncing', 'Syncing with Steam servers...');
 		try {
 			await onSyncSteam(Array.from(selectedSet));
 			close();
-		} catch {
-			syncSteamBtn.disabled = false;
+		} catch (error) {
+			syncError.hidden = false;
+			syncError.textContent = steamSyncFailureMessage(error);
 			syncSteamBtn.textContent = `☁️ ${gdlText('game_achievement_picker_sync_steam', 'Sync with Steam Account')}`;
-		}
+		} finally { setBusy(false); }
 	});
 
 	renderList();

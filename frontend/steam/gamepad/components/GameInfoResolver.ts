@@ -1,37 +1,36 @@
-﻿import { backendLog } from '../../../api/backend';
+import { DocumentRuntimeCache } from '../runtime-cache';
+import { backendLog } from '../../../api/backend';
 import { findTopGameInfoCandidates, type GameInfoCandidate } from '../../modules/signatures/gameInfo';
 import { gamepadCapabilities } from '../GamepadCapabilities';
 
 class GameInfoResolver {
-	private cachedCandidate: GameInfoCandidate | null = null;
-	private resolved = false;
+	private states = new DocumentRuntimeCache(() => ({ cachedCandidate: null as GameInfoCandidate | null }));
 
-	public resolve(): React.ComponentType<any> | null {
-		if (this.resolved && this.cachedCandidate?.component) {
-			return this.cachedCandidate.component;
+	public resolve(doc?: Document): React.ComponentType<any> | null {
+		const state = this.states.get(doc);
+		if (state.cachedCandidate?.component) {
+			return state.cachedCandidate.component;
 		}
 
 		try {
-			const candidates = findTopGameInfoCandidates(1);
+			const candidates = findTopGameInfoCandidates(1, doc);
 			if (candidates.length > 0 && candidates[0].component) {
-				this.cachedCandidate = candidates[0];
-				this.resolved = true;
-				gamepadCapabilities.setAvailable('gameInfo', true);
-				backendLog(`[NGL][Gamepad][GameInfo] Resolved native Steam game info component from moduleId: ${this.cachedCandidate.moduleId}`);
-				return this.cachedCandidate.component;
+				state.cachedCandidate = candidates[0];
+				gamepadCapabilities.setAvailable('gameInfo', true, doc);
+				backendLog(`[NGL][Gamepad][GameInfo] Resolved native Steam game info component from moduleId: ${state.cachedCandidate.moduleId}`);
+				return state.cachedCandidate.component;
 			}
 		} catch (error) {
 			backendLog(`[NGL][Gamepad][GameInfo] Error resolving game info component: ${error}`);
-			gamepadCapabilities.recordFailure('gameInfo', error);
+			gamepadCapabilities.recordFailure('gameInfo', error, doc);
 		}
 
-		gamepadCapabilities.setAvailable('gameInfo', false);
+		gamepadCapabilities.setAvailable('gameInfo', false, doc);
 		return null;
 	}
 
-	public invalidate(): void {
-		this.cachedCandidate = null;
-		this.resolved = false;
+	public invalidate(doc?: Document): void {
+		this.states.clear(doc);
 	}
 }
 

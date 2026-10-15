@@ -24,8 +24,6 @@ export interface PendingLinkJob {
 	steamAppId: string;
 	skipLauncher: boolean;
 	existingLaunchOptions: string;
-	trackingExecutable: string;
-	trackingStartDir: string;
 	shortcutExecutable: string;
 	repairResources?: boolean;
 	attempts: number;
@@ -52,7 +50,17 @@ function readJobs(): PendingLinkJob[] {
 			.map(job => {
 				const sameSessionStage = job.status === 'staged' && job.sessionId === SESSION_ID;
 				return {
-					...job,
+					// Read only supported fields so retired options cannot survive a
+					// persisted retry created by an older plugin version.
+					id: job.id,
+					title: job.title,
+					shortcutAppId: job.shortcutAppId,
+					steamAppId: job.steamAppId,
+					skipLauncher: job.skipLauncher,
+					existingLaunchOptions: job.existingLaunchOptions,
+					sessionId: job.sessionId,
+					createdAt: job.createdAt,
+					lastError: job.lastError,
 					shortcutExecutable: String(job.shortcutExecutable || ''),
 					repairResources: Boolean(job.repairResources),
 					// A staged foreground intent is inert only in the session that created it.
@@ -294,7 +302,6 @@ export async function processPendingLinkJobs(targetDoc?: Document | null): Promi
 					doc: targetDoc || shortcutRuntimeHost().getMainWindowDoc(),
 					title: job.title, shortcutAppId: job.shortcutAppId, steamAppId: job.steamAppId,
 					skipLauncher: job.skipLauncher, existingLaunchOptions: job.existingLaunchOptions,
-					trackingExecutable: job.trackingExecutable, trackingStartDir: job.trackingStartDir,
 					shortcutExecutable: job.shortcutExecutable,
 					repairResources: Boolean(job.repairResources),
 					assetTimeoutMs: 30_000,

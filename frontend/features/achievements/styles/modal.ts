@@ -310,7 +310,9 @@ ${steamRareAchievementStyles().replace(/#gdl-achievement-modal/g, '#gdl-local-ac
 			pointer-events: none !important;
 		}
 		.gdl-lam-compare-control[hidden],
-		.gdl-lam-comparison-status[hidden] { display: none !important; }
+		.gdl-lam-comparison-status[hidden],
+		.gdl-lam-global-user[hidden],
+		.gdl-lam-global-label[hidden] { display: none !important; }
 		.gdl-lam-comparison-status {
 			padding: 8px 20px 0 !important;
 			font-size: 12px !important;
@@ -422,6 +424,117 @@ ${steamRareAchievementStyles().replace(/#gdl-achievement-modal/g, '#gdl-local-ac
 			overflow: hidden !important;
 		}
 		.gdl-lam-row-fill { height: 100% !important; background: #1a9fff !important; border-radius: 4px !important; }
+		.gdl-lam-global-user {
+			flex: 1 !important;
+			min-width: 0 !important;
+			display: flex !important;
+			align-items: center !important;
+			padding-left: 3px !important;
+		}
+		.gdl-lam-user-avatar {
+			width: 32px !important;
+			height: 32px !important;
+			object-fit: cover !important;
+			border: 1px solid #67707b !important;
+		}
+		.gdl-lam-global-label {
+			flex: 0 0 auto !important;
+			color: #fff !important;
+			font-size: 12px !important;
+			font-weight: 700 !important;
+			letter-spacing: .5px !important;
+			text-transform: uppercase !important;
+			white-space: nowrap !important;
+		}
+		.gdl-lam-global-toolbar + .gdl-lam-comparison-status + .gdl-lam-list { padding-bottom: 60px !important; }
+		.gdl-lam-row.is-global {
+			height: 68px !important;
+			min-height: 68px !important;
+			padding: 0 !important;
+			gap: 0 !important;
+			flex-wrap: nowrap !important;
+		}
+		.gdl-lam-global-check {
+			flex: 0 0 40px !important;
+			width: 40px !important;
+			padding: 10px !important;
+			align-self: stretch !important;
+			display: flex !important;
+			align-items: center !important;
+			justify-content: center !important;
+			color: #b8bcbf !important;
+		}
+		.gdl-lam-global-check svg { width: 20px !important; height: 20px !important; }
+		.gdl-lam-global-content {
+			position: relative !important;
+			flex: 1 !important;
+			min-width: 0 !important;
+			align-self: stretch !important;
+			display: flex !important;
+			align-items: center !important;
+			padding: 10px !important;
+			gap: 10px !important;
+		}
+		.gdl-lam-global-bar {
+			position: absolute !important;
+			top: 0 !important;
+			bottom: 0 !important;
+			left: 0 !important;
+			background: rgba(103, 112, 123, .2) !important;
+			pointer-events: none !important;
+		}
+		.gdl-lam-global-content > :not(.gdl-lam-global-bar) { position: relative !important; }
+		.gdl-lam-row.is-global .gdl-lam-row-icon-frame {
+			width: 48px !important;
+			height: 48px !important;
+			min-width: 48px !important;
+			max-width: 48px !important;
+			flex: 0 0 48px !important;
+		}
+		.gdl-lam-global-details {
+			flex: 1 !important;
+			min-width: 0 !important;
+			display: flex !important;
+			align-items: center !important;
+			gap: 10px !important;
+			align-self: stretch !important;
+		}
+		.gdl-lam-row.is-global .gdl-lam-row-main { flex: 1 1 auto !important; }
+		.gdl-lam-row.is-global .gdl-lam-row-right {
+			flex: 0 0 auto !important;
+			width: auto !important;
+			min-width: 0 !important;
+			margin: 0 !important;
+		}
+		.gdl-lam-row.is-global .gdl-lam-row-main,
+		.gdl-lam-row.is-global .gdl-lam-row-right { transition: opacity .2s ease-in-out !important; }
+		.gdl-lam-hidden-icon {
+			width: 48px !important;
+			height: 48px !important;
+			display: flex !important;
+			align-items: center !important;
+			justify-content: center !important;
+			font-size: 32px !important;
+			color: #cacbcd !important;
+			background: linear-gradient(to right, #3b414a 0%, #2c3138 95%) !important;
+			box-shadow: 0 0 3px rgba(0, 0, 0, .333) !important;
+		}
+		.gdl-lam-row.is-hidden-global { cursor: pointer !important; outline: none !important; }
+		.gdl-lam-row.is-hidden-global .gdl-lam-global-content { gap: 5px !important; }
+		.gdl-lam-hidden-reveal {
+			position: absolute !important;
+			inset: 0 !important;
+			display: flex !important;
+			align-items: center !important;
+			justify-content: center !important;
+			z-index: 2 !important;
+			opacity: 0 !important;
+			font-size: 14px !important;
+			transition: opacity .2s ease-in-out !important;
+		}
+		.gdl-lam-row.is-hidden-global:is(:hover, :focus) .gdl-lam-hidden-reveal { opacity: 1 !important; }
+		.gdl-lam-row.is-hidden-global:is(:hover, :focus) .gdl-lam-row-main,
+		.gdl-lam-row.is-hidden-global:is(:hover, :focus) .gdl-lam-row-right { opacity: 0 !important; }
 		.BasicUI .gdl-lam-empty,
 		.gdl-lam-empty { padding: 40px 20px !important; text-align: center !important; color: #8b929a !important; font-size: 15px !important; }
 		@media (max-width: 900px) {
@@ -451,6 +564,12 @@ ${steamRareAchievementStyles().replace(/#gdl-achievement-modal/g, '#gdl-local-ac
 			.gdl-lam-row-track { max-width: 100% !important; }
 			.BasicUI .gdl-lam-row-main { flex-basis: calc(100% - 80px) !important; }
 			.BasicUI .gdl-lam-row-right { margin-left: 72px !important; width: calc(100% - 72px) !important; }
+			.gdl-lam-global-toolbar { flex-wrap: wrap !important; }
+			.gdl-lam-global-toolbar .gdl-lam-global-user { flex: 0 0 40px !important; }
+			.gdl-lam-global-toolbar .gdl-lam-search { flex: 1 1 100px !important; }
+			.gdl-lam-global-toolbar .gdl-lam-global-label { flex: 1 0 100% !important; text-align: right !important; }
+			.gdl-lam-row.is-global { height: auto !important; }
+			.gdl-lam-row.is-global .gdl-lam-row-main { flex-basis: auto !important; }
 		}
 	`);
 }

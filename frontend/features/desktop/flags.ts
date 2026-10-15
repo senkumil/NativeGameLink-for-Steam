@@ -1,8 +1,6 @@
 export const desktopFeatureFlags = {
 	/** Master flag for Desktop Native Webpack UI integration */
 	desktopNativeUIEnabled: true,
-	/** Use native Steam Desktop Achievement React component */
-	desktopNativeAchievements: true,
 	/** Use native Steam Desktop Playbar components */
 	desktopNativePlaybar: false,
 	/** Use native Steam Desktop Links Bar components */

@@ -135,6 +135,10 @@ const cards = loadModule('frontend/features/library/trading-cards.ts', {
   './constants': { GDL_INJECTED: 'gdl-library-injected' },
   './layout': { buildNativeSidebarSection: (_doc, _layout, options) => { sectionHtml = options.innerHtml; return section; } },
   './trading-card-preload': preload,
+  './sidebar-order': { getLinkedSidebarOrder: (_doc, layout) => ({
+    shortcutAppId: '3000000001', isCurrent: () => true,
+    publish: node => { layout.sidebarColumn.appendChild(node); return true; },
+  }) },
   './native-card-preview': {
     tryOpenNativeCardPreview: (...args) => { nativePreviewCalls.push(args); return nativePreviewEnabled; },
     disposeNativeCardPreview() { nativePreviewDisposals++; },
@@ -202,7 +206,7 @@ section.queries = { '.gdl-trading-cards-body': new FakeElement(doc), '.gdl-tradi
 catalog = { cards: [{ image: url('thumbnail'), artwork: url('full'), title: 'Card' }], badges: [] };
 const imagesBefore = doc.images.length;
 await cards.renderOfficialTradingCards(doc, { anchorRegion: new FakeElement(doc), sidebarColumn: new FakeElement(doc) }, {
-  steamAppId: '123', gameName: 'Game', isCurrent: () => true,
+  steamAppId: '123', shortcutAppId: '3000000001', gameName: 'Game', isCurrent: () => true,
 });
 assert.equal(doc.images.length, imagesBefore, 'rendering a game never preloads full-size card artwork');
 assert(sectionHtml.includes(url('thumbnail')), 'card thumbnails remain visible');

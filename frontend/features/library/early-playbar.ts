@@ -102,7 +102,7 @@ export function installEarlyLinkedPlaybar(doc: Document): EarlyLinkedPlaybar {
 			syncEarlyLinkedGameInfo(doc);
 			if (!isShortcutRoute()) { removeCloudStatus(doc); removePlaytimeFallbackStats(doc); return; }
 			const shortcutId = routedSteamAppId(doc)!;
-			warmNativeShortcutArtwork(doc, shortcutId, true);
+			warmNativeShortcutArtwork(doc, shortcutId);
 			syncEarlyLinkedCloudStatus(doc);
 			syncEarlyLinkedPlaytime(doc);
 			const steamAppId = !isShortcutDismissed(shortcutId) && findMappingForTitle('', String(shortcutId));
@@ -161,7 +161,20 @@ export function installEarlyLinkedPlaybar(doc: Document): EarlyLinkedPlaybar {
 				if (records.length === 0) return;
 				// Changes inside a known statistics row already have a synchronous
 				// scoped observer. Discovery handles only new/replaced native hosts.
-				if (records.every(record => Array.from(statsTargets).some(target => target.contains(record.target)))) return;
+				// Loading hero/logo images or replacing unrelated page content must
+				// not repeat every playbar scanner before Steam's image can paint.
+				const classes = PLAYBAR_CLASSES();
+				const changesHost = records.some(record => {
+					if (Array.from(statsTargets).some(target => target.contains(record.target))) return false;
+					return [...Array.from(record.addedNodes), ...Array.from(record.removedNodes)].some(node => {
+						if (node.nodeType !== 1) return false;
+						const root = node as HTMLElement;
+						if (root.closest(OWNED_PLAYBAR_SELECTOR)) return false;
+						return [classes.Container, classes.GameStatsSection].some(css =>
+							elementsWithCssModuleClass(root, css).some(element => !element.closest(OWNED_PLAYBAR_SELECTOR)));
+					});
+				});
+				if (!changesHost) return;
 				sync();
 			});
 			discovery.observe(doc.body, { childList: true, subtree: true });

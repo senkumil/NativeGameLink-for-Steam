@@ -78,9 +78,10 @@ function handleDelegatedClick(doc: Document, event: MouseEvent): void {
 			const thumb = videoCard.querySelector<HTMLElement>('.gdl-community-video-thumb');
 			if (thumb) {
 				videoCard.classList.add('gdl-video-playing');
+				thumb.dataset.gdlMediaState = 'playing';
 				thumb.innerHTML = `<iframe
+					class="gdl-community-video-frame"
 					src="https://www.youtube-nocookie.com/embed/${encodeURIComponent(ytId)}?autoplay=1&enablejsapi=1&rel=0"
-					style="width:100%;height:100%;border:none;display:block;aspect-ratio:16/9;"
 					allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
 					allowfullscreen></iframe>`;
 			}

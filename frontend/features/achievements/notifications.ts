@@ -1,5 +1,4 @@
-import React from 'react';
-import { findModuleExport, toaster } from '@steambrew/client';
+import { findModuleExport } from '@steambrew/client';
 import type { LocalAchievementData, LocalAchievementItem } from '../../domain/types';
 import { backendLog } from '../../api/backend';
 import { getLocalAchievementGameInfo, clearLocalAchievementGameInfoCache } from './game-info';
@@ -20,7 +19,9 @@ interface QueuedLocalAchievementToast {
 interface ActiveNativeAchievementToast {
 	store: any;
 	notificationId: number;
+	notification?: any;
 	presentationElement?: HTMLElement;
+	stopPresentationObserver?: () => void;
 }
 
 export type NativeAchievementToastWindowKind = 'overlay' | 'bigpicture' | 'desktop';
@@ -68,6 +69,54 @@ let activeNativeAchievementToast: ActiveNativeAchievementToast | null = null;
 let activeNativeAchievementToastTimer: number | null = null;
 let activeFallbackAchievementToast: { dismiss: () => void } | null = null;
 let nativeAchievementNotificationProto: any = null;
+let nextSyntheticNotificationId = -1;
+
+function syntheticNotificationId(store: any): number {
+	const used = new Set<number>([
+		...store.m_rgNotificationToasts.map((notification: any) => Number(notification.notificationID)),
+		...store.m_rgNotificationTray.flatMap((group: any) => (group.notifications || []).map((notification: any) => Number(notification.notificationID))),
+	]);
+	while (used.has(nextSyntheticNotificationId)) nextSyntheticNotificationId--;
+	return nextSyntheticNotificationId--;
+}
+
+/** Native OnNotification creates a tray record before considering toast
+ * preferences. Retire only the exact synthetic object immediately; never call
+ * account/server notification deletion APIs or remove a real notification. */
+function retireSyntheticTrayNotification(store: any, notificationId: number, ownUnreadIncrement: number): void {
+	let removed = false;
+	for (const group of Array.from(store.m_rgNotificationTray) as any[]) {
+		const notifications = group?.notifications;
+		if (!Array.isArray(notifications)) continue;
+		const own = notifications.find((notification: any) => notification.notificationID === notificationId
+			&& notification.eType === STEAM_ACHIEVEMENT_NOTIFICATION_TYPE && notification.eSource === 1);
+		if (!own) continue;
+		if (notifications.length === 1) {
+			try { store.RemoveGroupFromTray(group); } catch {}
+			// The public local method can be unavailable on a future client. The
+			// exact array/object identity remains sufficient for local retirement.
+			const remaining = store.m_rgNotificationTray.indexOf(group);
+			if (remaining >= 0) store.m_rgNotificationTray.splice(remaining, 1);
+		} else notifications.splice(notifications.indexOf(own), 1);
+		removed = true;
+	}
+	if (!removed) return;
+	// The native callback reports our own increment. Other notifications may
+	// arrive through synchronous observers; retain their increments and read state.
+	if (ownUnreadIncrement > 0 && Number(store.m_nUnviewedNotifications) > 0) {
+		store.m_nUnviewedNotifications = Math.max(0, Number(store.m_nUnviewedNotifications) - ownUnreadIncrement);
+	}
+	try { store.m_cbkNotificationTray.Dispatch(store.m_rgNotificationTray); } catch {}
+}
+
+function expireOwnedNativeAchievementToast(active: ActiveNativeAchievementToast): void {
+	try {
+		const notifications = active.store.m_rgNotificationToasts;
+		if (active.notification && Array.isArray(notifications) && notifications.includes(active.notification)) {
+			active.store.ExpireToast(active.notification);
+		}
+	} catch {}
+}
 
 export function registerNativeAchievementToastWindow(
 	popupWin: Window,
@@ -181,13 +230,28 @@ function applyNativeAchievementToastPresentation(
 	ensureNativeAchievementToastStyles(doc);
 	const title = String(achievement.display_name || achievement.name || '').trim();
 	const description = String(achievement.description || '').trim();
+	let templateClasses: any;
+	try { templateClasses = findModuleExport((candidate: any) => candidate?.ShortTemplate && candidate?.StandardLogoDimensions); } catch {}
+	const toastClasses = [templateClasses?.ShortTemplate, templateClasses?.StandardTemplate, templateClasses?.StandardTemplateContainer]
+		.flatMap(value => String(value || '').split(/\s+/)).filter(Boolean);
+	if (!toastClasses.length) return;
 	let observer: MutationObserver | null = null;
+	let observerTimer: number | null = null;
 
 	const mark = (): boolean => {
 		if (activeNativeAchievementToast?.notificationId !== notificationId) return true;
+		const active = activeNativeAchievementToast;
+		if (typeof active.store.GetCurrentToastNotification !== 'function') return true;
+		if (active.store.GetCurrentToastNotification() !== active.notification) return false;
 		const image = Array.from(doc.images).find(candidate => {
 			const source = candidate.currentSrc || candidate.src || candidate.getAttribute('src') || '';
-			return comparableImageUrl(source, doc) === expectedImage;
+			if (comparableImageUrl(source, doc) !== expectedImage) return false;
+			let parent = candidate.parentElement;
+			while (parent && parent !== doc.body) {
+				if (toastClasses.some(css => parent!.classList.contains(css))) return true;
+				parent = parent.parentElement;
+			}
+			return false;
 		});
 		if (!image) return false;
 		let card: HTMLElement | null = null;
@@ -214,16 +278,26 @@ function applyNativeAchievementToastPresentation(
 	if (mark()) return;
 	const NativeMutationObserver = (target.window as any).MutationObserver as typeof MutationObserver | undefined;
 	if (!NativeMutationObserver) return;
-	observer = new NativeMutationObserver(() => {
-		if (!mark()) return;
+	const active = activeNativeAchievementToast;
+	if (!active || active.notificationId !== notificationId) return;
+	const stop = (): void => {
 		observer?.disconnect();
 		observer = null;
+		if (observerTimer !== null) target.window.clearTimeout(observerTimer);
+		observerTimer = null;
+		if (active.stopPresentationObserver === stop) delete active.stopPresentationObserver;
+	};
+	active.stopPresentationObserver = stop;
+	observer = new NativeMutationObserver(() => {
+		if (!mark()) return;
+		stop();
 	});
 	observer.observe(doc.documentElement, { childList: true, subtree: true });
-	target.window.setTimeout(() => observer?.disconnect(), 1500);
+	observerTimer = target.window.setTimeout(stop, 1500);
 }
 
 function clearNativeAchievementToastPresentation(active: ActiveNativeAchievementToast | null): void {
+	active?.stopPresentationObserver?.();
 	const card = active?.presentationElement;
 	if (!card) return;
 	card.classList.remove(NATIVE_ACHIEVEMENT_TOAST_CARD_CLASS);
@@ -420,12 +494,7 @@ function dismissActiveAchievementToast(): void {
 	}
 	if (activeNativeAchievementToast) {
 		clearNativeAchievementToastPresentation(activeNativeAchievementToast);
-		try {
-			const current = activeNativeAchievementToast.store.GetCurrentToastNotification?.();
-			if (current?.notificationID === activeNativeAchievementToast.notificationId) {
-				activeNativeAchievementToast.store.ExpireToast?.(current);
-			}
-		} catch {}
+		expireOwnedNativeAchievementToast(activeNativeAchievementToast);
 		activeNativeAchievementToast = null;
 	}
 	if (activeFallbackAchievementToast) {
@@ -455,20 +524,51 @@ function showNativeAchievementToast(appid: string, achievement: LocalAchievement
 		if (!binary) return false;
 		for (const target of getNativeAchievementToastWindows()) {
 			const store = (target.window as any).NotificationStore;
-			if (!store?.OnNotification) continue;
-			let notificationId = Number(store.m_nNextTestNotificationID);
-			if (!Number.isFinite(notificationId)) notificationId = Math.floor(Date.now() % 2000000000);
-			else store.m_nNextTestNotificationID = notificationId + 1;
-			store.OnNotification(notificationId, STEAM_ACHIEVEMENT_NOTIFICATION_TYPE, binary);
-			activeNativeAchievementToast = { store, notificationId };
-			applyNativeAchievementToastPresentation(target, notificationId, achievement);
+			if (typeof store?.OnNotification !== 'function' || typeof store.RemoveGroupFromTray !== 'function'
+				|| typeof store.OnNewNotificationReceived !== 'function'
+				|| typeof store.ExpireToast !== 'function' || typeof store.m_cbkNotificationTray?.Dispatch !== 'function'
+				|| !Array.isArray(store.m_rgNotificationTray) || !Array.isArray(store.m_rgNotificationToasts)
+				|| !Number.isFinite(store.m_nUnviewedNotifications)) continue;
+			dismissActiveAchievementToast();
+			const notificationId = syntheticNotificationId(store);
+			const originalUnread = store.OnNewNotificationReceived;
+			const unreadDescriptor = Object.getOwnPropertyDescriptor(store, 'OnNewNotificationReceived');
+			let ownUnreadIncrement = 0;
+			const captureUnread = function (this: any, notification: any, ...args: any[]): any {
+				const before = Number(this.m_nUnviewedNotifications);
+				try { return originalUnread.call(this, notification, ...args); }
+				finally {
+					if (notification.notificationID === notificationId && notification.eSource === 1
+						&& notification.eType === STEAM_ACHIEVEMENT_NOTIFICATION_TYPE) {
+						ownUnreadIncrement = Math.min(1, Math.max(0, Number(this.m_nUnviewedNotifications) - before));
+					}
+				}
+			};
+			try { Object.defineProperty(store, 'OnNewNotificationReceived', { configurable: true, writable: true, value: captureUnread }); }
+			catch { continue; }
+			let failed = false;
+			try { store.OnNotification(notificationId, STEAM_ACHIEVEMENT_NOTIFICATION_TYPE, binary); }
+			catch { failed = true; }
+			finally {
+				try {
+					if (store.OnNewNotificationReceived === captureUnread) {
+						if (unreadDescriptor) Object.defineProperty(store, 'OnNewNotificationReceived', unreadDescriptor);
+						else delete store.OnNewNotificationReceived;
+					}
+				} catch {}
+				retireSyntheticTrayNotification(store, notificationId, ownUnreadIncrement);
+			}
+			const notification = store.m_rgNotificationToasts.find((value: any) => value.notificationID === notificationId);
+			if (failed) {
+				if (notification) expireOwnedNativeAchievementToast({ store, notificationId, notification });
+				continue;
+			}
+			activeNativeAchievementToast = { store, notificationId, notification };
+			if (notification) applyNativeAchievementToastPresentation(target, notificationId, achievement);
 			if (activeNativeAchievementToastTimer) window.clearTimeout(activeNativeAchievementToastTimer);
 			activeNativeAchievementToastTimer = window.setTimeout(() => {
-				try {
-					const current = store.GetCurrentToastNotification?.();
-					if (current?.notificationID === notificationId) store.ExpireToast?.(current);
-				} catch {}
 				if (activeNativeAchievementToast?.notificationId === notificationId) {
+					expireOwnedNativeAchievementToast(activeNativeAchievementToast);
 					clearNativeAchievementToastPresentation(activeNativeAchievementToast);
 					activeNativeAchievementToast = null;
 				}
@@ -507,7 +607,8 @@ export async function showAchievementToast(
 	achievement: LocalAchievementItem,
 	expectedGeneration?: number,
 ): Promise<void> {
-	if (expectedGeneration !== undefined && expectedGeneration !== localAchievementToastGeneration) return;
+	const generation = expectedGeneration ?? localAchievementToastGeneration;
+	if (generation !== localAchievementToastGeneration) return;
 	if (showNativeAchievementToast(appid, achievement)) {
 		backendLog(`Native achievement notification shown: ${appid}/${achievement.name}`);
 		return;
@@ -515,24 +616,40 @@ export async function showAchievementToast(
 	playAchievementSound();
 
 	const info = await getLocalAchievementGameInfo(appid);
-	if (expectedGeneration !== undefined && expectedGeneration !== localAchievementToastGeneration) return;
-	const logo = achievement.icon
-		? React.createElement('img', {
-			src: achievement.icon,
-			style: { width: '100%', height: '100%', objectFit: 'cover' },
-		})
-		: undefined;
-	activeFallbackAchievementToast = toaster.toast({
-		title: gdlText('achievement_unlocked_toast', 'Achievement unlocked'),
-		body: achievement.display_name || achievement.name,
-		subtext: info.name,
-		logo,
-		eType: STEAM_ACHIEVEMENT_NOTIFICATION_TYPE,
-		sound: 5,
-		playSound: true,
-		showToast: true,
-		duration: STEAM_ACHIEVEMENT_TOAST_DURATION_MS,
-	});
+	if (generation !== localAchievementToastGeneration) return;
+	const target = getNativeAchievementToastWindows()[0]?.window || window;
+	const doc = target.document;
+	if (!doc.body || target.closed) return;
+	dismissActiveAchievementToast();
+	ensureNativeAchievementToastStyles(doc);
+	let classes: any = {};
+	try { classes = findModuleExport((candidate: any) => candidate?.ShortTemplate && candidate?.StandardLogoDimensions) || {}; } catch {}
+	const card = doc.createElement('div');
+	card.className = `${classes.ShortTemplate || ''} ${NATIVE_ACHIEVEMENT_TOAST_CARD_CLASS}`;
+	card.setAttribute('role', 'status');
+	card.setAttribute('data-gdl-transient-achievement-toast', '1');
+	card.style.cssText = 'position:fixed;right:24px;bottom:24px;z-index:2147483600;display:flex;align-items:center;gap:12px;background:#2c3035;color:#dcdedf;box-shadow:0 4px 16px #0008;pointer-events:none;font-family:inherit;';
+	card.style.setProperty('--toast-duration', `${STEAM_ACHIEVEMENT_TOAST_DURATION_MS}ms`);
+	if (achievement.icon || achievement.icon_gray) {
+		const image = doc.createElement('img');
+		image.src = achievement.icon || achievement.icon_gray;
+		image.alt = '';
+		card.appendChild(image);
+	}
+	const content = doc.createElement('div'); content.className = classes.Content || '';
+	const title = doc.createElement('div'); title.className = `${classes.Title || ''} ${NATIVE_ACHIEVEMENT_TOAST_TITLE_CLASS}`;
+	title.textContent = achievement.display_name || achievement.name;
+	const description = doc.createElement('div'); description.className = `${classes.Body || ''} ${NATIVE_ACHIEVEMENT_TOAST_DESCRIPTION_CLASS}`;
+	description.textContent = `${gdlText('achievement_unlocked_toast', 'Achievement unlocked')} · ${info.name}`;
+	content.appendChild(title); content.appendChild(description); card.appendChild(content); doc.body.appendChild(card);
+	let timer: number | null = null;
+	const active = { dismiss: () => {
+		if (timer !== null) target.clearTimeout(timer);
+		timer = null; card.remove();
+		if (activeFallbackAchievementToast === active) activeFallbackAchievementToast = null;
+	} };
+	activeFallbackAchievementToast = active;
+	timer = target.setTimeout(active.dismiss, STEAM_ACHIEVEMENT_TOAST_DURATION_MS);
 	backendLog(`Fallback achievement notification shown: ${appid}/${achievement.name}`);
 }
 

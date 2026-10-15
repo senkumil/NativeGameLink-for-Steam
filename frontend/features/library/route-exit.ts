@@ -18,6 +18,8 @@ const OWNED_LIBRARY_SELECTORS = [
 	'#gdl-trading-cards-section',
 	'#gdl-dlc-section',
 	'#gdl-workshop-section',
+	'#gdl-historical-info-section',
+	'#gdl-external-achievements-section',
 	'#gdl-community-content',
 	'#gdl-activity-feed',
 	'#gdl-link-bar',

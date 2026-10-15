@@ -113,8 +113,7 @@ Después de confirmar, NativeGameLink:
 2. Lo renombra con el título oficial.
 3. Aplica el icono y las ilustraciones de Biblioteca.
 4. Conserva el destino de lanzamiento original.
-5. Puede sustituir un launcher que se cierra rápidamente por el ejecutable real del juego para mantener el seguimiento de tiempo.
-6. Termina la identidad y los recursos en segundo plano aunque cierres la ventana de Propiedades.
+5. Termina la identidad y los recursos en segundo plano aunque cierres la ventana de Propiedades.
 
 ---
 
@@ -146,12 +145,12 @@ sincronizaciones.
 
 ## 🖥️ Integración con Big Picture
 
-NativeGameLink adapta localmente el modelo de datos de Big Picture para que los accesos vinculados se presenten como entradas normales de la Biblioteca:
+Las mejoras opcionales de Big Picture integran los accesos vinculados en las cuatro pestañas del detalle, conservando el shell y las acciones del acceso directo de Steam:
 
-- Ya no quedan separados dentro de **Fuera de Steam**, **No de Steam**, **Non-Steam** o su equivalente localizado.
-- La categoría redundante se oculta cuando queda vacía.
-- El estado de instalación, la presentación de mando, campos de compatibilidad y tiempo de juego se exponen a la interfaz de Big Picture.
-- El comportamiento se limita a accesos vinculados y se restaura al desmontar el complemento o abandonar la integración.
+- Actividad y noticias; tus cosas, con logros personales y mundiales, notas y capturas; comunidad e información del juego.
+- Componentes, estilos, foco y modales de la ventana de Steam propietaria, con alternativas locales cuando una capacidad no está disponible.
+- Tiempo medido y compatibilidad conocida, sin forzar instalación, licencia, certificación Steam Deck ni estado de Cloud.
+- Sesiones aisladas por documento, acceso directo y generación, con limpieza al cambiar de juego, ventana o modo.
 
 Es una integración visual local: no convierte el acceso en una licencia adquirida ni evita las comprobaciones de propiedad de Steam.
 
@@ -223,7 +222,7 @@ El seguimiento alternativo puede:
 > **¿Por qué no funciona con launchers o ejecutables intermediarios?**
 > Si agregas a Steam un launcher externo, script, instalador o ejecutable intermediario/wrapper que únicamente se encarga de abrir el juego real y luego se cierra de inmediato, Steam y el monitor de procesos detectarán que la aplicación ha finalizado en cuestión de segundos, deteniendo el contador y provocando que el tiempo jugado no se registre.
 > 
-> Si el juego incluye un launcher de este tipo, localiza en su carpeta de instalación el ejecutable real de larga duración (por ejemplo, en juegos de Unreal Engine suele estar en `Binaries/Win64/...-Shipping.exe`) y configúralo como destino en las propiedades del acceso directo en Steam. Durante el flujo de vinculación, NativeGameLink también intentará detectar y sugerirte dicho ejecutable real de forma automática.
+> Elige el destino de lanzamiento del acceso directo en las Propiedades de Steam. NativeGameLink conserva ese ejecutable al vincular un juego.
 
 ---
 
@@ -278,6 +277,16 @@ Si la detección es incierta o no aparece:
 1. Haz clic derecho sobre el acceso y abre **Propiedades**.
 2. En **Juego vinculado**, revisa los candidatos visuales o pega un AppID/enlace de la tienda.
 3. Selecciona la versión correcta y pulsa **Guardar**.
+
+---
+
+## Desarrollo de Big Picture
+
+La [implementación y matriz de aceptación de Big Picture](docs/BIG_PICTURE_BASES.md)
+documenta identidad, aislamiento, navegación, capacidades y pruebas. Ejecuta
+`npm run check:big-picture` para verificar la integración. Las cuatro pestañas
+y sus flujos están implementados; la comparación visual 1:1 y la validación
+física con controles en Steam siguen pendientes. Las mejoras siguen siendo optativas.
 
 ---
 

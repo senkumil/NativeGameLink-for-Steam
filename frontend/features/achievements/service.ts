@@ -2,6 +2,7 @@ import { fetchLocalAchievementsBackend } from '../../api/backend';
 import { getPreferences, simulatedAchievementsEnabled } from '../../core/preferences';
 import type { LocalAchievementData } from '../../domain/types';
 import { steamLanguageSync } from '../../steam/localization';
+import { readNativeAchievementSchema } from './native-schema';
 
 export interface LocalAchievementRequestOptions {
 	stateAppId?: string | number | null;
@@ -119,6 +120,18 @@ export async function fetchLocalAchievementData(
 			const raw = await fetchLocalAchievementsBackend({ request_json: requestJson });
 			const parsed = JSON.parse(raw) as LocalAchievementData;
 			value = parsed && typeof parsed === 'object' ? parsed : null;
+			if (generation !== requestGeneration || requestCache.get(requestJson) !== entry) return null;
+			if (value?.metadata_source?.split(':', 1)[0] === 'steam_public_unverified') {
+				const schema = await readNativeAchievementSchema(normalizedSteamAppId);
+				if (generation !== requestGeneration || requestCache.get(requestJson) !== entry) return null;
+				if (schema) {
+					const verifiedRaw = await fetchLocalAchievementsBackend({
+						request_json: JSON.stringify({ ...JSON.parse(requestJson), native_schema: schema }),
+					});
+					const verified = JSON.parse(verifiedRaw) as LocalAchievementData;
+					if (verified && String(verified.metadata_appid || verified.appid) === normalizedSteamAppId) value = verified;
+				}
+			}
 		} catch {}
 		// A cache clear means a path, AppID or achievement policy changed while
 		// this IPC was running. Its original caller must not repaint with that

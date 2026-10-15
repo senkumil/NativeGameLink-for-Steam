@@ -25,7 +25,9 @@ const news = [{ gid: '1', date: 42, title: 'Update', contents: 'Body', url: '/ne
 const signature = (_steam, shortcut, items, header) => JSON.stringify([shortcut, items, header]);
 let activeRoot;
 function mount(steam = '123', shortcut = '3000000001') {
-  const feed = { dataset: { gdlFeedSignature: signature(steam, shortcut, news, 'header') } };
+  const attributes = new Map([['aria-busy','true']]);
+  const feed = { dataset: { gdlFeedSignature: signature(steam, shortcut, news, 'header') },
+    removeAttribute: name => attributes.delete(name), getAttribute: name => attributes.get(name) ?? null };
   const root = { isConnected: true, feed, contains: element => element === feed,
     dataset: { gdlSteamAppId: steam, gdlShortcutAppId: shortcut } };
   activeRoot = root;
@@ -34,6 +36,7 @@ function mount(steam = '123', shortcut = '3000000001') {
 const doc = { getElementById: id => id === 'gdl-library-injected' ? activeRoot
   : id === 'gdl-activity-feed' ? activeRoot?.feed : null };
 const requests = [], friendCalls = [], communityCalls = [], activityCalls = [], writes = [];
+const newsLinkUpdates = [], retainedNews = new Map();
 const jobs = new Map();
 function queue(_doc, key, callback) {
   const previous = jobs.get(key);
@@ -54,12 +57,15 @@ const hydration = load('frontend/features/library/hydration.ts', {
     getCommunityContent: async () => [], newsItemsSignature: items => JSON.stringify(items),
   },
   './community-view': { scheduleCommunityHydration: (...args) => { communityCalls.push(args); return () => {}; } },
+  './activity-view': { refreshActivityNewsLink: (_doc, options) => newsLinkUpdates.push(options) },
+  './social/feed': { getRetainedActivityNews: steam => retainedNews.get(steam) || null },
   './social': {
     getFriendData: async (...args) => { friendCalls.push(args); return { data: null }; },
     hydrateFriendPersonas: async () => {},
     populateActivityFeed: async (...args) => { activityCalls.push(args); },
     activityFeedContentSignature: signature,
     applyUnifiedActivityFeed: (feed, steam, shortcut, items, header) => {
+      retainedNews.set(steam, items);
       writes.push({ feed, steam, shortcut, items, header }); feed.dataset.gdlFeedSignature = signature(steam, shortcut, items, header);
     }, setupPostDeleteHandlers() {},
   },
@@ -75,11 +81,17 @@ for (let i = 0; i < 100; i++) hydration.hydrateLinkedSecondaryResources(session(
 assert.equal(requests.length, 1, '100 initial observer passes share one news request');
 assert.equal(friendCalls.length, 1, 'Friend RPC work is started once per mounted session');
 assert.equal(communityCalls.length, 1, 'Community hydration is not repeatedly cancelled/rearmed');
+assert.equal(activityCalls.length, 1, 'Friend activity starts without waiting for any publisher news source');
+assert.equal(activityCalls[0][4].length, 0, 'Late activity resolves the feed owner latest news snapshot instead of capturing partial news');
+assert.equal(typeof requests[0].args[3], 'function', 'Hydration subscribes to progressive news results');
 requests[0].resolve(news); await tick();
 assert.equal(jobs.size, 1, 'News DOM commits use the sidebar interaction queue');
 assert.equal(writes.length, 0, 'News does not mutate DOM while queued');
+assert.equal(rootA.feed.getAttribute('aria-busy'),'true','Queued news does not prematurely dismiss the pending state');
 await flush();
 assert.equal(writes.length, 0, 'An identical feed signature never calls the renderer');
+assert.equal(rootA.feed.getAttribute('aria-busy'),null,'A current news commit dismisses its pending state');
+assert.equal(newsLinkUpdates.at(-1).newsItems[0].url,'/news/1','The persistent latest-news link also refreshes when feed HTML is unchanged');
 assert.equal(activityCalls.length, 1);
 
 // A new core object alone is not a content invalidation. Fields used by the
@@ -133,6 +145,26 @@ activeRoot = null;
 hydration.hydrateLinkedSecondaryResources(session(), data);
 assert.equal(requests.length, beforeNative, 'Native pages without the owned mount perform no secondary requests');
 
+const progressRoot = mount();
+hydration.hydrateLinkedSecondaryResources(session(undefined, 'spanish', () => true), data);
+const progressRequest = requests.at(-1);
+const progressiveNews = [{ ...news[0], title: 'Fast publisher source', url: '/news/newest' }];
+progressRequest.args[3](progressiveNews);
+await tick(); await flush();
+assert.equal(writes.at(-1).feed, progressRoot.feed, 'A useful source can paint while the final news promise is still pending');
+assert.equal(writes.at(-1).items[0].title, 'Fast publisher source');
+assert.equal(newsLinkUpdates.at(-1).newsItems[0].url,'/news/newest','A progressive publisher result refreshes the persistent composer news destination');
+assert.equal(progressRoot.feed.getAttribute('aria-busy'),null,'A useful progressive result releases the feed placeholder');
+const beforeLateProgress = writes.length;
+const beforeLateLinks = newsLinkUpdates.length;
+const unrelatedRoot = mount('123', '3000000002');
+progressRequest.args[3]([{ ...news[0], title: 'Late source from retired mount' }]);
+progressRequest.resolve([{ ...news[0], title: 'Late final from retired mount' }]);
+await tick(); await flush();
+assert.equal(writes.length, beforeLateProgress, 'Progress and terminal results share exact mounted-root ownership guards');
+assert.equal(newsLinkUpdates.length,beforeLateLinks,'Obsolete progress cannot overwrite the latest-news URL of the replacement game');
+assert.equal(unrelatedRoot.feed.getAttribute('aria-busy'),'true','Obsolete progress cannot release a replacement game placeholder');
+
 // Exercise the actual friend module: empty results get a short bounded memory
 // cache instead of repeating native/store lookups for every observer callback.
 let gameplayCalls = 0;
@@ -147,6 +179,7 @@ const friends = load('frontend/features/library/social/friends.ts', {
   '../../../steam/social': { extractSteamIdFromValue: value => String(value || ''),
     fetchFriendsGameplayInfo: async () => { gameplayCalls++; return null; } },
   './personas': {}, '../layout': {}, '../../../steam/sidebar-interaction': { runWhenLibrarySidebarIdle: queue },
+  '../sidebar-order': { getLinkedSidebarOrder: () => ({ column: friendsColumn, shortcutAppId: '3000000001', isCurrent: () => friendGuard }) },
 }, { window: {} });
 await friends.getFriendData('1');
 for (let i = 0; i < 100; i++) await friends.getFriendData('1');
@@ -165,13 +198,15 @@ await friends.getFriendData('1');
 assert.equal(gameplayCalls, beforeEviction + 1, 'Empty-result memory retains at most 128 AppIDs');
 
 let friendRemovals = 0, friendGuard = true;
-const friendsDoc = { getElementById: () => ({ dataset: { gdlSteamAppId: '123' }, remove: () => friendRemovals++ }) };
-const pendingFriendCommit = friends.hydrateFriendPersonas(friendsDoc, null, '123', 'Game', { isCurrent: () => friendGuard });
+const friendsColumn = {};
+const friendsDoc = { getElementById: () => ({ parentElement: friendsColumn, dataset: { gdlSteamAppId: '123', gdlShortcutAppId: '3000000001' }, remove: () => friendRemovals++ }) };
+const noFriends = { totalCount: 0, recentlyPlayed: [], previouslyPlayed: [] };
+const pendingFriendCommit = friends.hydrateFriendPersonas(friendsDoc, noFriends, '123', 'Game', { isCurrent: () => friendGuard, shortcutAppId: '3000000001' });
 assert.equal(friendRemovals, 0, 'An empty friends result also waits for sidebar-idle before removing its section');
 friendGuard = false; await flush(); await pendingFriendCommit;
 assert.equal(friendRemovals, 0, 'A queued friends removal checks ownership again at the actual write');
 friendGuard = true;
-const currentFriendCommit = friends.hydrateFriendPersonas(friendsDoc, null, '123', 'Game', { isCurrent: () => friendGuard });
+const currentFriendCommit = friends.hydrateFriendPersonas(friendsDoc, noFriends, '123', 'Game', { isCurrent: () => friendGuard, shortcutAppId: '3000000001' });
 await flush(); await currentFriendCommit;
 assert.equal(friendRemovals, 1);
 

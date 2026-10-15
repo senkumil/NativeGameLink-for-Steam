@@ -278,6 +278,11 @@ const ACTIVITY_NEWS_PAGE_SIZE = 8;
 const MAX_ACTIVITY_GAME_ENTRIES = 32;
 const FRIEND_ACTIVITY_TTL_MS = 5 * 60 * 1000;
 
+/** Reuse the existing bounded feed snapshot without another data/image cache. */
+export function getRetainedActivityNews(steamAppId: string): NewsItem[] | null {
+	return lastInjectedNews.get(steamAppId) || null;
+}
+
 function deleteActivityCacheEntry(appId: string): void {
 	lastInjectedNews.delete(appId);
 	lastInjectedFriendActivity.delete(appId);
@@ -315,9 +320,13 @@ export function markFriendActivitySnapshotChecked(
 }
 
 function effectiveActivityNews(steamAppId: string, newsItems: NewsItem[]): NewsItem[] {
-	return Array.isArray(newsItems) && newsItems.length > 0
-		? newsItems
-		: (lastInjectedNews.get(steamAppId) || []);
+	const previous = lastInjectedNews.get(steamAppId) || [];
+	const metadataFallback = (item: NewsItem): boolean => /^gdl-steam-(?:release|metadata)-/.test(String(item.gid || ''))
+		&& item.feedname === 'steam_store_release_metadata';
+	if (!Array.isArray(newsItems) || newsItems.length === 0) return previous;
+	// Evicted persistent data can leave a real in-session snapshot available.
+	// A synthesized Store card must not erase it while news is revalidated.
+	return newsItems.every(metadataFallback) && previous.some(item => !metadataFallback(item)) ? previous : newsItems;
 }
 
 function parseFriendActivityItems(input: unknown): FriendActivityFeedItem[] {
@@ -345,6 +354,7 @@ function rememberActivityFeedInputs(
 	friendActivity: string | FriendActivityFeedItem[],
 ): { newsItems: NewsItem[]; friendItems: FriendActivityFeedItem[]; legacyFriendHtml: string } {
 	touchActivityCache(steamAppId);
+	newsItems = effectiveActivityNews(steamAppId, newsItems);
 	if (Array.isArray(newsItems) && newsItems.length > 0) {
 		lastInjectedNews.set(steamAppId, newsItems);
 	} else {
@@ -485,12 +495,12 @@ export function renderUnifiedActivityFeed(
 	fallbackImage: string,
 	friendActivity: string | FriendActivityFeedItem[] = '',
 ): string {
-	const { friendItems, legacyFriendHtml } = rememberActivityFeedInputs(
+	const { newsItems: effectiveNews, friendItems, legacyFriendHtml } = rememberActivityFeedInputs(
 		steamAppId, newsItems, friendActivity,
 	);
 
 	const localPosts = loadLocalActivityPosts(steamAppId, shortcutAppId);
-	const sortedNews = (Array.isArray(newsItems) ? [...newsItems] : [])
+	const sortedNews = [...effectiveNews]
 		.filter(item => item && item.title && Number(item.date || 0) > 0)
 		.sort((a, b) => Number(b.date || 0) - Number(a.date || 0));
 	const visibleNews = Math.min(

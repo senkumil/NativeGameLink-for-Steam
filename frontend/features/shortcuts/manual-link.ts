@@ -85,11 +85,8 @@ export function showShortcutManualLinkModal(
 		: automaticNativeAddReview
 		? gdlText('no_match_found', 'No reliable match was found. You can enter the AppID manually.')
 		: gdlText('detection_uncertain', 'Choose the correct result or enter the AppID manually.');
-	let hasTrackingRecommendation = !!(activeContext.bootstrapDetected && activeContext.recommendedExePath);
-	let exeName = activeContext.exePath ? (shortcutPathBasename(activeContext.exePath) || activeContext.exePath) : activeContext.title;
-	const executableSummary = hasTrackingRecommendation
-		? gdlText('selected_executable', 'Selected executable: {exe}', { exe: exeName })
-		: gdlText('executable_preserved', 'Steam will keep launching the executable you selected: {exe}', { exe: exeName });
+	const exeName = activeContext.exePath ? (shortcutPathBasename(activeContext.exePath) || activeContext.exePath) : activeContext.title;
+	const executableSummary = gdlText('executable_preserved', 'Steam will keep launching the executable you selected: {exe}', { exe: exeName });
 	const overlay = targetDoc.createElement('dialog');
 	overlay.id = 'gdl-manual-link-modal';
 	(overlay as any)._shortcutAppId = activeContext.shortcutAppId;
@@ -111,7 +108,6 @@ export function showShortcutManualLinkModal(
 					<span style="display:flex;gap:8px;align-items:stretch;"><input class="gdl-manual-link-manual-appid" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="${escapeHtml(gdlText('manual_appid_placeholder', 'Steam AppID'))}" style="box-sizing:border-box;width:100%;min-width:0;flex:1;padding:8px 9px;background:#101820;border:1px solid #3d4450;border-radius:2px;color:#dcdedf;font-size:12px;" /><button type="button" class="gdl-manual-link-paste" style="flex-shrink:0;padding:8px 14px;border:1px solid #3d4450;border-radius:2px;background:#3d4450;color:#dcdedf;cursor:pointer;">${escapeHtml(gdlText('paste', 'Paste'))}</button></span>
 				</label>
 				<div class="gdl-manual-link-exe-summary" style="padding:9px 11px;background:rgba(0,0,0,.18);color:#8f98a0;font-size:11px;line-height:1.35;overflow-wrap:anywhere;">${escapeHtml(executableSummary)}</div>
-				<label class="gdl-manual-link-tracking" style="display:none;align-items:flex-start;gap:8px;margin-top:12px;padding:10px 11px;background:rgba(91,163,43,.10);border:1px solid rgba(91,163,43,.28);color:#acb2b8;font-size:12px;line-height:1.35;cursor:pointer;"><input class="gdl-manual-link-tracking-input" type="checkbox" style="margin-top:2px;" /><span><strong style="color:#dcdedf;font-weight:500;">${escapeHtml(gdlText('use_tracking_executable', 'Use the real game executable'))}</strong><br />${escapeHtml(gdlText('tracking_executable_help', '{bootstrap} closes after launching {game}. Use {game} so Steam keeps tracking playtime.', { bootstrap: shortcutPathBasename(activeContext.exePath), game: shortcutPathBasename(activeContext.recommendedExePath || '') }))}</span></label>
 				<label class="gdl-manual-link-launcher" style="display:none;align-items:flex-start;gap:8px;margin-top:12px;color:#acb2b8;font-size:12px;line-height:1.35;cursor:pointer;"><input class="gdl-manual-link-launcher-input" type="checkbox" style="margin-top:2px;" /><span><strong style="color:#dcdedf;font-weight:500;">${escapeHtml(gdlText('skip_launcher', 'Try to skip the launcher'))}</strong><br />${escapeHtml(gdlText('launcher_detected', 'This target looks like a game launcher. You may optionally add -nolauncher.'))}</span></label>
 				<div class="gdl-manual-link-progress" style="display:flex;gap:7px;margin-top:15px;color:#8f98a0;font-size:11px;"><span data-step="link" style="padding:5px 8px;border-radius:12px;background:rgba(255,255,255,.05);">${escapeHtml(gdlText('auto_link_step_link', '1 · Link'))}</span><span data-step="identity" style="padding:5px 8px;border-radius:12px;background:rgba(255,255,255,.05);">${escapeHtml(gdlText('auto_link_step_identity', '2 · Prepare'))}</span><span data-step="assets" style="padding:5px 8px;border-radius:12px;background:rgba(255,255,255,.05);">${escapeHtml(gdlText('auto_link_step_assets', '3 · Finish'))}</span></div>
 				<div class="gdl-manual-link-status" aria-live="polite" style="display:none;margin-top:11px;padding:9px 11px;border:1px solid rgba(255,255,255,.08);border-radius:3px;background:rgba(0,0,0,.16);font-size:12px;line-height:1.4;color:#8f98a0;"></div>
@@ -124,8 +120,6 @@ export function showShortcutManualLinkModal(
 	const image = overlay.querySelector('.gdl-manual-link-image') as HTMLImageElement;
 	const name = overlay.querySelector('.gdl-manual-link-name') as HTMLElement;
 	const appId = overlay.querySelector('.gdl-manual-link-id') as HTMLElement;
-	const trackingLabel = overlay.querySelector('.gdl-manual-link-tracking') as HTMLElement;
-	const trackingInput = overlay.querySelector('.gdl-manual-link-tracking-input') as HTMLInputElement;
 	const launcherLabel = overlay.querySelector('.gdl-manual-link-launcher') as HTMLElement;
 	const launcherInput = overlay.querySelector('.gdl-manual-link-launcher-input') as HTMLInputElement;
 	const status = overlay.querySelector('.gdl-manual-link-status') as HTMLElement;
@@ -411,52 +405,13 @@ export function showShortcutManualLinkModal(
 		confirm.style.opacity = '.65';
 	}
 	const exeSummary = overlay.querySelector('.gdl-manual-link-exe-summary') as HTMLElement;
-	const updateExeSummary = () => {
-		if (hasTrackingRecommendation && (activeContext.trackingExecutableAutoApply || trackingInput.checked)) {
-			const recName = shortcutPathBasename(activeContext.recommendedExePath || '') || activeContext.recommendedExePath || '';
-			if (activeContext.trackingExecutableAutoApply) {
-				exeSummary.innerHTML = `${escapeHtml(gdlText('selected_executable', 'Selected executable: {exe}', { exe: recName }))}<br /><span style="display:block;margin-top:3px;color:#8f98a0;font-size:10.5px;">${escapeHtml(gdlText('persistent_tracking_exe_note', '{exe} is the main process for this game to ensure playtime tracking works correctly.', { exe: recName }))}</span>`;
-			} else {
-				exeSummary.textContent = gdlText('selected_executable', 'Selected executable: {exe}', { exe: recName });
-			}
-			exeSummary.style.color = '#a4d007';
-		} else {
-			exeSummary.textContent = gdlText('executable_preserved', 'Steam will keep launching the executable you selected: {exe}', { exe: exeName });
-			exeSummary.style.color = '#8f98a0';
-		}
-	};
-	const syncTrackingRecommendationUi = (): void => {
-		hasTrackingRecommendation = !!(activeContext.bootstrapDetected && activeContext.recommendedExePath);
-		exeName = activeContext.exePath ? (shortcutPathBasename(activeContext.exePath) || activeContext.exePath) : activeContext.title;
-		const help = trackingLabel.querySelector('span');
-		if (help) {
-			help.innerHTML = `<strong style="color:#dcdedf;font-weight:500;">${escapeHtml(gdlText('use_tracking_executable', 'Use the real game executable'))}</strong><br />${escapeHtml(gdlText('tracking_executable_help', '{bootstrap} closes after launching {game}. Use {game} so Steam keeps tracking playtime.', { bootstrap: shortcutPathBasename(activeContext.exePath), game: shortcutPathBasename(activeContext.recommendedExePath || '') }))}`;
-		}
-		if (hasTrackingRecommendation) {
-			if (activeContext.trackingExecutableAutoApply) {
-				trackingLabel.style.display = 'none';
-				trackingInput.checked = true;
-			} else {
-				trackingLabel.style.display = 'flex';
-				if (!trackingInput.dataset.gdlUserChanged) trackingInput.checked = false;
-			}
-		} else {
-			trackingLabel.style.display = 'none';
-			trackingInput.checked = false;
-		}
-		updateExeSummary();
-	};
-	trackingInput.addEventListener('change', () => {
-		trackingInput.dataset.gdlUserChanged = '1';
-		updateExeSummary();
-	});
 	(overlay as any)._updateContext = (nextContext: ShortcutDetectionContext): void => {
 		if (!nextContext || Number(nextContext.shortcutAppId) !== Number(activeContext.shortcutAppId)) return;
 		activeContext = { ...activeContext, ...nextContext };
-		syncTrackingRecommendationUi();
+		const currentExeName = activeContext.exePath ? (shortcutPathBasename(activeContext.exePath) || activeContext.exePath) : activeContext.title;
+		exeSummary.textContent = gdlText('executable_preserved', 'Steam will keep launching the executable you selected: {exe}', { exe: currentExeName });
 		renderCandidate();
 	};
-	syncTrackingRecommendationUi();
 	updateLauncherBypass(currentCandidates[0]?.appid || '');
 	let successfulLinkedShortcutId: number | null = null, queuedLinkWatch: EventListener | null = null;
 	let queuedInBackground = false;
@@ -547,8 +502,6 @@ export function showShortcutManualLinkModal(
 			title: activeContext.title, shortcutAppId, steamAppId,
 			skipLauncher: launcherInput.checked || shouldAutoApplyNoLauncher(steamAppId),
 			existingLaunchOptions: activeContext.launchOptions,
-			trackingExecutable: hasTrackingRecommendation && (activeContext.trackingExecutableAutoApply || trackingInput.checked) ? activeContext.recommendedExePath : '',
-			trackingStartDir: hasTrackingRecommendation && (activeContext.trackingExecutableAutoApply || trackingInput.checked) ? activeContext.recommendedStartDir : '',
 			shortcutExecutable: activeContext.exePath || '', repairResources,
 		});
 		setStatus(gdlText('link_queued_background', 'Linked. Finishing resources in the background…'), 'active');
@@ -591,8 +544,6 @@ export function showShortcutManualLinkModal(
 		const linkInput = {
 			title: activeContext.title, shortcutAppId: activeContext.shortcutAppId, steamAppId,
 			skipLauncher: launcherInput.checked || shouldAutoApplyNoLauncher(steamAppId), existingLaunchOptions: activeContext.launchOptions,
-			trackingExecutable: hasTrackingRecommendation && (activeContext.trackingExecutableAutoApply || trackingInput.checked) ? activeContext.recommendedExePath : '',
-			trackingStartDir: hasTrackingRecommendation && (activeContext.trackingExecutableAutoApply || trackingInput.checked) ? activeContext.recommendedStartDir : '',
 			shortcutExecutable: activeContext.exePath || '',
 			canonicalNameHint: selected?.is_edition && !manualAppId ? selected.name : undefined,
 		};
@@ -679,7 +630,7 @@ async function inspectShortcutReview(
 		? targetDoc
 		: (shortcutRuntimeHost().getMainWindowDoc() || (typeof document !== 'undefined' ? document : null));
 	const immediateContext: ShortcutDetectionContext = {
-		shortcutAppId: record.id, title: record.title, exePath: '', startDir: '', launchOptions: '', bootstrapDetected: false, recommendedExePath: '', recommendedStartDir: '',
+		shortcutAppId: record.id, title: record.title, exePath: '', startDir: '', launchOptions: '',
 	};
 	const currentGeneration = ++globalDetectionGeneration;
 	const loadingShown = Boolean(immediateDoc?.body && !immediateDoc.getElementById('gdl-manual-link-modal'));
@@ -725,7 +676,7 @@ async function inspectShortcutReview(
 		}
 		if (!context) {
 			context = {
-				shortcutAppId: record.id, title: record.title, exePath: '', startDir: '', launchOptions: '', bootstrapDetected: false, recommendedExePath: '', recommendedStartDir: '',
+				shortcutAppId: record.id, title: record.title, exePath: '', startDir: '', launchOptions: '',
 			};
 		}
 		if (!context.title && !context.exePath) {

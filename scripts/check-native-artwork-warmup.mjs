@@ -6,7 +6,9 @@ import ts from 'typescript';
 const SID = 3300000001;
 let verified = true, mappings = {}, now = 0, nextTimer = 1;
 const timers = new Map(), subscriptions = new Set(), createdImages = [], runtimeRequires = [];
-const inventoryReadinessCalls = [], inventoryRetryResults = [];
+const inventoryReadinessCalls = [], inventoryRetryResults = [], sourceInstallCalls = [], sourceDisposals = [];
+const sourceOwners = new WeakMap();
+let imageUrlReads = 0;
 let runtimeProbes = 0;
 const moduleStores = new WeakMap();
 const setTimer = (callback, delay) => { const id = nextTimer++; timers.set(id, { callback, at: now + delay }); return id; };
@@ -27,17 +29,7 @@ const advanceTimers = duration => {
   now = end;
 };
 class FakeImage {
-  constructor() { createdImages.push(this); }
-  set src(value) { this.currentSrc = value; this.requestedSrc = value; }
-  get src() { return this.currentSrc; }
-  removeAttribute(name) { assert.equal(name, 'src'); this.currentSrc = undefined; }
-  finish() { this.onload?.(); }
-}
-function finishImagesFrom(start) {
-  for (let index = start; index < createdImages.length; index++) {
-    assert(createdImages.filter(image => image.currentSrc).length <= 2, 'At most two logo image requests are active');
-    createdImages[index].finish();
-  }
+  constructor() { createdImages.push(this); throw new Error('Artwork image loading belongs to Steam'); }
 }
 class FakeNode {
   nodeType = 1;
@@ -51,7 +43,7 @@ function fixture(ids = [SID]) {
   const details = { GetAppData: () => ({}), GetAchievements() {}, GetCustomLogoPosition(overview) { calls.push(overview); return null; } };
   const appStore = {
     GetAppOverviewByAppID: id => apps.get(id < 0 ? id >>> 0 : id),
-    GetCustomLogoImageURLs: overview => ['jpg', 'png'].map(ext => `/customimages/${overview.appid}_logo.${ext}?v=${overview.rt_custom_image_mtime}`),
+    GetCustomLogoImageURLs: overview => { imageUrlReads++; return ['jpg', 'png'].map(ext => `/customimages/${overview.appid}_logo.${ext}?v=${overview.rt_custom_image_mtime}`); },
   };
   const doc = {
     defaultView: { appDetailsStore: details, appStore, Image: FakeImage, location: { href: 'https://steamloopback.host/library' }, setTimeout: setTimer, clearTimeout: id => timers.delete(id) },
@@ -78,7 +70,15 @@ const dependencies = {
   } },
   './native-route': { routedSteamAppId: doc => doc.routeId },
   './native-logo-sources': {
-    installNativeLogoSources: () => () => {},
+    installNativeLogoSources: (doc, suppliedApps) => {
+      sourceInstallCalls.push({ doc, apps: suppliedApps });
+      const apps = suppliedApps || doc.defaultView.appStore, previous = sourceOwners.get(doc);
+      if (previous && previous.apps === apps) return previous.dispose;
+      previous?.dispose();
+      if (!apps) return () => {};
+      const owner = { apps, dispose() { if (sourceOwners.get(doc) !== owner) return; sourceOwners.delete(doc); sourceDisposals.push(doc); } };
+      sourceOwners.set(doc, owner); return owner.dispose;
+    },
     refreshNativeLogoInventoryReadiness: async doc => { inventoryReadinessCalls.push(doc); return inventoryRetryResults.shift() || false; },
   },
 };
@@ -95,8 +95,8 @@ const context = vm.createContext({ exports: {}, URL, Map, WeakMap, Number, Date:
 vm.runInContext(ts.transpileModule(fs.readFileSync('frontend/features/library/native-artwork-warmup.ts', 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
 }).outputText, context);
-const { warmNativeShortcutArtwork: warm, warmMappedNativeArtwork: warmMapped } = context.exports;
-const selectRoute = (doc, id) => { doc.routeId = id; return warm(doc, id, true); };
+const { warmNativeShortcutArtwork: warm } = context.exports;
+const selectRoute = (doc, id) => { doc.routeId = id; return warm(doc, id); };
 const install = doc => {
   const dispose = context.exports.installNativeArtworkWarmup(doc);
   if (doc.testWarmupDispose) return doc.testWarmupDispose;
@@ -124,27 +124,26 @@ const reset = ids => { mappings = Object.fromEntries(ids.map(id => [`shortcut:${
 }
 {
   const ids = Array.from({ length: 12 }, (_, index) => SID + index); reset(ids);
-  const { doc, calls, listeners } = fixture(ids);
-  const beforeImages = createdImages.length, dispose = install(doc);
+  const { doc, calls, listeners, appStore } = fixture(ids), beforeSources = sourceInstallCalls.length, beforeDisposals = sourceDisposals.length;
+  const dispose = install(doc);
   assert.equal(install(doc), dispose, 'Installation is idempotent');
-  assert(calls.length <= 6, 'Startup position reads begin in a small batch');
-  assert.equal(createdImages.length, beforeImages + 2, 'Startup logo warming starts only two small local images');
-  finishImagesFrom(beforeImages);
+  assert(calls.length <= 4, 'Startup position reads begin in a small batch');
+  assert.equal(createdImages.length, 0, 'Startup creates no image preload');
   runTimers(); assert.equal(calls.length, 12, 'All mapped custom positions are warmed');
-  assert.equal(createdImages.length, beforeImages + 12, 'All mapped logos warm progressively without requiring hover');
-  assert(createdImages.slice(beforeImages).every(image => /_logo\.png\?/.test(image.requestedSrc)), 'Existing PNG logos avoid unnecessary JPG misses');
+  assert.equal(imageUrlReads, 0, 'Startup metadata warming does not request artwork candidates');
+  assert(sourceInstallCalls.slice(beforeSources).some(call => call.doc === doc && call.apps === appStore), 'Resolved stores retain the native logo source-order adapter');
   assert.equal(listeners.size, 3, 'Only the independently shared scroll interaction listeners remain');
-  assert(!listeners.has('pointerdown') && !listeners.has('pointerover') && !listeners.has('focusin'), 'Artwork warming installs no native game-list selection, hover or focus listener');
+  assert(!listeners.has('pointerdown') && !listeners.has('pointerover') && !listeners.has('focusin'), 'Artwork metadata warming installs no native selection, hover or focus listeners');
   const row = new FakeNode({ 'data-appid': String(SID) });
-  listeners.get('pointerover')?.({ target: row });
-  assert.equal(createdImages.length, beforeImages + 12, 'Hover reuses logos already warmed in the background');
-  for (let index = 0; index < 200; index++) listeners.get('pointerover')?.({ target: row });
-  assert.equal(createdImages.length, beforeImages + 12, 'Repeated virtual-row hover events do not reload logos');
-  assert.equal(calls.length, 12, 'Hover reuses the pending/cached position read');
-  assert(createdImages.slice(beforeImages).every(image => !image.currentSrc && !image.onload && !image.onerror), 'Decoded images and event closures are released after warming');
-  const ignored = new FakeNode({ 'data-appid': String(SID + 1) }, null, false);
-  listeners.get('pointerdown')?.({ target: ignored }); assert.equal(createdImages.length, beforeImages + 12, 'Native game-list pointer events initiate no artwork work');
+  for (let index = 0; index < 100; index++) {
+    listeners.get('pointerover')?.({ target: row });
+    listeners.get('focusin')?.({ target: row });
+    listeners.get('pointerdown')?.({ target: row });
+  }
+  assert.equal(calls.length, 12, 'One hundred native row events start no additional metadata reads');
+  assert.equal(createdImages.length, 0, 'One hundred native row events start no image loads');
   dispose(); assert.equal(listeners.size, 0); assert.equal(subscriptions.size, 0); assert.equal(timers.size, 0);
+  assert.equal(sourceDisposals.length, beforeDisposals + 1, 'Disposal releases native source-adapter ownership exactly once');
 }
 {
   reset([SID]); const { doc, calls, apps, details } = fixture();
@@ -162,36 +161,21 @@ const reset = ids => { mappings = Object.fromEntries(ids.map(id => [`shortcut:${
   assert.equal(calls.length, count + 1, 'The position deduplication cache is bounded');
 }
 {
-  const ids = Array.from({ length: 12 }, (_, index) => SID + index); reset(ids);
-  const { doc } = fixture(ids), start = createdImages.length;
-  for (const id of ids) warm(doc, id, true);
-  assert.equal(createdImages.length, start + 2, 'Rapid navigation keeps at most two images in flight');
-  finishImagesFrom(start); runTimers();
-  assert.equal(createdImages.length, start + 6, 'Rapid navigation retains at most four pending logo URLs');
-  assert(createdImages.slice(start).every(image => !image.currentSrc), 'Completed image requests release their resources');
-}
-{
-  reset([SID]); const { doc, appStore, listeners } = fixture();
-  const dispose = install(doc), start = createdImages.length;
-  appStore.GetCustomLogoImageURLs = () => ['https://cdn.example.com/huge.png', '/customimages/3300000001_hero.jpg'];
-  selectRoute(doc, SID);
-  assert.equal(createdImages.length, start, 'Remote images and large hero images are never warmed');
-  dispose();
-}
-{
-  reset([SID]); const { doc, listeners, apps, calls } = fixture([SID, SID + 1]);
-  const dispose = install(doc), start = createdImages.length;
-  reset([SID, SID + 1]);
+  const ids = Array.from({ length: 100 }, (_, index) => SID + index); reset(ids);
+  const { doc, calls, apps, listeners } = fixture(ids), dispose = install(doc);
   const child = new FakeNode({}, new FakeNode({}, null));
   Object.defineProperty(child.parentElement, '__reactFiber$test', { enumerable: true, get() { throw new Error('The native row fiber must remain unread'); } });
   listeners.get('pointerdown')?.({ target: child });
-  assert.equal(createdImages.length, start, 'Clicking a native row neither reads its React fiber nor warms artwork');
-  selectRoute(doc, SID + 1);
-  assert.equal(createdImages.length, start + 1, 'The committed route primes its logo immediately without inspecting a native row');
-  const replacement = SID + 20; apps.set(replacement, { ...apps.get(SID), appid: replacement }); reset([SID, replacement]);
+  for (const id of ids) selectRoute(doc, id);
+  assert.equal(calls.length, 100, 'Actual route synchronization primes only native position metadata');
+  assert.equal(createdImages.length, 0, 'One hundred committed routes create no images');
+  assert.equal(imageUrlReads, 0, 'Route synchronization leaves artwork URL selection to native Steam');
+  const replacement = SID + 120; apps.set(replacement, { ...apps.get(SID), appid: replacement }); reset([SID, replacement]);
   for (const callback of subscriptions) callback();
+  runTimers();
   assert(calls.some(overview => overview.appid === replacement), 'Mapping changes warm new verified native positions');
-  dispose(); assert.equal(timers.size, 0, 'Disposal cancels native warmup work');
+  assert.equal(createdImages.length, 0, 'Mapping changes create no images');
+  dispose(); assert.equal(timers.size, 0, 'Disposal cancels native metadata work');
 }
 {
   reset([SID]); const { doc, calls } = fixture();
@@ -206,15 +190,6 @@ const reset = ids => { mappings = Object.fromEntries(ids.map(id => [`shortcut:${
   const replacementCalls = [];
   doc.defaultView.appDetailsStore = { GetCustomLogoPosition: overview => replacementCalls.push(overview) };
   warm(doc, SID); assert.equal(replacementCalls.length, 1, 'A native store replacement refreshes the per-document cache');
-}
-{
-  reset([SID]); const { doc } = fixture(); const start = createdImages.length;
-  warm(doc, SID, true);
-  assert.match(createdImages[start].requestedSrc, /_logo\.png\?/);
-  createdImages[start].onerror();
-  assert.match(createdImages[start + 1].requestedSrc, /_logo\.jpg\?/, 'A missing PNG falls back to the original native JPG candidate');
-  runTimers();
-  assert(!createdImages[start + 1].currentSrc && !createdImages[start + 1].onload, 'Timeout releases native JPG fallback resources');
 }
 {
   reset([SID]); const { doc, calls } = fixture(), savedStores = moduleStores.get(doc);
@@ -242,9 +217,9 @@ const reset = ids => { mappings = Object.fromEntries(ids.map(id => [`shortcut:${
   dispose();
 }
 {
-  reset([SID]); const { doc } = fixture(), beforeReadiness = inventoryReadinessCalls.length, beforeImages = createdImages.length;
+  reset([SID]); const { doc } = fixture(), beforeReadiness = inventoryReadinessCalls.length;
   inventoryRetryResults.push(true, true, true, true);
-  const dispose = install(doc); finishImagesFrom(beforeImages);
+  const dispose = install(doc);
   for (let step = 0; step < 4; step++) {
     for (let index = 0; index < 4; index++) await Promise.resolve();
     runTimers();
@@ -258,8 +233,7 @@ const reset = ids => { mappings = Object.fromEntries(ids.map(id => [`shortcut:${
   const ids = Array.from({ length: 101 }, (_, index) => SID + index);
   reset([SID]); const { doc, calls, appStore, listeners } = fixture(ids);
   doc.routeId = SID;
-  const dispose = install(doc), initialImages = createdImages.length;
-  finishImagesFrom(initialImages - 1); runTimers();
+  const dispose = install(doc); runTimers();
   const overviewReads = [], originalOverview = appStore.GetAppOverviewByAppID;
   appStore.GetAppOverviewByAppID = id => { overviewReads.push(id); return originalOverview(id); };
   reset(ids);
@@ -277,57 +251,49 @@ const reset = ids => { mappings = Object.fromEntries(ids.map(id => [`shortcut:${
   for (const callback of subscriptions) callback();
   assert(overviewReads.every(id => id === SID), 'Mapping refresh during wheel may prime only the already selected shortcut');
   assert.equal(calls.length, beforePositions, 'Nonselected background positions wait for sidebar idle');
-  assert.equal(createdImages.length, beforeImages, 'Nonselected background images wait for sidebar idle');
+  assert.equal(createdImages.length, beforeImages, 'Mapping refresh during wheel creates no image preload');
   const selected = SID + 100;
   selectRoute(doc, selected);
   assert.equal(calls.at(-1).appid, selected, 'Actual route synchronization primes its native position immediately during wheel');
   assert.equal(calls.length, beforePositions + 1);
-  assert.equal(createdImages.length, beforeImages + 1, 'Actual route synchronization starts its logo immediately while background work is deferred');
+  assert.equal(createdImages.length, beforeImages, 'Actual route synchronization starts no logo preload while background metadata work is deferred');
   listeners.get('scroll')({ target: new FakeNode() });
   advanceTimers(100);
   assert.equal(calls.length, beforePositions + 1, 'Background position work stays paused throughout continuing scroll');
-  finishImagesFrom(beforeImages);
-  assert.equal(createdImages.length, beforeImages + 1, 'Completing selected artwork does not drain background requests during wheel');
   runTimers();
   assert(calls.some(overview => overview.appid === SID + 1), 'Background caches resume after actual scroll becomes idle');
   dispose(); assert.equal(timers.size, 0);
 }
 {
   const ids = Array.from({ length: 12 }, (_, index) => SID + index); reset(ids);
-  const { doc, calls, listeners } = fixture(ids), beforeImages = createdImages.length;
-  const dispose = install(doc), beforePositions = calls.length;
+  const { doc, calls, listeners } = fixture(ids), dispose = install(doc), beforePositions = calls.length;
   listeners.get('wheel')({ target: new FakeNode() });
-  createdImages[beforeImages].finish();
-  assert.equal(createdImages.length, beforeImages + 2, 'A completed background image cannot start its queued successor during wheel');
   advanceTimers(50);
   assert.equal(calls.length, beforePositions, 'A position-batch timer firing during wheel waits for idle');
   context.exports.installNativeArtworkWarmup(doc)();
   runTimers();
   assert.equal(calls.length, beforePositions, 'Disposal cancels pending background position batches');
-  assert.equal(createdImages.length, beforeImages + 2, 'Disposal cancels pending background image and logo drains');
   assert.equal(listeners.size, 3, 'Warmup disposal leaves the independently owned scroll controller intact');
   dispose();
 }
 {
-  const ids = Array.from({ length: 12 }, (_, index) => SID + index); reset(ids);
-  const { doc, calls, listeners } = fixture(ids), beforeImages = createdImages.length;
-  const dispose = install(doc);
-  listeners.get('wheel')({ target: new FakeNode() });
-  selectRoute(doc, SID + 11);
-  assert.equal(calls.at(-1).appid, SID + 11, 'Selected position priming does not wait for existing background logo downloads');
-  assert.equal(createdImages.length, beforeImages + 3, 'Selection replaces one background preload immediately when both image slots are occupied');
-  assert(createdImages.filter(image => image.currentSrc).length <= 2, 'Foreground priority preserves the global two-image concurrency bound');
+  const ids = Array.from({ length: 160 }, (_, index) => SID + index); reset(ids);
+  const { doc, calls } = fixture(ids), dispose = install(doc);
+  runTimers();
+  assert.equal(calls.length, 128, 'The background metadata batch remains bounded even with a large mapped library');
+  assert.equal(createdImages.length, 0, 'A large mapped library starts no artwork image preloads');
   dispose();
 }
 {
-  const ids = Array.from({ length: 12 }, (_, index) => SID + index); reset(ids);
-  const { doc, listeners } = fixture(ids), beforeImages = createdImages.length;
+  reset([SID]); const { doc } = fixture(), beforeReadiness = inventoryReadinessCalls.length;
+  inventoryRetryResults.length = 0;
+  inventoryRetryResults.push(true);
   const dispose = install(doc);
-  listeners.get('wheel')({ target: new FakeNode() });
-  selectRoute(doc, SID);
-  createdImages[beforeImages].onerror();
-  assert.equal(createdImages.length, beforeImages + 3, 'A promoted selected preload retains immediate fallback priority during wheel');
-  assert.match(createdImages.at(-1).requestedSrc, /_logo\.jpg\?/);
   dispose();
+  for (let index = 0; index < 4; index++) await Promise.resolve();
+  assert.equal(inventoryReadinessCalls.length, beforeReadiness + 1, 'Startup preserves the native logo inventory readiness check');
+  assert.equal(timers.size, 0, 'A pending inventory response cannot schedule retries after disposal');
 }
-console.log('Native artwork warmup: exact verified identity, native position cache, same-realm resolver, bounded local-logo warming and lifecycle checks passed.');
+assert.equal(createdImages.length, 0, 'Startup, navigation, mapping changes, retries and row events never instantiate Image');
+assert.equal(imageUrlReads, 0, 'Metadata warmup never invokes native artwork URL selection');
+console.log('Native artwork metadata warmup: zero image preloads, exact verified identity, bounded native positions, retained inventory/source adapter and lifecycle checks passed.');

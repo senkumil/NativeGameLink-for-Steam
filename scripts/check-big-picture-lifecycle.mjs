@@ -34,6 +34,7 @@ const mocks = {
   steamUIModeService: { isGamepadUI: () => true }, isPublicSteamLibraryRoute: () => false, libraryRouteIdentity: () => 'bp-home',
   findMappingForTitle: () => null, getShortcutAppById: () => app,
   fetchPlaytimeStatsBatch: () => new Promise(resolve => { completeBatch = resolve; }),
+  restoreBigPictureOverviewState: () => {},
 };
 const schedulerContext = vm.createContext({ exports: {}, require: () => mocks, setTimeout, clearTimeout });
 vm.runInContext(compile('frontend/features/big-picture/rerender-scheduler.ts'), schedulerContext);
@@ -44,8 +45,12 @@ const runtime = context.exports;
 for (let cycle = 0; cycle < 2; cycle++) {
   runtime.activateBigPicture(doc);
   runtime.mergeShortcutsIntoBigPictureLibrary(doc);
-  assert.equal(app.BIsShortcut(), false);
-  assert.equal(app.controller_support, 2);
+  assert.equal(app.BIsShortcut(), true, 'a linked overview retains its real shortcut classification during Big Picture');
+  assert.equal(app.controller_support, 0, 'Big Picture does not manufacture controller support');
+  assert.equal(app.BIsSteamDeckVerified(), false, 'Big Picture does not manufacture Deck certification');
+  assert.equal(app.local_per_client_data.installed, false, 'Big Picture does not manufacture install state');
+  assert.equal(App.prototype.BIsShortcut, method, 'the shared shortcut prototype is never patched');
+  assert.equal(Object.getOwnPropertyDescriptor(App.prototype, 'controller_support').get, getter, 'the shared controller getter is never patched');
   assert.equal(native.controller_support, 0);
   assert.equal(native.BIsSteamDeckVerified(), false);
   const pending = runtime.patchBigPictureHomePlaytime(doc);
@@ -67,4 +72,4 @@ const steamReplacement = () => {};
 target.method = steamReplacement;
 patches.restore();
 assert.equal(target.method, steamReplacement, 'preserve newer Steam changes');
-console.log('Big Picture lifecycle passed: two entry/exit cycles, prototype/getter restoration, native app isolation, late response cancellation.');
+console.log('Big Picture lifecycle passed: two entry/exit cycles, unchanged shortcut/install/controller/Deck classification and shared prototypes, native app isolation, late response cancellation.');

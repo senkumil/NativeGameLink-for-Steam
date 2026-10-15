@@ -12,6 +12,7 @@ const deferredHydrationCleanup = new WeakMap<HTMLElement, () => void>();
 const adaptiveWidthCleanup = new WeakMap<HTMLElement, () => void>();
 const columnLayoutCleanup = new WeakMap<HTMLElement, () => void>();
 const communityLayoutRequests = new WeakMap<HTMLElement, () => void>();
+const communityRowBatches = new WeakMap<HTMLElement, number[]>();
 
 function createCommunityHeader(doc: Document): HTMLElement {
 	const header = doc.createElement('div');
@@ -34,9 +35,8 @@ export function disposeCommunitySection(root: HTMLElement): void {
 	columnLayoutCleanup.get(root)?.();
 }
 
-/** Pack the stable feed nodes into the shortest available column. Images and
- * guide text can finish loading later, so observe real card sizes as well as
- * width. Only geometry changes; cards, focused controls and media stay mounted. */
+/** Follow Steam's dense grid of aligned rows without moving mounted cards.
+ * Images can change their native span after loading; players stay mounted. */
 function setupCommunityColumns(doc: Document, root: HTMLElement): void {
 	columnLayoutCleanup.get(root)?.();
 	const grid = root.querySelector<HTMLElement>('.gdl-community-grid');
@@ -44,11 +44,44 @@ function setupCommunityColumns(doc: Document, root: HTMLElement): void {
 	const view = doc.defaultView;
 	let disposed = false;
 	let frame = 0;
+	const ancestors: HTMLElement[] = [];
+	for (let parent = root.parentElement; parent && parent !== doc.body; parent = parent.parentElement) ancestors.push(parent);
 	const pixels = (value: number): string => `${Math.round(value * 1000) / 1000}px`;
 	const cards = Array.from(grid.querySelectorAll<HTMLElement>('[data-gdl-community-card]'))
 		.sort((a, b) => Number(a.dataset.gdlCommunityCard) - Number(b.dataset.gdlCommunityCard));
+	const batchEnds = communityRowBatches.get(grid) || [];
+	communityRowBatches.set(grid, batchEnds);
 	const setStyle = (element: HTMLElement, key: string, value: string): void => {
 		if (element.style.getPropertyValue(key) !== value) element.style.setProperty(key, value);
+	};
+	const syncBottomClearance = (): void => {
+		// Steam's 100%-height scroll viewport can extend below its clipped pane.
+		// Reserve only that measured overlap so the last author footer can scroll
+		// fully into view, retaining the usual bottom gap on an unclipped page.
+		let scrollBottom = 0;
+		let scrollTop = 0;
+		let scrollScale = 1;
+		let visibleBottom = view?.innerHeight || Infinity;
+		for (const ancestor of ancestors) {
+			const overflow = view?.getComputedStyle(ancestor).overflowY || '';
+			if (!/^(auto|scroll|overlay|hidden|clip)$/.test(overflow)) continue;
+			const rect = ancestor.getBoundingClientRect();
+			const scale = ancestor.offsetHeight > 0 ? rect.height / ancestor.offsetHeight : 1;
+			const bottom = rect.top + (ancestor.clientTop + ancestor.clientHeight) * scale;
+			if (!scrollBottom && /^(auto|scroll|overlay)$/.test(overflow)
+				&& ancestor.scrollHeight > ancestor.clientHeight + 1) {
+				scrollBottom = bottom;
+				scrollTop = rect.top;
+				scrollScale = scale || 1;
+			} else if (scrollBottom) {
+				visibleBottom = Math.min(visibleBottom, bottom);
+			}
+		}
+		const rootWidth = Number.parseFloat(view?.getComputedStyle(root).width || '') || root.offsetWidth;
+		const rootScale = rootWidth > 0 ? root.getBoundingClientRect().width / rootWidth : scrollScale;
+		const clearance = scrollBottom && scrollTop < visibleBottom
+			? Math.max(0, (scrollBottom - visibleBottom) / (rootScale || 1)) : 0;
+		setStyle(root, '--gdl-community-bottom-clearance', pixels(clearance));
 	};
 	const syncMedia = (card: HTMLElement, width: number): void => {
 		const media = card.querySelector<HTMLElement>('.gdl-community-media,.gdl-community-video-thumb');
@@ -67,25 +100,61 @@ function setupCommunityColumns(doc: Document, root: HTMLElement): void {
 		// Computed dimensions are CSS pixels even when Steam uses a zoom factor.
 		const width = Number.parseFloat(view?.getComputedStyle(grid).width || '') || grid.clientWidth;
 		if (!(width > 0)) return;
-		const count = Math.max(1, Math.min(10, Math.floor((width + 24) / 280)));
+		const count = Math.max(1, Math.min(10, Math.floor((grid.clientWidth + 24) / 280)));
 		const cardWidth = (width - (count - 1) * 24) / count;
 		setStyle(grid, '--gdl-community-columns', String(count));
 		const visible = cards.filter(card => !card.hidden);
-		// Batch all dimension writes before reading heights: one layout pass,
-		// rather than forcing a layout for every individual community card.
-		for (const card of visible) {
-			setStyle(card, 'width', pixels(cardWidth));
-			syncMedia(card, cardWidth);
-		}
-		const heights = visible.map(card => Number.parseFloat(view?.getComputedStyle(card).height || '') || card.offsetHeight);
-		const bottoms = Array.from({ length: count }, () => 0);
-		visible.forEach((card, index) => {
-			const column = bottoms.indexOf(Math.min(...bottoms));
-			setStyle(card, 'left', pixels(column * (cardWidth + 24)));
-			setStyle(card, 'top', pixels(bottoms[column]));
-			bottoms[column] += heights[index] + 32;
+		if (visible.length < (batchEnds[batchEnds.length - 1] || 0)) batchEnds.length = 0;
+		if (visible.length > (batchEnds[batchEnds.length - 1] || 0)) batchEnds.push(visible.length);
+		const spans = visible.map(card => {
+			const video = card.classList.contains('gdl-community-card-video');
+			const image = card.querySelector<HTMLImageElement>('.gdl-community-media .gdl-community-preview');
+			const aspect = image?.naturalWidth && image.naturalHeight ? image.naturalWidth / image.naturalHeight : 0;
+			const columns = video ? Math.min(2, count) : aspect > 2.5 ? Math.min(3, count) : 1;
+			setStyle(card, '--gdl-community-card-columns', String(columns));
+			const rows = aspect > 0 && aspect <= 0.8 ? 2 : 1;
+			setStyle(card, '--gdl-community-card-rows', String(rows));
+			// Remove geometry left by a previously mounted masonry section.
+			for (const property of ['width', 'height', 'left', 'top']) {
+				if (card.style.getPropertyValue(property)) card.style.removeProperty(property);
+			}
+			syncMedia(card, cardWidth * columns + 24 * (columns - 1));
+			return { columns, rows };
 		});
-		setStyle(grid, 'height', pixels(Math.max(0, ...bottoms) - (visible.length ? 32 : 0)));
+		let rowOffset = 0;
+		let batchStart = 0;
+		for (const batchEnd of batchEnds) {
+			// Fill whole grid cells densely within the published batch. Newly
+			// revealed cards start in new rows, as in Steam, so they cannot grow
+			// a previously visible row and displace an active video.
+			const occupied: boolean[][] = [];
+			for (let index = batchStart; index < batchEnd; index++) {
+				const span = spans[index];
+				let row = 0;
+				let column = 0;
+				findSlot: for (;; row++) {
+					for (column = 0; column <= count - span.columns; column++) {
+						let available = true;
+						for (let y = row; y < row + span.rows; y++) {
+							for (let x = column; x < column + span.columns; x++) {
+								if (occupied[y]?.[x]) available = false;
+							}
+						}
+						if (available) break findSlot;
+					}
+				}
+				setStyle(visible[index], 'grid-column-start', String(column + 1));
+				setStyle(visible[index], 'grid-row-start', String(rowOffset + row + 1));
+				for (let y = row; y < row + span.rows; y++) {
+					occupied[y] ||= [];
+					for (let x = column; x < column + span.columns; x++) occupied[y][x] = true;
+				}
+			}
+			rowOffset += occupied.length;
+			batchStart = batchEnd;
+		}
+		if (grid.style.height) grid.style.removeProperty('height');
+		syncBottomClearance();
 	};
 	const queue = (): void => {
 		if (disposed || frame) return;
@@ -100,6 +169,7 @@ function setupCommunityColumns(doc: Document, root: HTMLElement): void {
 	const observer = typeof Observer === 'function' ? new Observer(queue) : null;
 	observer?.observe(grid);
 	for (const card of cards) observer?.observe(card);
+	for (const ancestor of ancestors) observer?.observe(ancestor);
 	grid.addEventListener('load', queue, true);
 	grid.addEventListener('error', queue, true);
 	view?.addEventListener('resize', queue, { passive: true });
@@ -113,6 +183,7 @@ function setupCommunityColumns(doc: Document, root: HTMLElement): void {
 		view?.removeEventListener('resize', queue);
 		columnLayoutCleanup.delete(root);
 		communityLayoutRequests.delete(root);
+		root.style.removeProperty('--gdl-community-bottom-clearance');
 	});
 	layout();
 }
@@ -423,7 +494,7 @@ export function insertCommunitySection(
 	const node = doc.createElement('section');
 	node.id = 'gdl-community-content';
 	node.className = 'gdl-community-section';
-	node.style.cssText = 'display:block;min-width:0;box-sizing:border-box;color:#acb2b8;font-family:inherit;padding:0 12px 24px;overflow:visible;';
+	node.style.cssText = 'display:block;min-width:0;box-sizing:border-box;color:#acb2b8;font-family:inherit;padding:0 10px calc(24px + var(--gdl-community-bottom-clearance,0px));overflow:visible;';
 	node.appendChild(createCommunityHeader(doc));
 	const inner = doc.createElement('div');
 	inner.id = 'gdl-community-inner';

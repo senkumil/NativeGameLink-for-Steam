@@ -1,5 +1,4 @@
-import React, { useState } from 'react';
-import { DialogButton, Focusable, IconsModule, ModalRoot, showModal } from '@steambrew/client';
+import React from 'react';
 import type { FriendPlayInfo, NewsItem } from '../../domain/types';
 import { gdlText, loc, steamIntlLocale } from '../../steam/localization';
 import type { NativeAppDetailsClasses } from '../../steam/gamepad/components/AppDetailsNativeClasses';
@@ -7,14 +6,15 @@ import { openSteamNavigationUrl } from '../../steam/navigation';
 import { eventTypeLabel, newsExcerpt } from '../library/news';
 import { getCurrentSteamUser, loadLocalActivityPosts, saveLocalActivityPost, type LocalActivityPost } from '../library/social/feed';
 import { getCachedPersona } from '../library/social/personas';
-import { dismissBigPictureFocusRing } from './gamepad-nav';
+import { getDocumentReact } from '../../steam/gamepad/document-ui-runtime';
+import { NativeFocusable, NativeButton, NativeIcons } from './document-primitives';
+import { showBigPictureModal } from './owned-modals';
+import { isBigPictureActionCurrent, type BigPictureActionOwner } from './detail-target';
 import { EXIT_TEXT_EDITOR_EVENT } from './editable-target';
 import { showSteamVirtualKeyboard, hideSteamVirtualKeyboard } from '../../steam/gamepad/virtual-keyboard';
 import type { BigPictureDetailData, MappedShortcut } from './types';
 
-const NativeFocusable = Focusable as React.ComponentType<any>;
-const NativeButton = DialogButton as React.ComponentType<any>;
-const NativeIcons = IconsModule as Record<string, React.ComponentType<any>>;
+
 
 function nativeClasses(...values: Array<string | null | false | undefined>): string | undefined {
 	const value = values.filter(Boolean).join(' ');
@@ -87,22 +87,16 @@ function newsModalParagraphs(contents: string): string[] {
 		.slice(0, 36);
 }
 
-function showNativeNewsModal(doc: Document, item: NewsItem, imageUrl: string | undefined, _classes: NativeAppDetailsClasses): void {
-	dismissBigPictureFocusRing(doc);
-	let handle: { Close(): void } | undefined;
-	const close = () => {
-		dismissBigPictureFocusRing(doc);
-		handle?.Close();
-	};
+function showNativeNewsModal(owner: BigPictureActionOwner, item: NewsItem, imageUrl: string | undefined, _classes: NativeAppDetailsClasses): void {
+	if (!isBigPictureActionCurrent(owner)) return;
+	const doc = owner.document;
 	const title = item.title || loc('AppDetails_SectionTitle_News', 'Noticias');
 	const type = item.event_type ? eventTypeLabel(Number(item.event_type)) : (item.feedlabel || gdlText('feed_news', 'News'));
 	const date = newsDate(item);
 	const paragraphs = newsModalParagraphs(item.contents || '');
 
-	try {
-		handle = showModal(
-			<ModalRoot onCancel={close} closeModal={close} bAllowFullSize bDisableBackgroundDismiss>
-				<div id="gdl-bp-news-modal" className="gdl-bp-news-modal-shell">
+	const shown = showBigPictureModal(doc, 'gdl-bp-news-modal', title, close => (
+				<div className="gdl-bp-news-modal-shell">
 					<div className="gdl-bp-news-modal-window">
 						{imageUrl ? (
 							<div className="gdl-bp-news-modal-hero">
@@ -124,7 +118,7 @@ function showNativeNewsModal(doc: Document, item: NewsItem, imageUrl: string | u
 							{item.url ? (
 								<NativeButton
 									className="gdl-bp-news-modal-open"
-									{...clickProps(() => { close(); openSteamNavigationUrl(doc, item.url); })}
+									{...clickProps(() => { if (!isBigPictureActionCurrent(owner)) return; close(); openSteamNavigationUrl(doc, item.url); })}
 								>
 									{loc('AppDetails_ViewNewsOnline', 'Ver en Steam')}
 								</NativeButton>
@@ -135,13 +129,8 @@ function showNativeNewsModal(doc: Document, item: NewsItem, imageUrl: string | u
 						</div>
 					</div>
 				</div>
-			</ModalRoot>,
-			(doc.defaultView || doc.body) as EventTarget,
-			{ strTitle: title, bNeverPopOut: true, bHideMainWindowForPopouts: false },
-		);
-	} catch {
-		if (item.url) openSteamNavigationUrl(doc, item.url);
-	}
+	));
+	if (!shown && item.url) openSteamNavigationUrl(doc, item.url);
 }
 
 function clickProps(action: () => void): { onClick: () => void } {
@@ -154,12 +143,14 @@ function ActivityEventCard({
 	data,
 	classes,
 	document,
+	generation,
 }: {
 	item: NewsItem;
 	shortcut: MappedShortcut;
 	data: BigPictureDetailData;
 	classes: NativeAppDetailsClasses;
 	document: Document;
+	generation?: number;
 }): React.ReactElement {
 	const event = classes.ActivityEvent;
 	const type = item.event_type ? eventTypeLabel(Number(item.event_type)) : (item.feedlabel || gdlText('feed_news', 'News'));
@@ -167,7 +158,7 @@ function ActivityEventCard({
 	const imageUrl = item.image
 		|| data.game?.header_image
 		|| `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${shortcut.steamAppId}/header.jpg`;
-	const activate = () => showNativeNewsModal(document, item, imageUrl, classes);
+	const activate = () => showNativeNewsModal({ document, shortcut, generation }, item, imageUrl, classes);
 
 	if (imageUrl) {
 		return (
@@ -205,18 +196,24 @@ function PostTextEntry({
 	classes,
 	onPostAdded,
 	document: targetDoc,
+	generation,
 }: {
 	steamAppId: string;
 	shortcutAppId: string;
 	classes: NativeAppDetailsClasses;
 	onPostAdded: () => void;
 	document?: Document;
-}): React.ReactElement {
+	generation?: number;
+}): React.ReactElement | null {
 	const postClasses = classes.PostTextEntry;
 	const eventClasses = classes.ActivityEvent;
-	const document = targetDoc || (typeof window !== 'undefined' ? window.document : undefined);
-	const [active, setActive] = useState(false);
-	const [text, setText] = useState('');
+	const document = targetDoc;
+	if (!document) return null;
+	const React = getDocumentReact(document);
+	if (!React) return null;
+	const owner = { document, shortcut: { id: Number(shortcutAppId), steamAppId, title: '' }, generation };
+	const [active, setActive] = React.useState(false);
+	const [text, setText] = React.useState('');
 	const composerRef = React.useRef<HTMLElement | null>(null);
 	const textareaRef = React.useRef<HTMLElement | null>(null);
 	const user = React.useMemo(() => getCurrentSteamUser(document || window.document), [document]);
@@ -239,6 +236,7 @@ function PostTextEntry({
 	}, [document, resolveKeyboardTarget]);
 
 	const handlePublish = () => {
+		if (!isBigPictureActionCurrent(owner)) return;
 		const trimmed = text.trim();
 		if (!trimmed) return;
 		const newPost: LocalActivityPost = {
@@ -255,7 +253,7 @@ function PostTextEntry({
 		onPostAdded();
 	};
 
-	const activateComposer = () => setActive(true);
+	const activateComposer = () => { if (isBigPictureActionCurrent(owner)) setActive(true); };
 
 	React.useEffect(() => {
 		if (!document || !active) return undefined;
@@ -336,6 +334,7 @@ export function FriendsSection(props: {
 	classes: NativeAppDetailsClasses;
 	SectionComponent: React.ComponentType<any>;
 	document?: Document;
+	generation?: number;
 }): React.ReactElement | null {
 	const played = [...(props.data.friends?.recentlyPlayed || []), ...(props.data.friends?.previouslyPlayed || [])];
 	const wishlisted = props.data.friends?.wishlisted || [];
@@ -357,7 +356,7 @@ export function FriendsSection(props: {
 				{friends.slice(0, 8).map(friend => {
 					const persona = getCachedPersona(friend.steamid);
 					const openProfile = () => {
-						if (doc) openSteamNavigationUrl(doc, `https://steamcommunity.com/profiles/${friend.steamid}`);
+						if (doc && isBigPictureActionCurrent({ document: doc, shortcut: props.shortcut, generation: props.generation })) openSteamNavigationUrl(doc, `https://steamcommunity.com/profiles/${friend.steamid}`);
 					};
 					return (
 						<NativeFocusable
@@ -405,13 +404,16 @@ export function FallbackActivitySection(props: {
 	classes: NativeAppDetailsClasses;
 	hydrating: boolean;
 	document: Document;
+	generation?: number;
 	SectionComponent: React.ComponentType<any>;
 	LoadingComponent: React.ComponentType<any>;
-}): React.ReactElement {
+}): React.ReactElement | null {
+	const React = getDocumentReact(props.document);
+	if (!React) return null;
 	const activity = props.classes.Activity;
 	const shortcutIdStr = String(props.shortcut.id);
-	const [posts, setPosts] = useState<LocalActivityPost[]>(() => loadLocalActivityPosts(props.shortcut.steamAppId, shortcutIdStr));
-	const [limit, setLimit] = useState(12);
+	const [posts, setPosts] = React.useState<LocalActivityPost[]>(() => loadLocalActivityPosts(props.shortcut.steamAppId, shortcutIdStr));
+	const [limit, setLimit] = React.useState(12);
 
 	React.useEffect(() => {
 		setPosts(loadLocalActivityPosts(props.shortcut.steamAppId, shortcutIdStr));
@@ -438,6 +440,7 @@ export function FallbackActivitySection(props: {
 				shortcutAppId={shortcutIdStr}
 				classes={props.classes}
 				document={props.document}
+				generation={props.generation}
 				onPostAdded={() => setPosts(loadLocalActivityPosts(props.shortcut.steamAppId, shortcutIdStr))}
 			/>
 			<div
@@ -523,6 +526,7 @@ export function FallbackActivitySection(props: {
 								shortcut={props.shortcut}
 								data={props.data}
 								classes={props.classes}
+								generation={props.generation}
 								document={props.document}
 							/>
 						))}

@@ -8,9 +8,26 @@ import { highlightedAchievementNames, isRareAchievement } from './rarity';
 import { getSteamRareAchievementClasses, renderSteamRareGlowHtml } from './steam-rare';
 import { ensureAchievementModalStyles } from './styles/modal';
 import { getAchievementComparisonFriends, getFriendAchievementState, type FriendAchievementState } from './comparison';
+import { isCurrentAchievementTarget, linkedAchievementTarget } from './navigation';
+import { getCurrentSteamUser } from '../library/social/feed';
 
 const activeModalClosers = new WeakMap<Document, () => void>();
-const modalOpenGenerations = new WeakMap<Document, number>();
+const modalOpenGenerations = new WeakMap<Document, object>();
+const modalDocuments = new Set<Document>();
+
+/** Retire both an open sheet and its pending metadata request. Tokens cannot
+ * regain ownership if the same shortcut is visited again before IPC finishes. */
+export function disposeLocalAchievementsModal(doc: Document): void {
+	modalOpenGenerations.delete(doc);
+	modalDocuments.delete(doc);
+	const close = activeModalClosers.get(doc);
+	activeModalClosers.delete(doc);
+	close?.();
+}
+
+export function disposeAllLocalAchievementsModals(): void {
+	for (const doc of Array.from(modalDocuments)) disposeLocalAchievementsModal(doc);
+}
 
 function achievementText(token: string, fallback: string, ...values: Array<string | number>): string {
 	return loc(token, fallback).replace(/%([1-9]\d*)\$[sd]/g, (placeholder, index) => String(values[Number(index) - 1] ?? placeholder));
@@ -61,17 +78,32 @@ function resolveModalViewport(doc: Document): { left: number; top: number; width
 }
 
 export async function openLocalAchievementsModal(doc: Document, data: LocalAchievementData): Promise<void> {
-	activeModalClosers.get(doc)?.();
-	const opening = (modalOpenGenerations.get(doc) || 0) + 1;
+	disposeLocalAchievementsModal(doc);
+	const target = linkedAchievementTarget(doc);
+	if (!target || String(data.metadata_appid || data.appid) !== target.steamAppId) return;
+	const opening = {};
 	modalOpenGenerations.set(doc, opening);
+	modalDocuments.add(doc);
+	const current = (): boolean => modalOpenGenerations.get(doc) === opening
+		&& Boolean(doc.body && !doc.defaultView?.closed) && isCurrentAchievementTarget(doc, target);
 	ensureAchievementModalStyles(doc);
 	doc.getElementById('gdl-local-achievement-modal')?.remove();
 	const activeData = pickCachedLocalAchievementSnapshot(data);
-	const info = await getLocalAchievementGameInfo(activeData.appid);
-	if (!doc.body || modalOpenGenerations.get(doc) !== opening) return;
+	let info: Awaited<ReturnType<typeof getLocalAchievementGameInfo>>;
+	try { info = await getLocalAchievementGameInfo(activeData.appid); }
+	catch (error) {
+		if (modalOpenGenerations.get(doc) === opening) disposeLocalAchievementsModal(doc);
+		throw error;
+	}
+	if (!current()) {
+		if (modalOpenGenerations.get(doc) === opening) disposeLocalAchievementsModal(doc);
+		return;
+	}
 	ensureAchievementModalStyles(doc);
 	doc.getElementById('gdl-local-achievement-modal')?.remove();
 	const pct = localAchievementPercent(activeData);
+	const complete = activeData.total > 0 && activeData.unlocked >= activeData.total;
+	const user = getCurrentSteamUser(doc);
 	const overlay = doc.createElement('div');
 	overlay.id = 'gdl-local-achievement-modal';
 	overlay.style.position = 'fixed';
@@ -87,7 +119,9 @@ export async function openLocalAchievementsModal(doc: Document, data: LocalAchie
 					${activeData.unlocked >= activeData.total && activeData.total > 0 ? `<div class="gdl-lam-completion-badge">${COMPLETION_RIBBON_IMAGE}</div>` : ''}
 					<div class="gdl-lam-progress-copy">
 						<div class="gdl-lam-progressline">
-							<span>${escapeHtml(achievementText('Achievements_HeaderStats_Earned_Label', '%1$s of %2$s achievements earned', activeData.unlocked, activeData.total))}</span>
+							<span>${escapeHtml(complete
+								? achievementText('AppDetails_PlayerUnlockedPercentAll', "You've unlocked all achievements! %1$s/%2$s", activeData.unlocked, activeData.total)
+								: achievementText('Achievements_HeaderStats_Earned_Label', '%1$s of %2$s achievements earned', activeData.unlocked, activeData.total))}</span>
 							<span>(${pct}%)</span>
 						</div>
 						<div class="gdl-lam-track"><div class="gdl-lam-fill" style="width:${pct}%"></div></div>
@@ -100,8 +134,10 @@ export async function openLocalAchievementsModal(doc: Document, data: LocalAchie
 			</div>
 			<div class="gdl-lam-scroll">
 				<div class="gdl-lam-toolbar">
+					<div class="gdl-lam-global-user" hidden title="${escapeHtml(user.name)}"><img class="gdl-lam-user-avatar" src="${escapeHtml(user.avatar)}" alt="${escapeHtml(user.name)}"></div>
 					<input class="gdl-lam-search" type="search" aria-label="${escapeHtml(loc('Achievements_Filter_Default', 'Search'))}" placeholder="${escapeHtml(loc('Achievements_Filter_Default', 'Search'))}">
 					<div class="gdl-lam-compare-control"><select class="gdl-lam-compare" aria-label="${escapeHtml(loc('Achievements_ComparisonLabel_NotComparing', 'Compare with...'))}"><option value="">${escapeHtml(loc('Achievements_ComparisonLabel_NotComparing', 'Compare with...'))}</option></select><svg class="gdl-lam-compare-chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 6l5 5 5-5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></div>
+					<div class="gdl-lam-global-label" hidden>${escapeHtml(loc('Achievements_GlobalAchievement_PercentUnlockedLabel', '% of all players'))}</div>
 				</div>
 				<div class="gdl-lam-comparison-status" role="status" hidden></div>
 				<div class="gdl-lam-list"></div>
@@ -166,15 +202,39 @@ export async function openLocalAchievementsModal(doc: Document, data: LocalAchie
 	const comparison = overlay.querySelector('.gdl-lam-compare') as HTMLSelectElement;
 	const comparisonControl = overlay.querySelector('.gdl-lam-compare-control') as HTMLElement;
 	const comparisonStatus = overlay.querySelector('.gdl-lam-comparison-status') as HTMLElement;
+	const toolbar = overlay.querySelector('.gdl-lam-toolbar') as HTMLElement;
+	const globalUser = overlay.querySelector('.gdl-lam-global-user') as HTMLElement;
+	const globalLabel = overlay.querySelector('.gdl-lam-global-label') as HTMLElement;
 	let comparisonStates: Map<string, FriendAchievementState> | null = null;
 	let comparisonName = '';
 	let comparisonGeneration = 0;
 	let tab: 'mine' | 'global' = 'mine';
+	const revealedGlobalAchievements = new Set<string>();
 	const highlightedNames = highlightedAchievementNames(activeData.achievements);
 	const rowHtml = (item: LocalAchievementItem, globalMode: boolean): string => {
+		const globalKnown = item.global_percent_known !== false && Number.isFinite(item.global_percent);
+		const globalPercent = globalKnown ? Math.max(0, Math.min(100, item.global_percent)) : 0;
+		if (globalMode) {
+			const icon = item.icon || item.icon_gray;
+			const hidden = item.hidden && !item.earned && !revealedGlobalAchievements.has(item.name);
+			const title = hidden ? loc('Achievements_HiddenAchievementItem_Individual_Title', 'Hidden achievement') : item.display_name || item.name;
+			const description = hidden ? loc('Achievements_HiddenAchievementItem_Description', 'Details for this achievement will be revealed once unlocked') : item.description || '';
+			return `<div class="gdl-lam-row is-global${hidden ? ' is-hidden-global' : ''}" data-earned="${item.earned ? 'true' : 'false'}" data-achievement="${escapeHtml(item.name)}"${hidden ? ` role="button" tabindex="0" aria-label="${escapeHtml(loc('Achievements_HiddenAchievementItem_Individual_Reveal', 'Show spoiler'))}"` : ''}>
+				<div class="gdl-lam-global-check">${item.earned ? '<svg viewBox="0 0 36 36" fill="none" aria-hidden="true"><path d="M31.09 4.38L13 22.46L5.41 14.88L1.88 18.41L13 29.54L34.62 7.91L31.09 4.38Z" fill="currentColor"/></svg>' : ''}</div>
+				<div class="gdl-lam-global-content">
+					<div class="gdl-lam-global-bar" style="width:${globalPercent}%" aria-hidden="true"></div>
+					<div class="gdl-lam-row-icon-frame">${hidden ? '<div class="gdl-lam-hidden-icon" aria-hidden="true">?</div>' : icon ? `<img class="gdl-lam-row-icon" src="${escapeHtml(icon)}" alt="" loading="lazy">` : ''}</div>
+					<div class="gdl-lam-global-details">
+						<div class="gdl-lam-row-main"><div class="gdl-lam-row-title">${escapeHtml(title)}</div><div class="gdl-lam-row-desc">${escapeHtml(description)}</div></div>
+						<div class="gdl-lam-row-right"><span class="gdl-lam-global-percent">${globalKnown ? `${globalPercent.toFixed(1)}%` : '—'}</span></div>
+						${hidden ? `<div class="gdl-lam-hidden-reveal" aria-hidden="true">${escapeHtml(loc('Achievements_HiddenAchievementItem_Individual_Reveal_Desktop', 'Click to reveal spoiler'))}</div>` : ''}
+					</div>
+				</div>
+			</div>`;
+		}
 		const locked = !item.earned;
 		const isRare = !locked && (isRareAchievement(item) || highlightedNames.has(String(item.name)));
-		const rareClasses = getSteamRareAchievementClasses();
+		const rareClasses = getSteamRareAchievementClasses(doc);
 		const frameClass = `gdl-lam-row-icon-frame ${rareClasses.wrapper}${isRare ? ' is-rare' : ''}`;
 		const icon = item.icon || item.icon_gray;
 		const hasProgress = item.max_progress > 0;
@@ -187,19 +247,29 @@ export async function openLocalAchievementsModal(doc: Document, data: LocalAchie
 		const friendState = comparisonStates ? `<div class="gdl-lam-comparison-friend" title="${escapeHtml(comparisonName)}">${escapeHtml(comparisonName)} <span class="${friend?.earned ? 'is-earned' : ''}">${friend ? (friend.earned ? '✓' : '○') : '—'}</span></div>` : '';
 		const right = `${friendState}${date}${progressCount}${bar}`;
 		const glowHtml = isRare ? renderSteamRareGlowHtml(rareClasses) : '';
-		return `<div class="gdl-lam-row${globalMode ? ' is-global' : ''}" data-search="${escapeHtml((item.display_name + ' ' + item.description).toLocaleLowerCase())}">
+		const globalCopy = globalKnown ? `${globalPercent.toFixed(1)}% ${escapeHtml(gdlText('players_have_achievement', 'of players have this achievement'))}` : '';
+		return `<div class="gdl-lam-row" data-search="${escapeHtml((item.display_name + ' ' + item.description).toLocaleLowerCase())}">
 			<div class="${frameClass}">${glowHtml}${icon ? `<img class="gdl-lam-row-icon ${rareClasses.icon}${locked ? ' locked' : ''}${isRare ? ` is-rare-glow ${rareClasses.iconGlow}` : ''}" src="${escapeHtml(locked ? (item.icon_gray || item.icon) : item.icon)}" loading="lazy">` : `<div class="gdl-lam-row-icon ${rareClasses.icon} ${locked ? 'locked' : ''}${isRare ? ` is-rare-glow ${rareClasses.iconGlow}` : ''}" style="display:flex;align-items:center;justify-content:center;font-size:25px">★</div>`}</div>
-			<div class="gdl-lam-row-main"><div class="gdl-lam-row-title">${escapeHtml(item.display_name || item.name)}</div><div class="gdl-lam-row-desc">${escapeHtml(item.description || (item.hidden && locked ? gdlText('hidden_achievement', 'Hidden achievement') : ''))}</div><div class="gdl-lam-row-global">${(item.global_percent || 0).toFixed(1)}% ${escapeHtml(gdlText('players_have_achievement', 'of players have this achievement'))}</div></div>
-			<div class="gdl-lam-row-right">${globalMode ? `<span class="gdl-lam-global-percent">${(item.global_percent || 0).toFixed(1)} %</span>` : right}</div>
+			<div class="gdl-lam-row-main"><div class="gdl-lam-row-title">${escapeHtml(item.display_name || item.name)}</div><div class="gdl-lam-row-desc">${escapeHtml(item.description || (item.hidden && locked ? gdlText('hidden_achievement', 'Hidden achievement') : ''))}</div><div class="gdl-lam-row-global">${globalCopy}</div></div>
+			<div class="gdl-lam-row-right">${right}</div>
 		</div>`;
 	};
 	const render = () => {
 		const query = (search.value || '').trim().toLocaleLowerCase();
 		let rows = activeData.achievements.slice();
 		if (tab === 'mine') rows.sort((a, b) => Number(b.earned) - Number(a.earned) || (a.earned ? Number(b.earned_time || 0) - Number(a.earned_time || 0) : Number(b.global_percent || 0) - Number(a.global_percent || 0)));
-		else rows.sort((a, b) => Number(b.global_percent || 0) - Number(a.global_percent || 0));
+		else rows.sort((a, b) => {
+			const rarity = (item: LocalAchievementItem): number => item.global_percent_known !== false && Number.isFinite(item.global_percent) ? item.global_percent : -1;
+			return rarity(b) - rarity(a);
+		});
 		if (query) rows = rows.filter(item => `${item.display_name} ${item.description} ${item.name}`.toLocaleLowerCase().includes(query));
 		list.innerHTML = rows.length ? rows.map(item => rowHtml(item, tab === 'global')).join('') : `<div class="gdl-lam-empty">${escapeHtml(gdlText('no_achievements', 'No achievements found.'))}</div>`;
+	};
+	const eventCleanups: Array<() => void> = [];
+	const listen = (element: EventTarget | null, type: string, listener: (event: Event) => void): void => {
+		if (!element) return;
+		element.addEventListener(type, listener);
+		eventCleanups.push(() => element.removeEventListener(type, listener));
 	};
 	const close = () => {
 		resizeObserver?.disconnect();
@@ -208,25 +278,33 @@ export async function openLocalAchievementsModal(doc: Document, data: LocalAchie
 		doc.removeEventListener('transitionrun', onGeometryTransition, true);
 		doc.removeEventListener('transitionend', onGeometryTransition, true);
 		if (syncFrame && view) view.cancelAnimationFrame(syncFrame);
+		for (const cleanup of eventCleanups.splice(0)) cleanup();
 		comparisonGeneration++;
 		if (activeModalClosers.get(doc) === close) activeModalClosers.delete(doc);
+		if (modalOpenGenerations.get(doc) === opening) {
+			modalOpenGenerations.delete(doc);
+			modalDocuments.delete(doc);
+		}
 		overlay.remove();
 	};
 	activeModalClosers.set(doc, close);
-	overlay.querySelector('.gdl-lam-close')?.addEventListener('click', close);
-	overlay.addEventListener('click', event => { if (event.target === overlay) close(); });
-	overlay.addEventListener('keydown', event => { if ((event as KeyboardEvent).key === 'Escape') close(); });
-	overlay.querySelectorAll('.gdl-lam-tab').forEach(button => button.addEventListener('click', () => {
+	listen(overlay.querySelector('.gdl-lam-close'), 'click', close);
+	listen(overlay, 'click', event => { if (event.target === overlay) close(); });
+	listen(overlay, 'keydown', event => { if ((event as KeyboardEvent).key === 'Escape') close(); });
+	overlay.querySelectorAll('.gdl-lam-tab').forEach(button => listen(button, 'click', () => {
 		overlay.querySelectorAll('.gdl-lam-tab').forEach(item => { item.classList.remove('active'); item.setAttribute('aria-selected', 'false'); });
 		button.classList.add('active');
 		button.setAttribute('aria-selected', 'true');
 		tab = button.getAttribute('data-tab') === 'global' ? 'global' : 'mine';
+		toolbar.classList.toggle('gdl-lam-global-toolbar', tab === 'global');
+		globalUser.hidden = tab !== 'global';
+		globalLabel.hidden = tab !== 'global';
 		comparisonControl.hidden = tab === 'global';
 		comparisonStatus.hidden = tab === 'global' || !comparison.value || Boolean(comparisonStates);
 		(overlay.querySelector('.gdl-lam-scroll') as HTMLElement).scrollTop = 0;
 		render();
 	}));
-	comparison.addEventListener('change', () => {
+	listen(comparison, 'change', () => {
 		const selected = comparison.value;
 		const request = ++comparisonGeneration;
 		comparisonStates = null;
@@ -257,7 +335,25 @@ export async function openLocalAchievementsModal(doc: Document, data: LocalAchie
 			comparison.appendChild(option);
 		}
 	}).catch(() => {});
-	search.addEventListener('input', render);
+	listen(search, 'input', render);
+	const revealGlobalAchievement = (event: Event): void => {
+		if (tab !== 'global') return;
+		const row = (event.target as Element | null)?.closest<HTMLElement>('.is-hidden-global');
+		if (!row || !list.contains(row)) return;
+		if (event.type === 'keydown' && !['Enter', ' '].includes((event as KeyboardEvent).key)) return;
+		event.preventDefault();
+		const name = row.dataset.achievement;
+		if (!name) return;
+		const focused = doc.activeElement === row;
+		revealedGlobalAchievements.add(name);
+		render();
+		if (focused) {
+			const revealed = Array.from(list.querySelectorAll<HTMLElement>('.gdl-lam-row')).find(item => item.dataset.achievement === name);
+			if (revealed) { revealed.tabIndex = -1; revealed.focus({ preventScroll: true }); }
+		}
+	};
+	listen(list, 'click', revealGlobalAchievement);
+	listen(list, 'keydown', revealGlobalAchievement);
 	overlay.setAttribute('tabindex', '-1');
 	overlay.focus();
 	render();

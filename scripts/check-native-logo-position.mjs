@@ -12,6 +12,7 @@ const source = compile('frontend/features/library/native-logo-position.ts');
 const bridgeSource = compile('frontend/features/library/steam-bridge.ts');
 const nativeBundle = 'C:/Program Files (x86)/Steam/steamui/chunk~2dcc5aaf7.js';
 let nativeSaveSource = null;
+let nativeCacheContract = null;
 if (fs.existsSync(nativeBundle)) {
   const installed = fs.readFileSync(nativeBundle, 'utf8');
   const start = installed.indexOf('async SaveCustomLogoPosition(e,t){');
@@ -20,6 +21,22 @@ if (fs.existsSync(nativeBundle)) {
   nativeSaveSource = installed.slice(start, end);
   assert(nativeSaveSource.includes('customImageInfoRtime') && nativeSaveSource.includes('SetCachedDataForApp'),
     'The native contract updates its own exact-app custom image cache');
+  const ast = ts.createSourceFile('native-logo-fixture.js', `({${nativeSaveSource}})`, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+  const cacheCalls = [];
+  const visit = node => {
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)
+      && node.expression.name.text === 'SetCachedDataForApp') cacheCalls.push(node);
+    ts.forEachChild(node, visit);
+  };
+  visit(ast);
+  assert.equal(cacheCalls.length, 1, 'Resolve exactly one semantic native cache call');
+  const call = cacheCalls[0], path = [];
+  let owner = call.expression.expression;
+  while (ts.isPropertyAccessExpression(owner)) { path.unshift(owner.name.text); owner = owner.expression; }
+  assert(ts.isIdentifier(owner), 'The native cache owner has an explicit module binding');
+  const key = call.arguments[1];
+  assert(ts.isIdentifier(key) || ts.isStringLiteral(key), 'The native cache namespace is an explicit binding or literal');
+  nativeCacheContract = { owner: owner.text, path, namespace: ts.isIdentifier(key) ? key.text : null };
 }
 
 let checks = 0;
@@ -33,10 +50,15 @@ function harness({ runtime = false, missingDetails = false, missingApps = false,
     rawCalls.push({ id, payload: JSON.parse(json) });
     return rawResult;
   } } };
-  const installedNativeSave = nativeSaveSource && new Function('SteamClient', 'p', 'I',
-    `return ({${nativeSaveSource}}).SaveCustomLogoPosition;`)(SteamClient, {
-      O: { SetCachedDataForApp(...args) { cacheWrites.push(args); } },
-    }, 'customimage');
+  const nativeBindings = { SteamClient };
+  if (nativeCacheContract) {
+    let cache = nativeBindings[nativeCacheContract.owner] = {};
+    for (const key of nativeCacheContract.path) cache = cache[key] = {};
+    cache.SetCachedDataForApp = (...args) => { cacheWrites.push(args); };
+    if (nativeCacheContract.namespace) nativeBindings[nativeCacheContract.namespace] = 'customimage';
+  }
+  const installedNativeSave = nativeSaveSource && new Function(...Object.keys(nativeBindings),
+    `return ({${nativeSaveSource}}).SaveCustomLogoPosition;`)(...Object.values(nativeBindings));
   const details = { GetAppData(id) { check(id, ID, 'Native cache belongs only to the shortcut'); return data; },
     SaveCustomLogoPosition(currentOverview, selectedPosition) {
       check(this, details, 'Native store keeps its receiver');

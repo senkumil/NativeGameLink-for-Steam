@@ -19,7 +19,6 @@ if (tlouExactTitle?.expect?.expectedAppId !== '1888930'
 
 const utilSource = readFileSync(new URL('../backend/lib/util.lua', import.meta.url), 'utf8');
 const detectorSource = readFileSync(new URL('../backend/lib/shortcut_detection.lua', import.meta.url), 'utf8');
-const trackingSource = readFileSync(new URL('../backend/lib/shortcut_detection_tracking.lua', import.meta.url), 'utf8');
 if (!utilSource.includes('function M.sanitize_utf8(value)')
 		|| !utilSource.includes('function M.sanitize_utf8_tree(value, seen)')
 		|| !detectorSource.includes('cjson.encode(util.sanitize_utf8_tree(value))')) {
@@ -34,20 +33,13 @@ const rdr2 = cases.find(test => test.executable.toLowerCase() === 'rdr2.exe');
 if (!rdr2?.expect?.bulkCanAcceptUniqueExactTitle) {
 	throw new Error('Missing regression coverage for unique exact-title bulk linking through a maintained alias.');
 }
-if (!rdr2?.expect?.persistentLauncherOverride
-	|| !rdr2?.expect?.trackingExecutableAutoApply
-	|| !trackingSource.includes('find_persistent_launcher_override')
-	|| !trackingSource.includes('"rdr2.exe"')
-	|| !trackingSource.includes('"Launcher.exe"')) {
-	throw new Error('Missing RDR2 launcher override regression coverage.');
+if (!rdr2?.expect?.selectedExecutableIsPreserved) {
+	throw new Error('Missing regression coverage for preserving the selected RDR2 executable.');
 }
 const rdr2Launcher = cases.find(test => test.executable.toLowerCase() === 'launcher.exe' && test.title === 'Red Dead Redemption 2');
-if (!rdr2Launcher?.expect?.persistentLauncherIsPreserved
-	|| !rdr2Launcher?.expect?.launcherIsNotSilentlyReplaced
-	|| !trackingSource.includes('PERSISTENT_LAUNCHER_OVERRIDES')
-	|| !trackingSource.includes('["reddeadredemption2"]')
-	|| !trackingSource.includes('["launcher.exe"]')) {
-	throw new Error('Missing RDR2 persistent-launcher regression coverage.');
+if (!rdr2Launcher?.expect?.selectedExecutableIsPreserved
+	|| !rdr2Launcher?.expect?.launcherIsNotSilentlyReplaced) {
+	throw new Error('Missing regression coverage for preserving a selected launcher.');
 }
 const re9 = cases.find(test => test.executable.toLowerCase() === 're9.exe');
 const gtaSa = cases.find(test => test.executable.toLowerCase() === 'gta-sa.exe');

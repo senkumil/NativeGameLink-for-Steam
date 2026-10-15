@@ -8,8 +8,8 @@ export function isLibrarySidebarNode(target: EventTarget | Node | null): boolean
 	const element = node?.nodeType === 1 ? node as Element : node?.parentElement;
 	if (!element) return false;
 	if (element.closest(NAMED_SIDEBAR_SELECTOR)) return true;
-	const rows = LIBRARY_SIDEBAR_ENTRY_CLASSES();
-	const sidebar = LIBRARY_SIDEBAR_CLASSES();
+	const rows = LIBRARY_SIDEBAR_ENTRY_CLASSES(element.ownerDocument);
+	const sidebar = LIBRARY_SIDEBAR_CLASSES(element.ownerDocument);
 	const classes = [rows.Container, rows.GameListEntryContainer, sidebar.Container].filter(Boolean);
 	for (let current: Element | null = element; current; current = current.parentElement) {
 		if (classes.some(value => value.split(/\s+/).filter(Boolean).every(token => current!.classList.contains(token)))) return true;

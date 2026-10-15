@@ -10,8 +10,8 @@ export interface AchievementCandidate {
 	propsShape: Record<string, string>;
 }
 
-export function findTopAchievementCandidates(maxResults = 3): AchievementCandidate[] {
-	const modules = steamWebpackRuntime.getAllModules();
+export function findTopAchievementCandidates(maxResults = 3, doc?: Document): AchievementCandidate[] {
+	const modules = steamWebpackRuntime.getAllModules(doc);
 	const candidates: AchievementCandidate[] = [];
 
 	for (const mod of modules) {
@@ -49,8 +49,8 @@ export function findTopAchievementCandidates(maxResults = 3): AchievementCandida
 	return top;
 }
 
-export function findTopAchievementSectionCandidates(maxResults = 3): AchievementCandidate[] {
-	const modules = steamWebpackRuntime.getAllModules();
+export function findTopAchievementSectionCandidates(maxResults = 3, doc?: Document): AchievementCandidate[] {
+	const modules = steamWebpackRuntime.getAllModules(doc);
 	const candidates: AchievementCandidate[] = [];
 
 	for (const mod of modules) {

@@ -142,15 +142,19 @@ namespace SteamAchievementSync
         delegate IntPtr GetAchievementNameFn(IntPtr thisPtr, uint iAch);
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        [return: MarshalAs(UnmanagedType.I1)]
         delegate bool GetAchievementAndUnlockTimeFn(IntPtr thisPtr, [MarshalAs(UnmanagedType.LPStr)] string name, [MarshalAs(UnmanagedType.I1)] ref bool achieved, ref uint unlockTime);
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        [return: MarshalAs(UnmanagedType.I1)]
         delegate bool SetAchievementFn(IntPtr thisPtr, [MarshalAs(UnmanagedType.LPStr)] string name);
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        [return: MarshalAs(UnmanagedType.I1)]
         delegate bool ClearAchievementFn(IntPtr thisPtr, [MarshalAs(UnmanagedType.LPStr)] string name);
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        [return: MarshalAs(UnmanagedType.I1)]
         delegate bool StoreStatsFn(IntPtr thisPtr);
 
         static string EscapeJson(string s)
@@ -159,28 +163,107 @@ namespace SteamAchievementSync
             return s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\r", "").Replace("\n", "\\n");
         }
 
+        static string SyncAchievements(ulong appId, List<string> unlockList, List<string> lockList,
+            Func<string, bool?> readAchievement, Func<string, bool> setAchievement,
+            Func<string, bool> clearAchievement, Func<bool> storeStats, Func<bool> waitForStored)
+        {
+            // Lua already computes a delta, but the account may have changed
+            // between its status process and this helper's fresh stats request.
+            // Resolve and validate every current state before making any writes.
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var unlockChanges = new List<string>();
+            var lockChanges = new List<string>();
+            foreach (var list in new[] { unlockList, lockList })
+            {
+                bool desiredState = Object.ReferenceEquals(list, unlockList);
+                foreach (var name in list)
+                {
+                    if (string.IsNullOrEmpty(name) || !seen.Add(name))
+                        return "{\"ok\":false,\"error\":\"invalid_achievement_selection\"}";
+                    bool? currentState = readAchievement(name);
+                    if (!currentState.HasValue)
+                        return "{\"ok\":false,\"error\":\"current_achievement_state_unavailable\"}";
+                    if (currentState.Value == desiredState) continue;
+                    (desiredState ? unlockChanges : lockChanges).Add(name);
+                }
+            }
+            if (seen.Count == 0)
+                return "{\"ok\":false,\"error\":\"empty_achievement_selection\"}";
+            if (unlockChanges.Count == 0 && lockChanges.Count == 0)
+                return "{\"ok\":true,\"appid\":" + appId + ",\"noop\":true,\"unlocked_count\":0,\"locked_count\":0,\"stored\":false,\"callback_confirmed\":false}";
+
+            int unlockedCount = 0;
+            int lockedCount = 0;
+            bool updatesSucceeded = true;
+            foreach (var name in unlockChanges)
+            {
+                if (setAchievement(name)) unlockedCount++;
+                else updatesSucceeded = false;
+            }
+            foreach (var name in lockChanges)
+            {
+                if (clearAchievement(name)) lockedCount++;
+                else updatesSucceeded = false;
+            }
+
+            // Commit a batch once, and only when at least one mutation succeeded.
+            // A successful setter is not confirmation that Steam saved it.
+            bool stored = (unlockedCount + lockedCount) > 0 && storeStats();
+            bool storedCallback = stored && waitForStored();
+            bool committed = updatesSucceeded && stored && storedCallback;
+            string error = !updatesSucceeded ? "achievement_update_failed" : "store_stats_not_confirmed";
+            return "{\"ok\":" + (committed ? "true" : "false") + ",\"appid\":" + appId + ",\"unlocked_count\":" + unlockedCount + ",\"locked_count\":" + lockedCount + ",\"stored\":" + (stored ? "true" : "false") + ",\"callback_confirmed\":" + (storedCallback ? "true" : "false") + (committed ? "" : ",\"error\":\"" + error + "\"") + "}";
+        }
+
+        static void ReleaseSteamSession(IntPtr steamClient, ref int pipe, ref int user,
+            ReleaseUserFn releaseUser, ReleaseSteamPipeFn releaseSteamPipe)
+        {
+            // Transfer ownership before either native call. Repeated cleanup
+            // cannot release a handle twice, even if one release throws.
+            int ownedPipe = pipe;
+            int ownedUser = user;
+            pipe = 0;
+            user = 0;
+            try
+            {
+                if (ownedUser != 0 && ownedPipe != 0 && releaseUser != null)
+                    releaseUser(steamClient, ownedPipe, ownedUser);
+            }
+            finally
+            {
+                if (ownedPipe != 0 && releaseSteamPipe != null)
+                    releaseSteamPipe(steamClient, ownedPipe);
+            }
+        }
+
         public static void Main(string[] args)
         {
+            IntPtr steamClient = IntPtr.Zero;
+            int pipe = 0;
+            int user = 0;
+            ReleaseSteamPipeFn releaseSteamPipe = null;
+            ReleaseUserFn releaseUser = null;
+            string output = null;
             try
             {
                 args = ConfigureResultFile(args);
                 if (args.Length == 0)
                 {
-                    WriteOutput("{\"ok\":false,\"error\":\"missing_arguments\"}");
+                    output = "{\"ok\":false,\"error\":\"missing_arguments\"}";
                     return;
                 }
 
                 string command = args[0].ToLowerInvariant();
                 if (command != "status" && command != "sync")
                 {
-                    WriteOutput("{\"ok\":false,\"error\":\"unknown_command\"}");
+                    output = "{\"ok\":false,\"error\":\"unknown_command\"}";
                     return;
                 }
 
                 ulong appId = 0;
                 if (args.Length < 2 || !ulong.TryParse(args[1], out appId) || appId == 0)
                 {
-                    WriteOutput("{\"ok\":false,\"error\":\"invalid_appid\"}");
+                    output = "{\"ok\":false,\"error\":\"invalid_appid\"}";
                     return;
                 }
 
@@ -196,62 +279,57 @@ namespace SteamAchievementSync
                 IntPtr hModule = LoadLibraryA(dllPath);
                 if (hModule == IntPtr.Zero)
             {
-                WriteOutput("{\"ok\":false,\"error\":\"steam_client_dll_not_found\"}");
+                output = "{\"ok\":false,\"error\":\"steam_client_dll_not_found\"}";
                 return;
             }
 
                 IntPtr proc = GetProcAddress(hModule, "CreateInterface");
                 if (proc == IntPtr.Zero)
             {
-                WriteOutput("{\"ok\":false,\"error\":\"create_interface_not_found\"}");
+                output = "{\"ok\":false,\"error\":\"create_interface_not_found\"}";
                 return;
             }
 
                 int retCode = 0;
                 var createInterface = (CreateInterfaceFn)Marshal.GetDelegateForFunctionPointer(proc, typeof(CreateInterfaceFn));
-                IntPtr steamClient = createInterface("SteamClient020", ref retCode);
+                steamClient = createInterface("SteamClient020", ref retCode);
                 if (steamClient == IntPtr.Zero)
             {
-                WriteOutput("{\"ok\":false,\"error\":\"steamclient020_not_available\"}");
+                output = "{\"ok\":false,\"error\":\"steamclient020_not_available\"}";
                 return;
             }
 
                 var createSteamPipe = GetDelegate<CreateSteamPipeFn>(steamClient, 0);
-                var releaseSteamPipe = GetDelegate<ReleaseSteamPipeFn>(steamClient, 1);
+                releaseSteamPipe = GetDelegate<ReleaseSteamPipeFn>(steamClient, 1);
                 var connectToGlobalUser = GetDelegate<ConnectToGlobalUserFn>(steamClient, 2);
-                var releaseUser = GetDelegate<ReleaseUserFn>(steamClient, 4);
+                releaseUser = GetDelegate<ReleaseUserFn>(steamClient, 4);
                 var getUserStats = GetDelegate<GetISteamUserStatsFn>(steamClient, 13);
 
-                int pipe = createSteamPipe(steamClient);
+                pipe = createSteamPipe(steamClient);
                 if (pipe == 0)
             {
-                WriteOutput("{\"ok\":false,\"error\":\"steam_not_running\"}");
+                output = "{\"ok\":false,\"error\":\"steam_not_running\"}";
                 return;
             }
 
-                int user = connectToGlobalUser(steamClient, pipe);
+                user = connectToGlobalUser(steamClient, pipe);
                 if (user == 0)
             {
-                releaseSteamPipe(steamClient, pipe);
-                WriteOutput("{\"ok\":false,\"error\":\"steam_user_not_logged_in\"}");
+                output = "{\"ok\":false,\"error\":\"steam_user_not_logged_in\"}";
                 return;
             }
 
                 IntPtr userStats = getUserStats(steamClient, user, pipe, "STEAMUSERSTATS_INTERFACE_VERSION012");
                 if (userStats == IntPtr.Zero)
             {
-                releaseUser(steamClient, pipe, user);
-                releaseSteamPipe(steamClient, pipe);
-                WriteOutput("{\"ok\":false,\"error\":\"steam_userstats_unavailable\"}");
+                output = "{\"ok\":false,\"error\":\"steam_userstats_unavailable\"}";
                 return;
             }
 
                 var reqCurrentStats = GetDelegate<RequestCurrentStatsFn>(userStats, 0);
                 if (reqCurrentStats == null || !reqCurrentStats(userStats))
                 {
-                    releaseUser(steamClient, pipe, user);
-                    releaseSteamPipe(steamClient, pipe);
-                    WriteOutput("{\"ok\":false,\"error\":\"request_current_stats_failed\"}");
+                    output = "{\"ok\":false,\"error\":\"request_current_stats_failed\"}";
                     return;
                 }
 
@@ -280,9 +358,7 @@ namespace SteamAchievementSync
 
                 if (!received || statsResult != 1)
             {
-                releaseUser(steamClient, pipe, user);
-                releaseSteamPipe(steamClient, pipe);
-                WriteOutput("{\"ok\":false,\"error\":\"game_stats_not_owned_or_unavailable\",\"result\":" + statsResult + "}");
+                output = "{\"ok\":false,\"error\":\"game_stats_not_owned_or_unavailable\",\"result\":" + statsResult + "}";
                 return;
             }
 
@@ -312,13 +388,14 @@ namespace SteamAchievementSync
                 }
 
                 sb.Append("}}");
-                WriteOutput(sb.ToString());
+                output = sb.ToString();
             }
                 else if (command == "sync")
             {
                 var setAch = GetDelegate<SetAchievementFn>(userStats, 7);
                 var clearAch = GetDelegate<ClearAchievementFn>(userStats, 8);
                 var storeStats = GetDelegate<StoreStatsFn>(userStats, 10);
+                var getAchTime = GetDelegate<GetAchievementAndUnlockTimeFn>(userStats, 9);
 
                 var unlockList = new List<string>();
                 var lockList = new List<string>();
@@ -340,59 +417,59 @@ namespace SteamAchievementSync
                     }
                 }
 
-                int unlockedCount = 0;
-                int lockedCount = 0;
-
-                foreach (var ach in unlockList)
-                {
-                    if (string.IsNullOrEmpty(ach)) continue;
-                    if (setAch != null && setAch(userStats, ach)) unlockedCount++;
-                }
-
-                foreach (var ach in lockList)
-                {
-                    if (string.IsNullOrEmpty(ach)) continue;
-                    if (clearAch != null && clearAch(userStats, ach)) lockedCount++;
-                }
-
-                bool stored = false;
-                if (storeStats != null)
-                {
-                    stored = storeStats(userStats);
-                }
-
-                // Poll for UserStatsStored_t callback (1102)
-                bool storedCallback = false;
-                var storeStart = DateTime.UtcNow;
-                while ((DateTime.UtcNow - storeStart).TotalSeconds < 4)
-                {
-                    CallbackMsg msg = new CallbackMsg();
-                    while (Steam_BGetCallback(pipe, ref msg))
+                string syncResult = SyncAchievements(appId, unlockList, lockList,
+                    delegate(string name)
                     {
-                        if (msg.m_iCallback == 1102) // UserStatsStored_t
+                        bool achieved = false;
+                        uint unlockTime = 0;
+                        if (getAchTime == null || !getAchTime(userStats, name, ref achieved, ref unlockTime)) return null;
+                        return (bool?)achieved;
+                    },
+                    delegate(string name) { return setAch != null && setAch(userStats, name); },
+                    delegate(string name) { return clearAch != null && clearAch(userStats, name); },
+                    delegate() { return storeStats != null && storeStats(userStats); },
+                    delegate()
+                    {
+                        // Poll only after a real StoreStats call for this batch.
+                        bool storedCallback = false;
+                        var storeStart = DateTime.UtcNow;
+                        while ((DateTime.UtcNow - storeStart).TotalSeconds < 4)
                         {
-                            var data = (UserStatsStored_t)Marshal.PtrToStructure(msg.m_pubParam, typeof(UserStatsStored_t));
-                            if (data.m_nGameID == appId && data.m_eResult == 1)
+                            CallbackMsg msg = new CallbackMsg();
+                            while (Steam_BGetCallback(pipe, ref msg))
                             {
-                                storedCallback = true;
+                                if (msg.m_iCallback == 1102) // UserStatsStored_t
+                                {
+                                    var data = (UserStatsStored_t)Marshal.PtrToStructure(msg.m_pubParam, typeof(UserStatsStored_t));
+                                    if (data.m_nGameID == appId && data.m_eResult == 1) storedCallback = true;
+                                }
+                                Steam_FreeLastCallback(pipe);
                             }
+                            if (storedCallback) break;
+                            Thread.Sleep(30);
                         }
-                        Steam_FreeLastCallback(pipe);
-                    }
-                    if (storedCallback) break;
-                    Thread.Sleep(30);
+                        return storedCallback;
+                    });
+                    output = syncResult;
                 }
-
-                    bool committed = stored && storedCallback;
-                    WriteOutput("{\"ok\":" + (committed ? "true" : "false") + ",\"appid\":" + appId + ",\"unlocked_count\":" + unlockedCount + ",\"locked_count\":" + lockedCount + ",\"stored\":" + (stored ? "true" : "false") + ",\"callback_confirmed\":" + (storedCallback ? "true" : "false") + (committed ? "" : ",\"error\":\"store_stats_not_confirmed\"") + "}");
-                }
-
-                releaseUser(steamClient, pipe, user);
-                releaseSteamPipe(steamClient, pipe);
             }
             catch (Exception ex)
             {
-                WriteOutput("{\"ok\":false,\"error\":\"helper_exception\",\"detail\":\"" + EscapeJson(ex.GetType().Name) + "\"}");
+                output = "{\"ok\":false,\"error\":\"helper_exception\",\"detail\":\"" + EscapeJson(ex.GetType().Name) + "\"}";
+            }
+            finally
+            {
+                try
+                {
+                    ReleaseSteamSession(steamClient, ref pipe, ref user, releaseUser, releaseSteamPipe);
+                }
+                catch (Exception ex)
+                {
+                    output = "{\"ok\":false,\"error\":\"helper_exception\",\"detail\":\"" + EscapeJson(ex.GetType().Name) + "\"}";
+                }
+                // Lua sees one result only after the temporary native session
+                // has been released, including every early return and failure.
+                if (output != null) WriteOutput(output);
             }
         }
     }

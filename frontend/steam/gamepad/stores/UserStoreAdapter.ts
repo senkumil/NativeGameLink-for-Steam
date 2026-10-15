@@ -1,12 +1,12 @@
-﻿import { getSteamStore } from '../../modules/SteamModuleResolver';
+import { getDocumentSteamStore } from './AppStoreAdapter';
 
 export class UserStoreAdapter {
-	public static getStore(): any | null {
-		return getSteamStore('userStore') || getSteamStore('UserStore');
+	public static getStore(doc?: Document): any | null {
+		return getDocumentSteamStore(['userStore', 'UserStore'], doc);
 	}
 
-	public static getPersonaName(): string {
-		const store = this.getStore();
+	public static getPersonaName(doc?: Document): string {
+		const store = this.getStore(doc);
 		return String(store?.m_strPersonaName || store?.personaName || '');
 	}
 }

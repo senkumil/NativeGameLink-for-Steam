@@ -1,7 +1,7 @@
 import { listShortcutsBackend, backendLog } from '../../api/backend';
 import { findMappingByExe, findMappingForTitle, isMappingSnapshotVerified, mappings, shortcutMappingKey, titleMappingKey, updateMappingsChecked } from '../../core/mappings';
 import { normalizeTitle } from '../../core/text';
-import { getShortcutAppById, getSteamAppStore, readShortcutOverviewField, replaceFallbackShortcutApps, shortcutExecutableIdentity, shortcutPathBasename, toSignedShortcutAppId } from '../../steam/shortcuts';
+import { getShortcutAppById, getSteamAppStore, readShortcutOverviewField, replaceFallbackShortcutApps, shortcutExecutableIdentity, toSignedShortcutAppId } from '../../steam/shortcuts';
 
 export interface ShortcutRecord {
 	id: number;
@@ -66,10 +66,6 @@ export function refreshShortcutRecordsFromBackend(): Promise<void> {
 		}
 	})().finally(() => { backendRegistryRefresh = null; });
 	return backendRegistryRefresh;
-}
-
-export function isUnrealShippingExecutable(value: string): boolean {
-	return /(?:^|[-_\s])(?:win32|win64|linux)[-_\s]*shipping\.exe$/i.test(shortcutPathBasename(value));
 }
 
 export function getAllShortcutRecords(): ShortcutRecord[] {

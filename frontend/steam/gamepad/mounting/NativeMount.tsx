@@ -3,6 +3,7 @@ import { backendLog } from '../../../api/backend';
 import { gamepadCapabilities, type GamepadCapabilityKey } from '../GamepadCapabilities';
 
 export interface NativeMountProps {
+	document?: Document;
 	capabilityKey: GamepadCapabilityKey;
 	nativeComponent: React.ComponentType<any> | null;
 	nativeProps: Record<string, any>;
@@ -26,13 +27,13 @@ export class NativeMount extends Component<NativeMountProps, NativeMountState> {
 
 	componentDidCatch(error: Error, _errorInfo: React.ErrorInfo): void {
 		backendLog(`[NGL][Gamepad][NativeMount] Error rendering native component for "${this.props.capabilityKey}": ${error.message}`);
-		gamepadCapabilities.recordFailure(this.props.capabilityKey, error);
+		gamepadCapabilities.recordFailure(this.props.capabilityKey, error, this.props.document);
 	}
 
 	render(): ReactNode {
 		const { capabilityKey, nativeComponent: NativeComp, nativeProps, fallback } = this.props;
 
-		if (this.state.hasError || !NativeComp || !gamepadCapabilities.isAvailable(capabilityKey)) {
+		if (this.state.hasError || !NativeComp || !gamepadCapabilities.isAvailable(capabilityKey, this.props.document)) {
 			return fallback;
 		}
 
@@ -40,7 +41,7 @@ export class NativeMount extends Component<NativeMountProps, NativeMountState> {
 			return <NativeComp {...nativeProps} />;
 		} catch (error) {
 			backendLog(`[NGL][Gamepad][NativeMount] Immediate error rendering "${capabilityKey}": ${error}`);
-			gamepadCapabilities.recordFailure(capabilityKey, error);
+			gamepadCapabilities.recordFailure(capabilityKey, error, this.props.document);
 			return fallback;
 		}
 	}

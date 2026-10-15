@@ -9,8 +9,8 @@ export interface NewsCandidate {
 	matchedSignatures: string[];
 }
 
-export function findTopNewsCandidates(maxResults = 3): NewsCandidate[] {
-	const modules = steamWebpackRuntime.getAllModules();
+export function findTopNewsCandidates(maxResults = 3, doc?: Document): NewsCandidate[] {
+	const modules = steamWebpackRuntime.getAllModules(doc);
 	const candidates: NewsCandidate[] = [];
 
 	for (const mod of modules) {

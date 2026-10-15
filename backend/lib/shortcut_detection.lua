@@ -22,7 +22,7 @@ local detection_store_cache, detection_appdetails_cache, detection_appinfo_cache
 -- never look like near-certain identification unless the candidate's official
 -- Steam launch configuration also contains the executable we are inspecting.
 local DETECTION_UNVERIFIED_ALIAS_MAX_SCORE = 84
-local DETECTION_MODEL_VERSION = "v10"
+local DETECTION_MODEL_VERSION = "v11"
 -- Pure text matching and the maintained alias catalogue live in focused
 -- modules; this detector remains responsible for filesystem/network evidence.
 local detection_text = deps.shortcut_detection_text
@@ -56,8 +56,6 @@ local function detection_shortcut_appid(value)
     local id = tonumber(value)
     return id and math.floor(id < 0 and id + 4294967296 or id) or nil
 end
-local detection_tracking = deps.shortcut_detection_tracking
-local detection_find_tracking_executable = detection_tracking.find_tracking_executable
 local function detection_find_shortcut_record(shortcut_app_id, shortcut_title)
     local target = detection_shortcut_appid(shortcut_app_id)
     local target_title_norm = detection_normalize(shortcut_title or "")
@@ -138,14 +136,6 @@ local function detection_find_shortcut_record(shortcut_app_id, shortcut_title)
                             launch_options = detection_trim(record.LaunchOptions or record.launchoptions or ""),
                             source = "shortcuts_vdf",
                         }
-                        local recommended_exe, recommended_start, tracking_auto_apply = detection_find_tracking_executable(
-                            shortcut.exe_path, shortcut.start_dir, shortcut.title)
-                        if recommended_exe then
-                            shortcut.bootstrap_detected = true
-                            shortcut.recommended_exe_path = recommended_exe
-                            shortcut.recommended_start_dir = recommended_start or ""
-                            shortcut.tracking_executable_auto_apply = tracking_auto_apply == true
-                        end
                         return shortcut
                     end
                 end
@@ -351,8 +341,7 @@ local function detection_direct_result(appid, source, request, language, launche
     if type(appinfo) == "table" and type(appinfo.config) == "table" and type(appinfo.config.launch) == "table" then
         detection_collect_launch_executables(appinfo.config.launch, official_exes, 0)
     end
-    local target_exe = request.game_exe_path ~= "" and request.game_exe_path or request.exe_path
-    local actual_exe = detection_basename(target_exe):lower()
+    local actual_exe = detection_basename(request.exe_path):lower()
     local exe_matched = actual_exe ~= "" and official_exes[actual_exe] == true
     local comp = detection_text.compare_title_identities(request.title or fallback_name or "", name)
     local title_matched = comp.base_matches and not comp.is_collision and not comp.year_mismatch and not comp.sequel_mismatch
@@ -415,8 +404,6 @@ function M.detect_game_candidates(request_json)
     request.title = detection_trim(request.title):sub(1, 240)
     request.exe_path = detection_clean_path(request.exe_path):sub(1, 4096)
     request.start_dir = detection_clean_path(request.start_dir):sub(1, 4096)
-    request.game_exe_path = detection_clean_path(request.game_exe_path):sub(1, 4096)
-    request.game_start_dir = detection_clean_path(request.game_start_dir):sub(1, 4096)
     request.launch_options = detection_trim(request.launch_options):sub(1, 4096)
     request.shortcut_app_id = detection_trim(request.shortcut_app_id)
     local language = detection_trim(request.language)
@@ -431,12 +418,7 @@ function M.detect_game_candidates(request_json)
             if request.launch_options == "" then request.launch_options = shortcut.launch_options end
         end
     end
-    -- A shortcut may launch a bootstrapper while Steam details already found
-    -- the real game executable. Keep the original path for launcher detection,
-    -- but use the real executable for identity matching and appinfo validation.
-    local identity_exe_path = request.game_exe_path ~= "" and request.game_exe_path or request.exe_path
-    local identity_start_dir = request.game_start_dir ~= "" and request.game_start_dir or request.start_dir
-    local exe_basename = detection_basename(identity_exe_path)
+    local exe_basename = detection_basename(request.exe_path)
     local raw_exe_stem = detection_stem(exe_basename)
     local exe_stem = detection_game_exe_hint(exe_basename)
     local title_hint = detection_game_exe_hint(request.title)
@@ -445,10 +427,7 @@ function M.detect_game_candidates(request_json)
     if title_cleaned == "" then title_cleaned = title_hint end
     local pe_product_name, pe_file_desc = nil, nil
     if detection_pe and detection_pe.read_pe_metadata then
-        pe_product_name, pe_file_desc = detection_pe.read_pe_metadata(identity_exe_path)
-        if not pe_product_name and identity_exe_path ~= request.exe_path then
-            pe_product_name, pe_file_desc = detection_pe.read_pe_metadata(request.exe_path)
-        end
+        pe_product_name, pe_file_desc = detection_pe.read_pe_metadata(request.exe_path)
     end
     local is_generic_pe = detection_pe and detection_pe.is_generic_product_name or function() return false end
     local clean_pe_product = (pe_product_name and not is_generic_pe(pe_product_name))
@@ -464,16 +443,15 @@ function M.detect_game_candidates(request_json)
     local generic_launcher = DETECTION_GENERIC_EXES[launcher_exe_normalized] == true
     local cache_key = table.concat({
         DETECTION_MODEL_VERSION, request.title, request.exe_path, request.start_dir,
-        request.game_exe_path, request.game_start_dir,
         request.launch_options, language
     }, "\31")
     local cached = detection_cache_get(detection_candidate_cache, cache_key, 600)
     if cached then return cached.json end
     local direct_appid = detection_appid_from_arguments(request.launch_options)
     local direct_source = direct_appid and "launch_argument" or nil
-    if not direct_appid and identity_exe_path ~= "" then
-        direct_appid, direct_source = detection_find_steam_appid_file(identity_exe_path)
-        if not direct_appid then direct_appid, direct_source = detection_find_appmanifest(identity_exe_path) end
+    if not direct_appid and request.exe_path ~= "" then
+        direct_appid, direct_source = detection_find_steam_appid_file(request.exe_path)
+        if not direct_appid then direct_appid, direct_source = detection_find_appmanifest(request.exe_path) end
     end
     if direct_appid then
         local direct = detection_direct_result(direct_appid, direct_source, request, language, launcher, generic_launcher)
@@ -508,7 +486,7 @@ function M.detect_game_candidates(request_json)
             end
         end
     end
-    local folders = detection_folder_hints(identity_exe_path, identity_start_dir)
+    local folders = detection_folder_hints(request.exe_path, request.start_dir)
     local queries, query_seen = {}, {}
     local function add_query(value)
         local cleaned = detection_trim(value)

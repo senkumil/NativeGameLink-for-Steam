@@ -1,37 +1,36 @@
-﻿import { backendLog } from '../../../api/backend';
+import { DocumentRuntimeCache } from '../runtime-cache';
+import { backendLog } from '../../../api/backend';
 import { findTopNewsCandidates, type NewsCandidate } from '../../modules/signatures/news';
 import { gamepadCapabilities } from '../GamepadCapabilities';
 
 class NewsResolver {
-	private cachedCandidate: NewsCandidate | null = null;
-	private resolved = false;
+	private states = new DocumentRuntimeCache(() => ({ cachedCandidate: null as NewsCandidate | null }));
 
-	public resolve(): React.ComponentType<any> | null {
-		if (this.resolved && this.cachedCandidate?.component) {
-			return this.cachedCandidate.component;
+	public resolve(doc?: Document): React.ComponentType<any> | null {
+		const state = this.states.get(doc);
+		if (state.cachedCandidate?.component) {
+			return state.cachedCandidate.component;
 		}
 
 		try {
-			const candidates = findTopNewsCandidates(1);
+			const candidates = findTopNewsCandidates(1, doc);
 			if (candidates.length > 0 && candidates[0].component) {
-				this.cachedCandidate = candidates[0];
-				this.resolved = true;
-				gamepadCapabilities.setAvailable('news', true);
-				backendLog(`[NGL][Gamepad][News] Resolved native Steam news component from moduleId: ${this.cachedCandidate.moduleId}`);
-				return this.cachedCandidate.component;
+				state.cachedCandidate = candidates[0];
+				gamepadCapabilities.setAvailable('news', true, doc);
+				backendLog(`[NGL][Gamepad][News] Resolved native Steam news component from moduleId: ${state.cachedCandidate.moduleId}`);
+				return state.cachedCandidate.component;
 			}
 		} catch (error) {
 			backendLog(`[NGL][Gamepad][News] Error resolving news component: ${error}`);
-			gamepadCapabilities.recordFailure('news', error);
+			gamepadCapabilities.recordFailure('news', error, doc);
 		}
 
-		gamepadCapabilities.setAvailable('news', false);
+		gamepadCapabilities.setAvailable('news', false, doc);
 		return null;
 	}
 
-	public invalidate(): void {
-		this.cachedCandidate = null;
-		this.resolved = false;
+	public invalidate(doc?: Document): void {
+		this.states.clear(doc);
 	}
 }
 

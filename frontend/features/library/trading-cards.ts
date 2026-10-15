@@ -9,10 +9,27 @@ import type { NativeLibraryLayout } from './layout';
 import { buildNativeSidebarSection } from './layout';
 import { clearTradingCardPreloads, getTradingCardPreload, preloadTradingCardImage } from './trading-card-preload';
 import { disposeNativeCardPreview, tryOpenNativeCardPreview } from './native-card-preview';
+import { getLinkedSidebarOrder } from './sidebar-order';
 
 const tradingCardPreviewCleanup = new WeakMap<Document, () => void>();
 const responsiveGridCleanups = new Map<HTMLElement, () => void>();
 const tiltLifecycles = new WeakMap<Document, Map<HTMLElement, DisposableRegistry>>();
+const catalogSignatures = new WeakMap<HTMLElement, string>();
+const helpCleanups = new WeakMap<Document, Map<HTMLElement, () => void>>();
+
+function disposeTradingCardHelp(doc: Document, section?: HTMLElement): void {
+	for (const [button, cleanup] of Array.from(helpCleanups.get(doc) || [])) {
+		if (!section || section.contains(button)) cleanup();
+	}
+}
+
+function removeTradingCardSection(section: HTMLElement): void {
+	disposeTradingCardHelp(section.ownerDocument, section);
+	responsiveGridCleanups.get(section)?.();
+	tiltLifecycles.get(section.ownerDocument)?.get(section)?.dispose();
+	catalogSignatures.delete(section);
+	section.remove();
+}
 
 export function disposeTradingCardUI(doc: Document): void {
 	disposeTradingCardPreview(doc);
@@ -20,6 +37,7 @@ export function disposeTradingCardUI(doc: Document): void {
 	for (const lifecycle of Array.from(tiltLifecycles.get(doc)?.values() || [])) lifecycle.dispose();
 	tiltLifecycles.delete(doc);
 	clearTradingCardPreloads(doc);
+	disposeTradingCardHelp(doc);
 }
 
 export function disposeTradingCardPreview(doc: Document): void {
@@ -528,6 +546,7 @@ export function setupTradingCardTilt(root: HTMLElement): void {
 
 export interface TradingCardRenderOptions {
 	steamAppId: string;
+	shortcutAppId: string | null;
 	gameName: string;
 	isCurrent: () => boolean;
 }
@@ -574,6 +593,17 @@ function setupTradingCardsHelpTooltip(doc: Document, button: HTMLElement): void 
 	button.addEventListener('mouseleave', hide);
 	button.addEventListener('focus', show);
 	button.addEventListener('blur', hide);
+	let cleanups = helpCleanups.get(doc);
+	if (!cleanups) { cleanups = new Map(); helpCleanups.set(doc, cleanups); }
+	const ownedCleanups = cleanups;
+	ownedCleanups.set(button, () => {
+		hide();
+		button.removeEventListener('mouseenter', show);
+		button.removeEventListener('mouseleave', hide);
+		button.removeEventListener('focus', show);
+		button.removeEventListener('blur', hide);
+		ownedCleanups.delete(button);
+	});
 }
 
 /** Steam reflows cards into fewer columns before it reduces their visual size. */
@@ -605,11 +635,19 @@ export async function renderOfficialTradingCards(
 	options: TradingCardRenderOptions,
 ): Promise<void> {
 	const { steamAppId, gameName } = options;
+	if (!options.shortcutAppId) return;
 	const { anchorRegion, sidebarColumn } = layout;
+	const order = getLinkedSidebarOrder(doc, layout, steamAppId, options.shortcutAppId);
+	if (!order || !options.isCurrent()) return;
 	const catalog = await getOfficialCommunityItems(doc, steamAppId);
-	if (!catalog || catalog.cards.length === 0 || !options.isCurrent()
-		|| !doc.getElementById(GDL_INJECTED) || !anchorRegion || !sidebarColumn
-		|| doc.getElementById('gdl-trading-cards-section')) return;
+	if (!catalog || !options.isCurrent() || !order.isCurrent()
+		|| !doc.getElementById(GDL_INJECTED) || !anchorRegion || !sidebarColumn) return;
+	const previous = doc.getElementById('gdl-trading-cards-section');
+	const existing = previous?.parentElement === sidebarColumn && previous.dataset.gdlSteamAppId === steamAppId
+		&& previous.dataset.gdlShortcutAppId === order.shortcutAppId ? previous : null;
+	if (catalog.cards.length === 0) { if (existing) removeTradingCardSection(existing); return; }
+	const signature = JSON.stringify([gameName, catalog.cards, catalog.foil_badge, catalog.badges]);
+	if (existing && catalogSignatures.get(existing) === signature) return;
 
 	const cards = catalog.cards.map((card, index) => {
 		const image = normalizeCommunityAssetUrl(card.image);
@@ -626,14 +664,22 @@ export async function renderOfficialTradingCards(
 	const cardFallback = catalog.cards?.[0]?.image || '';
 	const badgeSource = normalizeCommunityAssetUrl(badgeAsset?.image) || cardFallback || officialPortrait;
 	const badgeTitle = badgeAsset?.title || catalog.badges?.[0]?.title || gdlText('cards_found', 'Cards found');
-	const section = buildNativeSidebarSection(doc, layout, {
+	const candidate = buildNativeSidebarSection(doc, layout, {
 		sectionId: 'gdl-trading-cards-section',
 		headerText: loc('AppDetails_SectionTitle_TradingCards', gdlText('trading_cards', 'Trading Cards')),
 		innerId: 'gdl-trading-cards-content',
 		innerHtml: `<div class="${ACH_CLASSES().HighlightDiv} gdl-native-sidebar-panel" style="padding:0 !important;box-sizing:border-box;overflow:visible;"><div class="gdl-trading-cards-badge-header"><div class="gdl-trading-badge" title="${escapeHtml(badgeTitle)}"><img class="gdl-trading-badge-image" src="${escapeHtml(badgeSource)}" alt="${escapeHtml(badgeTitle)}" /></div><div style="min-width:0;"><div class="gdl-trading-badge-title" style="font-size:16px;line-height:1.25;color:#fff;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(badgeTitle)}</div><div class="gdl-trading-badge-xp" style="font-size:13px;color:#8f98a0;margin-top:2px;">${escapeHtml(gdlText('experience_points', '100 XP'))}</div></div></div><div class="gdl-trading-cards-body" style="padding:12px 10px 14px;"><div class="gdl-trading-card-remaining" style="font-size:13px;color:#9da4ab;margin-bottom:10px;">${escapeHtml(gdlText('cards_remaining', '{count} cards remaining', { count: 0 }))}</div><div class="gdl-trading-card-grid">${cards}</div><a class="gdl-trading-cards-view-link" href="https://steamcommunity.com/my/gamecards/${steamAppId}/" data-gdl-open-url="https://steamcommunity.com/my/gamecards/${steamAppId}/" style="display:block;text-align:right;margin-top:14px;color:#9da4ab;text-decoration:none;font-size:13px;">${escapeHtml(gdlText('view_my_cards', 'View my cards'))}</a></div></div>`,
 		cloneInnerClass: false,
 	});
-	if (!section) return;
+	if (!candidate || !options.isCurrent() || !order.isCurrent()) return;
+	const section = existing || candidate;
+	if (existing) {
+		disposeTradingCardHelp(doc, existing);
+		responsiveGridCleanups.get(existing)?.();
+		tiltLifecycles.get(doc)?.get(existing)?.dispose();
+		section.innerHTML = candidate.innerHTML;
+	}
+	catalogSignatures.set(section, signature);
 
 	const badgeImg = section.querySelector<HTMLImageElement>('.gdl-trading-badge-image');
 	badgeImg?.addEventListener('error', () => { badgeImg.style.visibility = 'hidden'; });
@@ -658,35 +704,14 @@ export async function renderOfficialTradingCards(
 		}
 	}
 
-	// Steam's native right column places Notes above Trading Cards. `anchorRegion`
-	// resolves to the live Notes section whenever it exists (see layout discovery),
-	// so anchor the async cards render to that native node instead of to Achievements.
-	// This also prevents a late community-items response from changing the visual order.
-	const anchorOuter = anchorRegion.parentElement?.parentElement === sidebarColumn
-		? anchorRegion.parentElement
-		: anchorRegion;
-	if (anchorOuter?.parentElement === sidebarColumn) {
-		sidebarColumn.insertBefore(section, anchorOuter.nextSibling);
-	} else {
-		const dlcNode = doc.getElementById('gdl-dlc-section');
-		const workshopNode = doc.getElementById('gdl-workshop-section');
-		const achievementsNode = doc.getElementById('gdl-achievements-section');
-		const friendsNode = doc.getElementById('gdl-friends-section');
-		if (dlcNode?.parentElement === sidebarColumn) sidebarColumn.insertBefore(section, dlcNode);
-		else if (workshopNode?.parentElement === sidebarColumn) sidebarColumn.insertBefore(section, workshopNode);
-		else {
-			const previous = achievementsNode || friendsNode;
-			if (previous?.parentElement === sidebarColumn) sidebarColumn.insertBefore(section, previous.nextSibling);
-			else sidebarColumn.insertBefore(section, sidebarColumn.firstChild);
-		}
-	}
+	if (!order.publish(section, 'cards')) return;
 
 	setupTradingCardTilt(section);
 	installResponsiveTradingCardGrid(section);
 	for (const image of Array.from(section.querySelectorAll<HTMLImageElement>('.gdl-trading-card img'))) {
 		image.addEventListener('error', () => {
 			image.closest('.gdl-trading-card')?.remove();
-			if (!section.querySelector('.gdl-trading-card')) section.remove();
+			if (!section.querySelector('.gdl-trading-card')) removeTradingCardSection(section);
 		});
 	}
 	backendLog(`Official Steam cards applied for ${steamAppId}: ${catalog.cards.length} card(s), foil=${String(!!catalog.foil_badge)}`);

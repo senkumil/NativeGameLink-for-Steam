@@ -7,9 +7,9 @@ export interface GamepadAdaptedOverview {
 	header_filename?: string;
 	icon_data?: string;
 	icon_data_format?: string;
-	installed: boolean;
-	controller_support: number;
-	steam_deck_compat_category: number;
+	installed?: boolean;
+	controller_support?: number;
+	steam_deck_compat_category?: number;
 	minutes_playtime_forever: number;
 	rt_last_time_played: number;
 }
@@ -32,15 +32,18 @@ export function createGamepadAppAdapter(
 		cards?: SteamCommunityItemsCatalog | null;
 		playtimeMinutes?: number;
 		lastPlayedTimestamp?: number;
+		installed?: boolean;
+		steamDeckCompatibility?: number;
 	},
 ): GamepadAdaptedApp {
 	const overview: GamepadAdaptedOverview = {
 		appid: identity.shortcutAppId,
 		display_name: data.game?.name || identity.title,
 		header_filename: data.game?.header_image || undefined,
-		installed: true,
-		controller_support: 2, // Full controller support
-		steam_deck_compat_category: 3, // Verified
+		...(typeof data.installed === 'boolean' ? { installed: data.installed } : {}),
+		...(data.game?.controller_support === 'full' ? { controller_support: 2 }
+			: data.game?.controller_support === 'partial' ? { controller_support: 1 } : {}),
+		...(Number.isInteger(data.steamDeckCompatibility) ? { steam_deck_compat_category: data.steamDeckCompatibility } : {}),
 		minutes_playtime_forever: data.playtimeMinutes || 0,
 		rt_last_time_played: data.lastPlayedTimestamp || 0,
 	};

@@ -52,14 +52,30 @@ try {
       const exports = {};
       new Function('require', 'exports', code)(() => mocks, exports);
       window.openReview = () => exports.showShortcutManualLinkModal(document,
-        { shortcutAppId: 3000000000, title: 'The Last of Us Part I', exePath: 'D:\\Games\\tlou-i.exe' },
-        { candidates: [{ appid: '1888930', name: 'The Last of Us Part I', score: 99 }] });
+        { shortcutAppId: 3000000000, title: 'DRAGON BALL: Sparking! ZERO', exePath: 'D:\\Games\\SparkingZERO.exe',
+          startDir: 'D:\\Games', launchOptions: '', bootstrapDetected: true,
+          recommendedExePath: 'D:\\Games\\Binaries\\Win64\\SparkingZERO-Win64-Shipping.exe',
+          recommendedStartDir: 'D:\\Games\\Binaries\\Win64', trackingExecutableAutoApply: true },
+        { candidates: [{ appid: '1790600', name: 'DRAGON BALL: Sparking! ZERO', score: 99 }] });
       window.openReview();
     }, { code: source, modalCode: modalSource });
     const overlay = page.locator('#gdl-manual-link-modal');
     assert.equal(await overlay.evaluate(el => el.matches(':modal')), true);
     const box = await overlay.boundingBox();
     assert.ok(box.x >= 0 && box.y >= 0 && box.width <= viewport.width && box.height <= viewport.height);
+    const assertSelectedExecutable = async () => {
+      assert.equal(await overlay.locator('.gdl-manual-link-tracking, .gdl-manual-link-tracking-input').count(), 0,
+        'Legacy executable recommendations must not render an executable replacement checkbox');
+      assert.equal(await overlay.locator('.gdl-manual-link-exe-summary').innerText(),
+        'Steam will keep launching the executable you selected: SparkingZERO.exe');
+      assert.doesNotMatch(await overlay.innerText(), /Shipping\.exe|Use the real game executable|closes after launching/i,
+        'The review dialog must not expose replacement-executable instructions');
+    };
+    await assertSelectedExecutable();
+    await overlay.evaluate(el => el._updateContext({ shortcutAppId: 3000000000, bootstrapDetected: true,
+      recommendedExePath: 'D:\\Games\\Binaries\\Win64\\Another-Shipping.exe',
+      recommendedStartDir: 'D:\\Games\\Binaries\\Win64', trackingExecutableAutoApply: true }));
+    await assertSelectedExecutable();
     const cancel = page.locator('.gdl-manual-link-cancel');
     await page.evaluate(() => {
       window.SteamClient = { Browser: { Paste() {
@@ -80,6 +96,6 @@ try {
     await page.keyboard.press('Escape');
     assert.equal(await overlay.count(), 0);
     await page.close();
-    console.log(`Modal browser check passed at ${viewport.width}x${viewport.height}: top layer, scroll, cancel and Escape.`);
+    console.log(`Modal browser check passed at ${viewport.width}x${viewport.height}: top layer, scroll, cancel, Escape, original executable and legacy recommendation isolation.`);
   }
 } finally { await browser.close(); }

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
+import ts from 'typescript';
 const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE_PATH || 'playwright');
 const source = fs.readFileSync('frontend/features/shortcuts/properties.ts', 'utf8');
@@ -8,11 +9,17 @@ const styleSource = fs.readFileSync('frontend/features/shortcuts/properties-styl
 const style = styleSource.slice(styleSource.indexOf('`') + 1, styleSource.lastIndexOf('`'));
 const start = source.indexOf('section.innerHTML = `') + 'section.innerHTML = '.length;
 const end = source.indexOf('\n\t`;', start) + '\n\t`'.length;
-const html = new Function('SHORTCUT_PROPERTIES_STYLE', 'escapeHtml', 'gdlText', 'initialAppId', 'currentLinked', 'initialOptionHtml', 'shortcutAchievementSettingsHtml', `return ${source.slice(start, end)}`)(
+const playtimeProperties = {};
+new Function('require', 'exports', ts.transpileModule(fs.readFileSync('frontend/features/shortcuts/playtime-properties.ts', 'utf8'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
+}).outputText)(() => ({ gdlText: (_key, fallback) => fallback, escapeHtml: value => String(value) }), playtimeProperties);
+const html = new Function('SHORTCUT_PROPERTIES_STYLE', 'escapeHtml', 'gdlText', 'initialAppId', 'currentLinked', 'initialOptionHtml', 'shortcutAchievementSettingsHtml', 'shortcutPlaytimePropertiesHtml', `return ${source.slice(start, end)}`)(
   style, value => String(value), (_key, fallback) => fallback, '1091500', false,
   '<option>Cyberpunk 2077 — AppID 1091500</option>', () => '<div style="height:700px">Achievement options</div>',
+  playtimeProperties.shortcutPlaytimePropertiesHtml,
 );
 assert.ok(html.indexOf('<div class="gdl-auto-detect ') < html.indexOf('<div class="gdl-native-setting-row gdl-link-actions'), 'actions follow suggestions');
+assert.doesNotMatch(html, /gdl-tracking-executable|Use the real game executable/, 'Properties must not render executable replacement controls');
 const browser = await chromium.launch({ headless: true, channel: 'msedge' });
 try {
   for (const width of [680, 420]) {

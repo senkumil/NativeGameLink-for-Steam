@@ -114,13 +114,81 @@ const error = queue.run(errorDoc, 'error', () => { throw new Error('task failed'
 const checkedError = assert.rejects(error, /task failed/);
 errorDoc.paintThenTask(); await checkedError;
 
+const artworkDoc = createDocument();
+let artworkReady;
+let artworkWaits = 0;
+let artworkDisposals = 0;
+let artworkExecutions = 0;
+const artwork = queue.run(artworkDoc, 'artwork', () => { artworkExecutions++; }, (doc, ready) => {
+  assert.equal(doc, artworkDoc);
+  artworkWaits++;
+  artworkReady = ready;
+  return () => { artworkDisposals++; };
+});
+assert.equal(queue.run(artworkDoc, 'artwork', () => {}, () => { throw new Error('duplicate artwork wait'); }), artwork);
+artworkDoc.paintThenTask();
+assert.equal(artworkExecutions, 0, 'paint opportunities alone cannot authorize work while native artwork is pending');
+assert.equal(artworkDoc.frames.size + artworkDoc.timers.size, 0, 'pending artwork uses no polling RAF or paint timer');
+assert.equal(artworkWaits, 1, 'pending callers share the same native readiness listener');
+artworkReady(); artworkReady();
+assert.equal(artworkDisposals, 1, 'readiness releases listeners before scheduling the native paint');
+assert.equal(artworkDoc.frames.size, 1, 'multiple readiness signals schedule exactly one paint sequence');
+artworkDoc.frame();
+assert.equal(artworkExecutions, 0);
+artworkDoc.frame();
+assert.equal(artworkExecutions, 0, 'native readiness still preserves the double RAF plus macro task');
+artworkDoc.tasks(); await artwork;
+assert.equal(artworkExecutions, 1);
+
+const readyDoc = createDocument();
+let synchronousDisposals = 0;
+const immediatelyReady = queue.run(readyDoc, 'ready', () => {}, (_doc, ready) => {
+  ready();
+  return () => { synchronousDisposals++; };
+});
+assert.equal(synchronousDisposals, 1, 'an already loaded native image releases a synchronously returned listener handle');
+assert.equal(readyDoc.frames.size, 1, 'cached artwork has no fixed delay before its paint sequence');
+readyDoc.paintThenTask(); await immediatelyReady;
+
+const staleArtworkDoc = createDocument();
+let staleReady;
+let staleDisposals = 0;
+const staleArtwork = queue.run(staleArtworkDoc, 'old-art', () => { throw new Error('stale native image callback'); }, (_doc, ready) => {
+  staleReady = ready;
+  return () => { staleDisposals++; };
+});
+const nextArtwork = queue.run(staleArtworkDoc, 'next-art', () => {});
+await staleArtwork;
+staleReady();
+assert.equal(staleDisposals, 1, 'navigation releases pending native artwork listeners');
+assert.equal(staleArtworkDoc.frames.size, 1, 'a late cancelled native image event cannot add a paint sequence');
+staleArtworkDoc.paintThenTask(); await nextArtwork;
+
+const brokenReadyDoc = createDocument();
+const brokenReady = queue.run(brokenReadyDoc, 'broken-readiness', () => {}, (_doc, ready) => {
+  ready();
+  throw new Error('readiness failed');
+});
+await assert.rejects(brokenReady, /readiness failed/);
+assert.equal(brokenReadyDoc.frames.size + brokenReadyDoc.timers.size, 0, 'readiness errors clean up a partially scheduled frame');
+
 const disposeDoc = createDocument();
 const disposeOther = createDocument();
 const pendingDispose = queue.run(disposeDoc, 'dispose', () => { throw new Error('disposed work'); });
 const pendingOther = queue.run(disposeOther, 'dispose', () => { throw new Error('disposed other work'); });
+const disposeArtworkDoc = createDocument();
+let disposedArtworkReady;
+let disposedArtworkHandles = 0;
+const pendingArtworkDispose = queue.run(disposeArtworkDoc, 'pending-image', () => { throw new Error('disposed image work'); }, (_doc, ready) => {
+  disposedArtworkReady = ready;
+  return () => { disposedArtworkHandles++; };
+});
 disposeDoc.frame(); disposeOther.frame(); disposeOther.frame();
 queue.dispose();
-await Promise.all([pendingDispose, pendingOther]);
+await Promise.all([pendingDispose, pendingOther, pendingArtworkDispose]);
+disposedArtworkReady();
+assert.equal(disposedArtworkHandles, 1, 'disposing the queue releases native artwork handles');
+assert.equal(disposeArtworkDoc.frames.size + disposeArtworkDoc.timers.size, 0);
 assert.equal(disposeDoc.frames.size + disposeDoc.timers.size + disposeOther.frames.size + disposeOther.timers.size, 0, 'disposing cancels every pending RAF and timer');
 await queue.run(disposeDoc, 'after-dispose', () => { throw new Error('work after dispose'); });
-console.log('After-native-paint checks passed: double RAF plus macro task, pending-only coalescing, navigation cancellation, nonblocking layout retries, document isolation, hidden/closed skipping, timer fallback and disposal.');
+console.log('After-native-paint checks passed: native artwork readiness, double RAF plus macro task, pending-only coalescing, navigation cancellation, nonblocking layout retries, document isolation, hidden/closed skipping, timer fallback and disposal.');

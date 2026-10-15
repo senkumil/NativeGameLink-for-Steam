@@ -12,33 +12,32 @@ import { playbarResolver } from './components/PlaybarResolver';
 import { clearNativeAppDetailsClassCache } from './components/AppDetailsNativeClasses';
 import { clearNativeComponentsCache } from './components/AppDetailsNativeComponents';
 
-function resetRuntimeBoundCaches(): void {
-	achievementsResolver.invalidate();
-	activityResolver.invalidate();
-	friendsResolver.invalidate();
-	gameDetailsResolver.invalidate();
-	gameInfoResolver.invalidate();
-	heroResolver.invalidate();
-	newsResolver.invalidate();
-	playbarResolver.invalidate();
-	clearNativeAppDetailsClassCache();
-	clearNativeComponentsCache();
-	gamepadCapabilities.resetCircuitBreakers();
+function resetRuntimeBoundCaches(doc?: Document): void {
+	achievementsResolver.invalidate(doc);
+	activityResolver.invalidate(doc);
+	friendsResolver.invalidate(doc);
+	gameDetailsResolver.invalidate(doc);
+	gameInfoResolver.invalidate(doc);
+	heroResolver.invalidate(doc);
+	newsResolver.invalidate(doc);
+	playbarResolver.invalidate(doc);
+	clearNativeAppDetailsClassCache(doc);
+	clearNativeComponentsCache(doc);
+	gamepadCapabilities.resetCircuitBreakers(doc);
 }
 
 class GamepadRuntime {
-	private initialized = false;
+	private initializedDocuments = new WeakSet<Document>();
 	private activeDocument: Document | null = null;
-	private reloadWindows = new WeakSet<Window>();
+	private reloadBindings = new Map<Document, { window: Window; listener: () => void }>();
 
 	public initialize(doc?: Document): boolean {
 		const targetDoc = doc || (typeof document !== 'undefined' ? document : undefined);
-		if (!targetDoc) return false;
-		if (this.initialized && this.activeDocument === targetDoc) return true;
+		if (!targetDoc || !targetDoc.defaultView || targetDoc.defaultView.closed || targetDoc.defaultView.document !== targetDoc) return false;
+		if (this.initializedDocuments.has(targetDoc)) { this.activeDocument = targetDoc; return true; }
 
-		if (this.activeDocument && this.activeDocument !== targetDoc) {
-			backendLog('[NGL][Gamepad][Runtime] CEF document changed; clearing realm-bound native resolver caches');
-			resetRuntimeBoundCaches();
+		for (const previous of Array.from(this.reloadBindings.keys())) {
+			if (previous !== targetDoc && previous.defaultView === targetDoc.defaultView) this.invalidate(previous);
 		}
 		this.activeDocument = targetDoc;
 
@@ -46,36 +45,47 @@ class GamepadRuntime {
 		const captured = steamWebpackRuntime.captureRuntime(targetDoc);
 
 		if (captured) {
-			this.initialized = true;
+			this.initializedDocuments.add(targetDoc);
 			const targetWindow = targetDoc.defaultView as any;
-			gamepadCapabilities.setAvailable('appStore', Boolean(targetWindow?.appStore || targetWindow?.AppStore || (window as any)?.appStore || (window as any)?.AppStore));
+			gamepadCapabilities.setAvailable('appStore', Boolean(targetWindow?.appStore || targetWindow?.AppStore), targetDoc);
 			this.bindReloadDetection(targetDoc);
 			backendLog('[NGL][Gamepad][Runtime] Gamepad Runtime captured and initialized successfully');
 			return true;
 		}
 
-		this.initialized = false;
+		this.initializedDocuments.delete(targetDoc);
 		backendLog('[NGL][Gamepad][Runtime] Gamepad Webpack Runtime not yet available, will retry on next interaction');
 		return false;
 	}
 
-	public getModules(): WebpackModuleEntry[] {
-		if (!this.initialized) this.initialize(this.activeDocument || undefined);
-		return steamWebpackRuntime.getAllModules(this.activeDocument || undefined);
+	public getModules(doc?: Document): WebpackModuleEntry[] {
+		const target = doc || this.activeDocument || undefined;
+		if (!target || !this.initializedDocuments.has(target)) this.initialize(target);
+		return steamWebpackRuntime.getAllModules(target);
 	}
 
-	public getRequire(): any | null {
-		if (!this.initialized) this.initialize(this.activeDocument || undefined);
-		return steamWebpackRuntime.getRequire(this.activeDocument || undefined);
+	public getRequire(doc?: Document): any | null {
+		const target = doc || this.activeDocument || undefined;
+		if (!target || !this.initializedDocuments.has(target)) this.initialize(target);
+		return steamWebpackRuntime.getRequire(target);
 	}
 
-	public isReady(): boolean {
-		return this.initialized;
+	public isReady(doc?: Document): boolean {
+		const target = doc || this.activeDocument;
+		return Boolean(target && this.initializedDocuments.has(target));
 	}
 
 	public invalidate(doc?: Document): void {
-		if (doc && this.activeDocument && doc !== this.activeDocument) return;
-		this.initialized = false;
+		if (doc) {
+			if (!this.initializedDocuments.has(doc) && !this.reloadBindings.has(doc)) return;
+			this.initializedDocuments.delete(doc);
+			this.unbindReloadDetection(doc);
+			if (this.activeDocument === doc) this.activeDocument = null;
+			resetRuntimeBoundCaches(doc);
+			return;
+		}
+		for (const target of Array.from(this.reloadBindings.keys())) this.unbindReloadDetection(target);
+		this.initializedDocuments = new WeakSet();
 		this.activeDocument = null;
 		resetRuntimeBoundCaches();
 		backendLog('[NGL][Gamepad][Runtime] Runtime invalidated and realm-bound caches reset');
@@ -83,13 +93,22 @@ class GamepadRuntime {
 
 	private bindReloadDetection(doc: Document): void {
 		const win = doc.defaultView;
-		if (!win || this.reloadWindows.has(win)) return;
-		this.reloadWindows.add(win);
-		win.addEventListener('beforeunload', () => {
-			if (this.activeDocument !== doc) return;
-			backendLog('[NGL][Gamepad][Runtime] Steam Gamepad UI unloading, invalidating active runtime state');
+		if (!win || this.reloadBindings.has(doc)) return;
+		const binding = { window: win, listener: () => {
+			if (this.reloadBindings.get(doc) !== binding) return;
+			backendLog('[NGL][Gamepad][Runtime] Steam Gamepad UI unloading, invalidating its document runtime state');
 			this.invalidate(doc);
-		});
+		} };
+		this.reloadBindings.set(doc, binding);
+		win.addEventListener('beforeunload', binding.listener);
+	}
+
+	private unbindReloadDetection(doc: Document): void {
+		const binding = this.reloadBindings.get(doc);
+		this.reloadBindings.delete(doc);
+		if (binding) {
+			try { binding.window.removeEventListener('beforeunload', binding.listener); } catch {}
+		}
 	}
 }
 

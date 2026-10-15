@@ -1,6 +1,7 @@
 import { backendLog } from '../../api/backend';
 import { steamWebpackRuntime } from '../modules/SteamWebpackRuntime';
 import { loc } from '../localization';
+import { getNativeWindowInstance } from '../native-window-store';
 
 export interface VirtualKeyboardHandle {
 	ShowVirtualKeyboard?: (targetEl?: HTMLElement | null) => void;
@@ -18,7 +19,8 @@ const lastShowRequests = new WeakMap<Window, { target: HTMLElement | null; at: n
 const SHOW_DEBOUNCE_MS = 350;
 
 function resolveTargetWindow(doc?: Document): Window | null {
-	return doc?.defaultView || (typeof window !== 'undefined' ? window : null);
+	const view = doc?.defaultView || (typeof window !== 'undefined' ? window : null);
+	return view && !view.closed && (!doc || view.document === doc) ? view : null;
 }
 
 function createManagerHandle(vkm: any): VirtualKeyboardHandle | null {
@@ -60,23 +62,9 @@ export function resolveVirtualKeyboardHandle(doc?: Document): VirtualKeyboardHan
 			if (cached && cached.runtimeIdentity === runtimeIdentity) return cached.handle;
 		}
 
-		const req = steamWebpackRuntime.getRequire(doc);
-		if (req) {
+		if (view?.document) {
 			try {
-				const m61236 = req(61236);
-				let windowStore = m61236?.oy?.WindowStore;
-				if (!windowStore) {
-					for (const mod of steamWebpackRuntime.getAllModules(doc)) {
-						const exp = mod.exports as any;
-						if (exp?.oy?.WindowStore) {
-							windowStore = exp.oy.WindowStore;
-							break;
-						}
-					}
-				}
-				const inst = windowStore?.GetWindowInstanceFromWindow(view)
-					|| windowStore?.GamepadUIMainWindowInstance
-					|| windowStore?.MainWindowInstance;
+				const inst = getNativeWindowInstance(doc || view.document);
 				const handle = createManagerHandle(inst?.VirtualKeyboardManager);
 				if (handle) {
 					if (view) cachedHandles.set(view, { runtimeIdentity, handle });

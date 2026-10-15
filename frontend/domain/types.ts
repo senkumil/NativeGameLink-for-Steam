@@ -143,10 +143,6 @@ export interface ShortcutDetectionContext {
 	exePath: string;
 	startDir: string;
 	launchOptions: string;
-	bootstrapDetected?: boolean;
-	recommendedExePath?: string;
-	recommendedStartDir?: string;
-	trackingExecutableAutoApply?: boolean;
 }
 
 export interface ShortcutLinkResult {
@@ -194,11 +190,13 @@ export interface LocalAchievementItem {
 	icon_gray: string;
 	hidden: boolean;
 	global_percent: number;
+	global_percent_known?: boolean;
 	earned: boolean;
 	earned_time: number;
 	progress: number;
 	max_progress: number;
 	is_online?: boolean;
+	client_writable?: boolean;
 }
 
 export interface LocalAchievementData {

@@ -9,29 +9,79 @@ import ts from 'typescript';
 const steamReact = process.env.STEAM_REACT_BUNDLE
   || 'C:/Program Files (x86)/Steam/steamui/libraries/libraries~00299a408.js';
 const installed = fs.existsSync(steamReact) ? fs.readFileSync(steamReact, 'utf8') : null;
-function functionAt(start) {
-  assert(start >= 0, 'The installed React function contract must be found');
-  const open = installed.indexOf('{', start);
-  let depth = 1, end = open + 1;
-  while (depth && end < installed.length) {
-    if (installed[end] === '{') depth++;
-    if (installed[end] === '}') depth--;
-    end++;
+/** Find React's committed-fiber helpers by their contract, not production
+ * minifier names, parameter spelling, whitespace or declaration placement. */
+function installedReactOracle(source) {
+  const tree = ts.createSourceFile('installed-steam-react.js',source,ts.ScriptTarget.ESNext,true,ts.ScriptKind.JS);
+  const functions = [];
+  const visit = node => {
+    if ((ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node)) && node.body
+        && node.parameters.length === 1 && node.end - node.getStart(tree) < 6000) {
+      const properties = new Set(), calls = new Set(), invariantNames = new Map(), numbers = new Set();
+      const inspect = child => {
+        if (ts.isPropertyAccessExpression(child)) properties.add(child.name.text);
+        if (ts.isNumericLiteral(child)) numbers.add(Number(child.text));
+        if (ts.isCallExpression(child) && ts.isIdentifier(child.expression)) {
+          calls.add(child.expression.text);
+          const number = child.arguments[0];
+          if (number && ts.isNumericLiteral(number) && [188,189,190].includes(Number(number.text))) {
+            invariantNames.set(Number(number.text),child.expression.text);
+          }
+        }
+        ts.forEachChild(child,inspect);
+      };
+      inspect(node.body);
+      const declarationName = node.name?.text
+        || (ts.isVariableDeclaration(node.parent) && ts.isIdentifier(node.parent.name) ? node.parent.name.text : null);
+      let scope = node.parent;
+      while (scope && !ts.isBlock(scope) && !ts.isSourceFile(scope)) scope = scope.parent;
+      functions.push({node,name:declarationName,scope,properties,calls,invariantNames,numbers,text:node.getText(tree)});
+    }
+    ts.forEachChild(node,visit);
+  };
+  visit(tree);
+  const hasProperties = (candidate,names) => names.every(name=>candidate.properties.has(name));
+  const currentCandidates = functions.filter(candidate => hasProperties(candidate,
+    ['alternate','return','child','sibling','tag','stateNode','current'])
+    && [188,189,190].every(number=>candidate.invariantNames.has(number)));
+  assert.equal(currentCandidates.length,1,'The installed React committed-fiber slow path must be structurally unambiguous');
+  const current = currentCandidates[0];
+  const scopes = [];
+  for (let ancestor = current.node.parent; ancestor; ancestor = ancestor.parent) {
+    if (ts.isBlock(ancestor) || ts.isSourceFile(ancestor)) scopes.push(ancestor);
   }
-  assert.equal(depth, 0, 'The installed React function must be complete');
-  return installed.slice(start, end);
-}
-let nativeCurrent = null;
-if (installed) {
-  const nearestSource = functionAt(installed.indexOf('function l(e){var t=e,r=e;if(e.alternate)'));
-  const currentStart = installed.indexOf('return e=function(e){var t=e.alternate;');
-  const currentSource = functionAt(currentStart + 'return e='.length);
-  assert(currentSource.includes('.child===') && currentSource.includes('.stateNode.current'),
-    'Use the installed slow path, including shared child sets and root selection');
+  const dependencies = functions.filter(candidate=>candidate.name && current.calls.has(candidate.name) && scopes.includes(candidate.scope));
+  const nearestCandidates = dependencies.filter(candidate=>hasProperties(candidate,['alternate','return','flags','tag'])
+    && candidate.numbers.has(4098) && !candidate.properties.has('child'));
+  assert.equal(nearestCandidates.length,1,'Resolve the native nearest-mounted helper in the slow path lexical scope');
+  const nearest = nearestCandidates[0];
+  const mountedCandidates = dependencies.filter(candidate=>candidate !== nearest && candidate.calls.has(nearest.name)
+    && candidate.invariantNames.has(188) && !candidate.properties.has('child'));
+  assert.equal(mountedCandidates.length,1,'Resolve the native assert-mounted helper from its nearest-mounted dependency');
+  const mounted = mountedCandidates[0];
+  const errorNames = new Set(current.invariantNames.values());
+  assert.equal(errorNames.size,1,'React invariants share one dynamically resolved formatter');
+  const errorName = errorNames.values().next().value;
+  assert.deepEqual([...current.calls].filter(name=>![nearest.name,mounted.name,errorName,'Error'].includes(name)),[],
+    'The extracted slow path has no unresolved callable dependency');
   const reactError = number => `Installed React invariant ${number}`;
-  const nearest = new Function('a', `return (${nearestSource})`)(reactError);
-  const assertMounted = fiber => { if (nearest(fiber) !== fiber) throw new Error(reactError(188)); };
-  nativeCurrent = new Function('l', 'c', 'a', `return (${currentSource})`)(nearest, assertMounted, reactError);
+  const nearestFunction = new Function(`return (${nearest.text})`)();
+  const mountedFunction = new Function(nearest.name,errorName,`return (${mounted.text})`)(nearestFunction,reactError);
+  const currentFunction = new Function(nearest.name,mounted.name,errorName,`return (${current.text})`)(nearestFunction,mountedFunction,reactError);
+  return {current:currentFunction,functions:[nearest,mounted,current],names:[nearest.name,mounted.name,current.name,errorName]};
+}
+let nativeCurrent = null, renamedCurrent = null;
+if (installed) {
+  const oracle = installedReactOracle(installed);
+  nativeCurrent = oracle.current;
+  // Exercise extraction again after changing all helper names and formatting;
+  // this test must survive the next Steam production-minifier naming change.
+  let renamedSource = oracle.functions.map(candidate=>candidate.text).join('\n');
+  oracle.names.forEach((name,index)=>{
+    if (name) renamedSource = renamedSource.replace(new RegExp(`\\b${name.replace(/[$]/g,'\\$')}\\b`,'g'),`oracleHelper${index}`);
+  });
+  const formatted = ts.createPrinter().printFile(ts.createSourceFile('renamed-react.js',renamedSource,ts.ScriptTarget.ESNext,true,ts.ScriptKind.JS));
+  renamedCurrent = installedReactOracle(formatted).current;
 }
 
 const classes = { Container: 'NativePlaybar', GameStatsSection: 'NativeStats' };
@@ -73,9 +123,9 @@ function element(host, className = classes.Container) {
   return { className, __reactFiber$regression: host, isConnected: true, parentElement: null,
     hasAttribute: () => false, closest: () => null };
 }
-function nativeOwnership(host) {
+function nativeOwnership(host, resolveCurrent = nativeCurrent) {
   for (let depth = 0, current = host; current && depth < 128; depth++) {
-    current = nativeCurrent(current);
+    current = resolveCurrent(current);
     if (!current) return null;
     const props = current.memoizedProps;
     for (const value of [props?.overview?.appid, props?.appOverview?.appid, props?.details?.unAppID,
@@ -90,6 +140,7 @@ function nativeOwnership(host) {
 }
 function verify(host, expected, label) {
   if (nativeCurrent) check(nativeOwnership(host), expected, `${label}: the actual installed React algorithm establishes ownership`);
+  if (renamedCurrent) check(nativeOwnership(host,renamedCurrent), expected, `${label}: helper renaming/reformatting preserves the installed oracle`);
   check(library.committedHeaderAppId(element(host)), expected, `${label}: plugin agrees with installed React`);
 }
 
@@ -176,4 +227,4 @@ function sharedBailout(id = shortcut, previousId = id, withAlternate = false) {
   check(library.committedHeaderAppId(element(cyclic)), null, 'Malformed cyclic fibers are rejected with a bounded walk');
 }
 
-console.log(`Library details passed: ${checks} checks${nativeCurrent ? ' including the installed React 19.1.1 reconciler oracle' : '; installed Steam React oracle unavailable'}; shared bailout trees, alternate/current ancestry, real semantic props, deep owners, native isolation and unmounted fibers.`);
+console.log(`Library details passed: ${checks} checks${nativeCurrent ? ' including the installed React reconciler oracle and renamed/reformatted extraction' : '; installed Steam React oracle unavailable'}; shared bailout trees, alternate/current ancestry, real semantic props, deep owners, native isolation and unmounted fibers.`);

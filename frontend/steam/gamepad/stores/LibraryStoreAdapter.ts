@@ -1,7 +1,7 @@
-﻿import { getSteamStore } from '../../modules/SteamModuleResolver';
+import { getDocumentSteamStore } from './AppStoreAdapter';
 
 export class LibraryStoreAdapter {
-	public static getStore(): any | null {
-		return getSteamStore('libraryStore') || getSteamStore('LibraryStore');
+	public static getStore(doc?: Document): any | null {
+		return getDocumentSteamStore(['libraryStore', 'LibraryStore'], doc);
 	}
 }

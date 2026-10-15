@@ -1,4 +1,5 @@
 import { backendLog } from '../../api/backend';
+import { getNativeWindowInstance } from '../native-window-store';
 
 export type SteamUIModeType = 'desktop' | 'gamepad';
 
@@ -108,6 +109,17 @@ class SteamUIModeService {
 	public isDocumentGamepadSurface(doc: Document): boolean {
 		if (!doc) return false;
 		const view = doc.defaultView as any;
+		try {
+			// Steam can retain a /library shell with hashed CSS and no GamepadUI
+			// token. Only the exact native window can establish its current mode;
+			// the broader IsGamepadUIWindow also includes overlays and keyboards.
+			if (view && !view.closed && view.document === doc) {
+				const instance = getNativeWindowInstance(doc);
+				if (instance?.BrowserWindow === view && typeof instance.IsMainGamepadUIWindow === 'function') {
+					return instance.IsMainGamepadUIWindow() === true;
+				}
+			}
+		} catch {}
 		const href = String(view?.location?.href || doc.location?.href || '');
 		if (/(?:gamepadui|bigpicture|tenfoot)/i.test(href)) return true;
 		if (doc.title && /Big Picture/i.test(doc.title)) return true;

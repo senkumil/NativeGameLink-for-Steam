@@ -8,9 +8,12 @@ import ts from 'typescript';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const edge = process.env.CLOUD_BROWSER_EXECUTABLE || 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
-const steamCss = process.env.STEAM_PLAYBAR_CSS || 'C:/Program Files (x86)/Steam/steamui/css/chunk~2dcc5aaf7.css';
+const steamCss = process.env.STEAM_PLAYBAR_CSS || [
+  'C:/Program Files (x86)/Steam/steamui/css/sp.css',
+  'C:/Program Files (x86)/Steam/steamui/css/chunk~2dcc5aaf7.css',
+].find(filename => fs.existsSync(filename));
 const steamBundle = process.env.STEAM_UI_BUNDLE || 'C:/Program Files (x86)/Steam/steamui/chunk~2dcc5aaf7.js';
-for (const filename of [edge, steamCss, steamBundle]) assert(fs.existsSync(filename), `Missing fixture dependency: ${filename}`);
+for (const filename of [edge, steamCss, steamBundle]) assert(filename && fs.existsSync(filename), `Missing fixture dependency: ${filename}`);
 const installed = fs.readFileSync(steamBundle, 'utf8');
 function functionAt(start) {
   assert(start >= 0, 'Find the installed native logo anchor function');

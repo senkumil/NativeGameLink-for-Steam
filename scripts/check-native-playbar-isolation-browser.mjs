@@ -10,20 +10,28 @@ import ts from 'typescript';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const edge = process.env.CLOUD_BROWSER_EXECUTABLE || 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
-const steamCss = process.env.STEAM_PLAYBAR_CSS || 'C:/Program Files (x86)/Steam/steamui/css/chunk~2dcc5aaf7.css';
-assert.ok(fs.existsSync(edge) && fs.existsSync(steamCss), 'Installed Edge and Steam CSS are required');
+const steamCss = process.env.STEAM_PLAYBAR_CSS || [
+  'C:/Program Files (x86)/Steam/steamui/css/sp.css',
+  'C:/Program Files (x86)/Steam/steamui/css/chunk~2dcc5aaf7.css',
+].find(filename => fs.existsSync(filename));
+assert.ok(fs.existsSync(edge) && (steamCss && fs.existsSync(steamCss)), 'Installed Edge and Steam CSS are required');
 const appText = fs.readFileSync(path.join(root, 'frontend/runtime/app.tsx'), 'utf8');
 const appAst = ts.createSourceFile('app.tsx', appText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const appImports = appAst.statements.filter(ts.isImportDeclaration).map(statement => statement.moduleSpecifier.text);
-assert.ok(!appImports.some(name => /native-info-preference|achievement-cache-repair/.test(name)),
-  'Native preference toggles and automatic native cache repairs must not load in the app lifecycle');
+assert.ok(!appImports.some(name => /native-info-preference/.test(name)),
+  'Native preference toggles must not load in the app lifecycle');
+assert.ok(appText.includes('mainWindowDoc = popupDoc; lifecycle.add(installLegacyAchievementCacheRepair(popupDoc));'),
+  'Exact legacy cache sentinel repair must belong to the validated desktop document lifecycle');
 assert.ok(!/reconcileNativeInfoPreference|repairLegacyNativeAchievementCaches/.test(appText),
   'App startup and route callbacks must not invoke native preference/cache mutations');
 const transpile = source => ts.transpileModule(source, { compilerOptions: {
   module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, jsx: ts.JsxEmit.React,
 } }).outputText;
 const sources = Object.fromEntries([
+  ['class-module-cache', 'frontend/steam/class-module-cache.ts'],
   ['css', 'frontend/steam/css.ts'],
+  ['SteamWebpackRuntime', 'frontend/steam/modules/SteamWebpackRuntime.ts'],
+  ['achievement-cache-repair', 'frontend/steam/achievement-cache-repair.ts'],
   ['native-dom', 'frontend/steam/native-dom.ts'],
   ['library-details', 'frontend/steam/library-details.ts'],
   ['disposables', 'frontend/core/disposables.ts'],
@@ -38,7 +46,7 @@ const sources = Object.fromEntries([
   ['playbar-achievement-cleanup', 'frontend/features/library/playbar-achievement-cleanup.ts'],
   ['route-exit', 'frontend/features/library/route-exit.ts'],
 ].map(([name, file]) => [name, transpile(fs.readFileSync(path.join(root, file), 'utf8'))]));
-const hooks = '\nexport { windowCreated as __windowCreated, disposeDocumentLifecycles as __dispose };\n';
+const hooks = '\nappRuntimeLifecycle = new DisposableRegistry();\nexport { windowCreated as __windowCreated, disposeDocumentLifecycles as __dispose };\n';
 sources.app = transpile(appText + hooks);
 // Keep an executable negative control from the previously shipped helper. Only
 // its native branch call is reintroduced; all other app code stays identical.
@@ -82,6 +90,7 @@ async function browserChecks(sources) {
   const dependencies = {
     react: { default: {} },
     '@steambrew/client': { findClassModule: () => null, definePlugin: factory => ({ factory }) },
+    './modules/SteamWebpackRuntime': { steamWebpackRuntime: { getRuntimeIdentity: () => null, getAllModules: () => [] } },
     '../../core/mappings': { findMappingForTitle: () => null, subscribeMappings: () => noop },
     '../core/mappings': { mappings: {}, loadMappings: asyncNoop },
     '../../steam/localization': localization, './localization': localization, '../steam/localization': localization,
@@ -118,7 +127,10 @@ async function browserChecks(sources) {
     },
     '../features/shortcuts/link-job-queue': { processPendingLinkJobs: asyncNoop },
     '../features/achievements/runtime': emptyService,
+    '../steam/gamepad/GamepadRuntime': { gamepadRuntime: { invalidate: noop } },
+    '../steam/native-achievement-layout': { installNativeAchievementLayout: () => noop },
     '../features/library/runtime': {
+      syncLinkedFirstContent: noop,
       handleLibraryNavigation: noop, cancelPendingLibraryPaint: noop, findNonSteamNotice: () => null,
       async tryInjectLibraryData(doc) {
         retirementCalls++;

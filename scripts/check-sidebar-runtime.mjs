@@ -140,7 +140,10 @@ const classModules = [
   { Container: '_2-O4ZG0KrnSrzISHBKctFQ', GameListEntryContainer: '_1vO6BoiVslZgs1kqDGdUs8', GameListEntryName: '_2SXJM0PeFEi3gbC7V3S5pE', GameIcon: 'ga1hyw11cdBVodrCAidPF' },
   { Container: '_3x1HklzyDs4TEjACrRO2tB', GameListHomeAndSearch: '_2TKEazUUS3TlniZfpc8OOe', CollectionsButton: '_2CEKFex6JMsAse2lqMMjUp' },
 ];
-const css = loadModule('frontend/steam/css.ts', { '@steambrew/client': { findClassModule: predicate => classModules.find(predicate) } });
+const classModuleCache = loadModule('frontend/steam/class-module-cache.ts', {
+  './modules/SteamWebpackRuntime': { steamWebpackRuntime: { getRuntimeIdentity: () => classModules, getAllModules: () => classModules.map((exports, id) => ({ exports, id })) } },
+});
+const css = loadModule('frontend/steam/css.ts', { './class-module-cache': classModuleCache });
 const sidebarSignals = loadModule('frontend/steam/library-sidebar.ts', { './css': css });
 const domSignals = loadModule('frontend/core/dom.ts', {});
 const sidebar = loadModule('frontend/features/library/sidebar-cleanup.ts', {

@@ -1,46 +1,46 @@
+import { DocumentRuntimeCache } from '../runtime-cache';
 import { backendLog } from '../../../api/backend';
 import { findTopAchievementCandidates, findTopAchievementSectionCandidates, type AchievementCandidate } from '../../modules/signatures/achievements';
 import { gamepadCapabilities } from '../GamepadCapabilities';
 
 class AchievementsResolver {
-	private cachedCandidate: AchievementCandidate | null = null;
-	private cachedSectionCandidate: AchievementCandidate | null = null;
-	private resolved = false;
+	private states = new DocumentRuntimeCache(() => ({ cachedCandidate: null as AchievementCandidate | null, cachedSectionCandidate: null as AchievementCandidate | null }));
 
-	public resolve(): React.ComponentType<any> | null {
-		if (this.resolved && this.cachedCandidate?.component) {
-			return this.cachedCandidate.component;
+	public resolve(doc?: Document): React.ComponentType<any> | null {
+		const state = this.states.get(doc);
+		if (state.cachedCandidate?.component) {
+			return state.cachedCandidate.component;
 		}
 
 		try {
-			const candidates = findTopAchievementCandidates(1);
+			const candidates = findTopAchievementCandidates(1, doc);
 			if (candidates.length > 0 && candidates[0].component) {
-				this.cachedCandidate = candidates[0];
-				this.resolved = true;
-				gamepadCapabilities.setAvailable('achievements', true);
-				backendLog(`[NGL][Gamepad][Achievements] Resolved native Steam achievement item component from moduleId: ${this.cachedCandidate.moduleId}`);
-				return this.cachedCandidate.component;
+				state.cachedCandidate = candidates[0];
+				gamepadCapabilities.setAvailable('achievements', true, doc);
+				backendLog(`[NGL][Gamepad][Achievements] Resolved native Steam achievement item component from moduleId: ${state.cachedCandidate.moduleId}`);
+				return state.cachedCandidate.component;
 			}
 		} catch (error) {
 			backendLog(`[NGL][Gamepad][Achievements] Error resolving achievement item component: ${error}`);
-			gamepadCapabilities.recordFailure('achievements', error);
+			gamepadCapabilities.recordFailure('achievements', error, doc);
 		}
 
-		gamepadCapabilities.setAvailable('achievements', false);
+		gamepadCapabilities.setAvailable('achievements', false, doc);
 		return null;
 	}
 
-	public resolveSection(): React.ComponentType<any> | null {
-		if (this.cachedSectionCandidate?.component) {
-			return this.cachedSectionCandidate.component;
+	public resolveSection(doc?: Document): React.ComponentType<any> | null {
+		const state = this.states.get(doc);
+		if (state.cachedSectionCandidate?.component) {
+			return state.cachedSectionCandidate.component;
 		}
 
 		try {
-			const candidates = findTopAchievementSectionCandidates(1);
+			const candidates = findTopAchievementSectionCandidates(1, doc);
 			if (candidates.length > 0 && candidates[0].component) {
-				this.cachedSectionCandidate = candidates[0];
-				backendLog(`[NGL][Gamepad][Achievements] Resolved native Steam achievement section component from moduleId: ${this.cachedSectionCandidate.moduleId}`);
-				return this.cachedSectionCandidate.component;
+				state.cachedSectionCandidate = candidates[0];
+				backendLog(`[NGL][Gamepad][Achievements] Resolved native Steam achievement section component from moduleId: ${state.cachedSectionCandidate.moduleId}`);
+				return state.cachedSectionCandidate.component;
 			}
 		} catch (error) {
 			backendLog(`[NGL][Gamepad][Achievements] Error resolving achievement section component: ${error}`);
@@ -48,14 +48,13 @@ class AchievementsResolver {
 		return null;
 	}
 
-	public getCandidateInfo(): AchievementCandidate | null {
-		return this.cachedCandidate;
+	public getCandidateInfo(doc?: Document): AchievementCandidate | null {
+		const state = this.states.get(doc);
+		return state.cachedCandidate;
 	}
 
-	public invalidate(): void {
-		this.cachedCandidate = null;
-		this.cachedSectionCandidate = null;
-		this.resolved = false;
+	public invalidate(doc?: Document): void {
+		this.states.clear(doc);
 	}
 }
 

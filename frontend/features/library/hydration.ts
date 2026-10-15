@@ -12,6 +12,8 @@ import {
 } from './social';
 import { GDL_INJECTED } from './constants';
 import { runWhenLibrarySidebarIdle } from '../../steam/sidebar-interaction';
+import { refreshActivityNewsLink } from './activity-view';
+import { getRetainedActivityNews } from './social/feed';
 
 export interface LinkedRenderSession {
 	doc: Document;
@@ -63,7 +65,7 @@ export function hydrateLinkedSecondaryResources(session: LinkedRenderSession, da
 		&& session.doc.getElementById(GDL_INJECTED) === root
 		&& ownedActivityFeed(state.session) === initialFeed;
 	const activityGuard = { isCurrent, shortcutAppId: session.shortcutAppId };
-	void getNews(session.steamAppId, session.language, data).then(newsItems => {
+	const commitNews = (newsItems: import('../../domain/types').NewsItem[]): void => {
 		if (!isCurrent()) return;
 		void runWhenLibrarySidebarIdle(session.doc, 'secondary-news', () => {
 			if (!isCurrent()) return;
@@ -73,17 +75,19 @@ export function hydrateLinkedSecondaryResources(session: LinkedRenderSession, da
 				applyUnifiedActivityFeed(initialFeed, session.steamAppId, session.shortcutAppId, newsItems, header);
 			}
 			initialFeed.dataset.gdlNewsSignature = signature;
+			initialFeed.removeAttribute('aria-busy');
+			refreshActivityNewsLink(session.doc, { steamAppId: session.steamAppId, shortcutAppId: session.shortcutAppId,
+				newsItems: getRetainedActivityNews(session.steamAppId) || newsItems, headerImage: header });
 			setupPostDeleteHandlers(session.doc, session.steamAppId, session.shortcutAppId, newsItems, header);
 		}).catch(error => backendLog('News render error: ' + String(error)));
-		void populateActivityFeed(
-			session.doc,
-			session.steamAppId,
-			data.name || '',
-			data.header_image || '',
-			newsItems,
-			activityGuard,
-		).catch(error => backendLog('Activity feed error: ' + String(error)));
-	}).catch(error => backendLog('News hydration error: ' + String(error)));
+	};
+	void getNews(session.steamAppId, session.language, data, commitNews).then(commitNews)
+		.catch(error => backendLog('News hydration error: ' + String(error)));
+	// Friend activity is independent of slow publisher endpoints. Resolve the
+	// news input from the feed's latest snapshot when activity eventually commits,
+	// rather than capturing a partial news result and repainting it much later.
+	void populateActivityFeed(session.doc, session.steamAppId, data.name || '', data.header_image || '', [], activityGuard)
+		.catch(error => backendLog('Activity feed error: ' + String(error)));
 
 	void getFriendData(session.steamAppId).then(async (friendResult): Promise<void> => {
 		if (!isCurrent()) return;

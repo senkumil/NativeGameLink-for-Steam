@@ -114,8 +114,7 @@ After confirmation, NativeGameLink:
 2. Renames it to the official Steam title.
 3. Applies the official icon and Library artwork.
 4. Preserves the original launch target.
-5. Can replace a short-lived launcher with the detected long-running game executable so playtime remains accurate.
-6. Finishes the identity and artwork work safely in the background even if the Properties window is closed.
+5. Finishes the identity and artwork work safely in the background even if the Properties window is closed.
 
 ---
 
@@ -141,12 +140,12 @@ Enter your own SteamGridDB API key in NativeGameLink settings and enable the aut
 
 ## 🖥️ Big Picture Integration
 
-For linked shortcuts, NativeGameLink adapts the local Big Picture data model so the games are presented like regular Steam Library entries:
+Optional Big Picture enhancements integrate linked shortcuts into all four detail tabs while preserving Steam's shell and the shortcut's original actions:
 
-- Linked games are no longer separated into a **Non-Steam**, **Outside Steam**, or equivalent localized category.
-- The redundant non-Steam category is hidden when it becomes empty.
-- Installed state, controller presentation, compatibility fields, and playtime are exposed to the Big Picture interface.
-- The behavior is limited to mapped shortcuts and is restored when the plugin or Big Picture integration is unloaded.
+- Activity and news; your stuff, including personal and global achievements, notes and screenshots; community and game information.
+- Components, styles, focus and modals from the owning Steam window, with local fallbacks when a capability is unavailable.
+- Measured playtime and known compatibility, without forcing installation, licenses, Steam Deck certification or Cloud status.
+- Sessions isolated by document, shortcut and generation, with cleanup on game, window or mode changes.
 
 This is a local UI integration. It does not convert the shortcut into an owned Steam license or bypass Steam ownership checks.
 
@@ -206,7 +205,7 @@ The fallback can:
 > **Why doesn't it work with launchers or intermediary executables?**
 > If you add an external launcher, bootstrap tool, script, or intermediary wrapper `.exe` that merely boots up the actual game and then immediately exits, Steam and the process monitor will assume the session finished in a few seconds, prematurely stopping the timer and leaving playtime unrecorded.
 > 
-> If a game uses a separate launcher, locate the actual long-running game executable inside the installation directory (for example, Unreal Engine titles typically place it under `Binaries/Win64/...-Shipping.exe`) and set it as the shortcut target in Steam. During the linking workflow, NativeGameLink will also attempt to identify and suggest this real executable automatically.
+> Choose the shortcut's launch target yourself in Steam Properties. NativeGameLink preserves that executable when linking a game.
 
 ---
 
@@ -261,6 +260,16 @@ If automatic detection is uncertain or unavailable:
 1. Right-click the shortcut and open **Properties**.
 2. Under **Linked Game**, review the visual candidates or paste a Steam AppID/Store URL.
 3. Choose the correct release and press **Save**.
+
+---
+
+## Big Picture development
+
+The [Big Picture implementation and acceptance matrix (Spanish)](docs/BIG_PICTURE_BASES.md)
+documents identity, isolation, navigation, capabilities and tests. Run
+`npm run check:big-picture` to verify the integration. All four tabs and their
+flows are implemented; visual 1:1 comparison and physical controller validation
+inside Steam remain pending. Enhancements remain opt-in.
 
 ---
 

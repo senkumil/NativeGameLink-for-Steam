@@ -5,10 +5,8 @@ import { gdlText, loc } from '../../steam/localization';
 import type { NativeAppDetailsClasses } from '../../steam/gamepad/components/AppDetailsNativeClasses';
 import {
 	ensureAppDetailsStoreGuarded,
-	openNativeAchievementsScreen,
-	resolveNativeAchievementsSectionComponent,
-	resolveNativeAchievementStore,
-	resolveNativeAppDetailsStore,
+	registerNativeAchievementStateRestore,
+	restoreNativeAchievementState,
 } from '../../steam/gamepad/components/AppDetailsNativeComponents';
 import {
 	compareEarnedAchievementsForDisplay,
@@ -17,6 +15,29 @@ import {
 } from '../achievements/rarity';
 import type { BigPictureDetailData, MappedShortcut } from './types';
 import { getCommittedShortcutSteamAppId } from '../shortcuts/registry';
+import { getCachedLocalAchievementsForShortcut } from '../achievements/cache';
+import { isCurrentLinkedGamepadTarget } from '../../steam/gamepad/GamepadContext';
+import { steamUIModeService } from '../../steam/ui/SteamUIModeService';
+import { openBigPictureAchievementsScreen } from './NativeBigPictureAchievementScreen';
+import { getDocumentReact } from '../../steam/gamepad/document-ui-runtime';
+
+interface AchievementProjection {
+	appId: number; appData: any; owners: Set<Document>; originalDetails: any; installedDetails: any;
+	map: any; hadMyAchievements: boolean; originalMyAchievements: any; installedMyAchievements: any;
+	unregister: () => void; restore: () => void;
+}
+const achievementProjections = new Set<AchievementProjection>();
+const projectionByAppData = new WeakMap<object, AchievementProjection>();
+
+export function restoreBigPictureAchievementProjections(shortcutAppId: number, owner?: Document): void {
+	const id = shortcutAppId >>> 0;
+	for (const projection of Array.from(achievementProjections)) {
+		if (projection.appId !== id || (owner && !projection.owners.has(owner))) continue;
+		if (owner) projection.owners.delete(owner);
+		if (!owner || projection.owners.size === 0) projection.restore();
+	}
+	if (![...achievementProjections].some(projection => projection.appId === id)) restoreNativeAchievementState(id, owner);
+}
 
 export interface AchievementsSectionProps {
 	shortcut: MappedShortcut;
@@ -41,21 +62,59 @@ function clickProps(action: () => void): { onClick: () => void } {
 	return { onClick: action };
 }
 
+function isCurrentProjectionOwner(owner: Document | undefined, shortcutId: number, steamAppId: string): owner is Document {
+	try {
+		return Boolean(owner && steamUIModeService.isGamepadUI(owner)
+			&& isCurrentLinkedGamepadTarget(owner, shortcutId, steamAppId));
+	} catch { return false; }
+}
+
 export function syncAchievementsToNativeStore(
 	appDetailsStore: any,
 	appId: number,
 	achievementsData: any,
 	achievementStore?: any,
+	owner?: Document,
 ): void {
 	const rawId = Number(appId), shortcutId = rawId >>> 0;
 	if (!appDetailsStore || !achievementsData || !Number.isInteger(rawId)
 		|| rawId < -2147483648 || rawId > 4294967295 || shortcutId < 2147483648) return;
 	const mappedId = getCommittedShortcutSteamAppId(shortcutId);
-	if (!mappedId || String(achievementsData.metadata_appid || achievementsData.appid) !== mappedId) return;
+	if (!mappedId || !isCurrentProjectionOwner(owner, shortcutId, mappedId)
+		|| String(achievementsData.metadata_appid || achievementsData.appid) !== mappedId
+		|| getCachedLocalAchievementsForShortcut(mappedId, String(shortcutId)) !== achievementsData) return;
 	try {
-		ensureAppDetailsStoreGuarded(appDetailsStore);
-		const appData = appDetailsStore.GetAppData(appId);
+		ensureAppDetailsStoreGuarded(appDetailsStore, owner);
+		const appData = appDetailsStore.GetAppData(shortcutId);
 		if (!appData) return;
+		const candidateMap = achievementStore?.m_mapMyAchievements;
+		const map = candidateMap && ['get', 'has', 'set', 'delete'].every(key => typeof candidateMap[key] === 'function') ? candidateMap : null;
+		let projection = projectionByAppData.get(appData);
+		if (projection && projection.map !== map) { projection.restore(); projection = undefined; }
+		if (!projection) {
+			const state: AchievementProjection = {
+				appId: shortcutId, appData, owners: new Set([owner]), originalDetails: appData.details, installedDetails: undefined,
+				map, hadMyAchievements: Boolean(map?.has(shortcutId)), originalMyAchievements: map?.get(shortcutId), installedMyAchievements: undefined,
+				unregister: () => {}, restore: () => {},
+			};
+			state.restore = () => {
+				if (appData.details === state.installedDetails) appData.details = state.originalDetails;
+				if (map && map.get(shortcutId) === state.installedMyAchievements) {
+					if (state.hadMyAchievements) map.set(shortcutId, state.originalMyAchievements); else map.delete(shortcutId);
+				}
+				state.unregister(); state.owners.clear(); achievementProjections.delete(state); projectionByAppData.delete(appData);
+			};
+			state.unregister = registerNativeAchievementStateRestore(shortcutId, state.restore, state.owners);
+			achievementProjections.add(state); projectionByAppData.set(appData, state); projection = state;
+		} else {
+			// A fresh Steam callback supersedes our old baseline. Disposal must
+			// preserve that newer native value rather than restoring stale data.
+			if (appData.details !== projection.installedDetails) projection.originalDetails = appData.details;
+			if (map && map.get(shortcutId) !== projection.installedMyAchievements) {
+				projection.hadMyAchievements = map.has(shortcutId); projection.originalMyAchievements = map.get(shortcutId);
+			}
+		}
+		if (owner) projection.owners.add(owner);
 		const allItems: LocalAchievementItem[] = achievementsData.achievements || [];
 		const earned = allItems.filter(a => a.earned);
 		const unachieved = allItems.filter(a => !a.earned);
@@ -67,8 +126,11 @@ export function syncAchievementsToNativeStore(
 			strImage: String(item.icon || ''),
 			bAchieved: isEarned,
 			bHidden: Boolean(item.hidden),
-			flAchieved: Number.isFinite(item.global_percent) ? Number(item.global_percent) : (isEarned ? 50 : 25),
-			rtUnlocked: (item as any).unlock_time || (isEarned ? Math.floor(Date.now() / 1000) : 0),
+			...(item.global_percent_known !== false && Number.isFinite(item.global_percent) ? { flAchieved: Number(item.global_percent) } : {}),
+			rtUnlocked: isEarned ? Math.max(0, Math.floor(Number(item.earned_time) || 0)) : 0,
+			flMinProgress: 0,
+			flCurrentProgress: Math.max(0, Number(item.progress) || 0),
+			flMaxProgress: Math.max(0, Number(item.max_progress) || 0),
 		});
 
 		const nativeAchievements = {
@@ -76,30 +138,24 @@ export function syncAchievementsToNativeStore(
 			nAchieved: Math.max(earned.length, Number(achievementsData.unlocked || 0)),
 			vecHighlight: earned.map(item => toNativeItem(item, true)),
 			vecUnachieved: unachieved.map(item => toNativeItem(item, false)),
-			vecAchievedHidden: [] as any[],
+			vecAchievedHidden: earned.filter(item => item.hidden).map(item => toNativeItem(item, true)),
 		};
 
-		appData.details = {
+		projection.installedDetails = {
 			...(appData.details || {}),
-			unAppID: appId,
+			unAppID: shortcutId,
 			achievements: nativeAchievements,
 		};
+		appData.details = projection.installedDetails;
 
-		if (achievementStore && typeof achievementStore.m_mapMyAchievements?.set === 'function') {
-			try {
-				const achievedMap: Record<string, any> = {};
-				for (const item of earned) {
-					achievedMap[String(item.name)] = {
-						bAchieved: true,
-						strName: String(item.display_name || item.name || ''),
-						rtUnlocked: (item as any).unlock_time || Math.floor(Date.now() / 1000),
-					};
-				}
-				achievementStore.m_mapMyAchievements.set(appId, {
-					data: { achieved: achievedMap },
-					loading: false,
-				});
-			} catch {}
+		if (map) {
+			const data: { achieved: Record<string, any>; unachieved: Record<string, any>; hidden: Record<string, any> } = { achieved: {}, unachieved: {}, hidden: {} };
+			for (const item of allItems) {
+				const target = item.earned ? data.achieved : item.hidden ? data.hidden : data.unachieved;
+				target[String(item.name)] = toNativeItem(item, Boolean(item.earned));
+			}
+			projection.installedMyAchievements = { data, loading: false };
+			map.set(shortcutId, projection.installedMyAchievements);
 		}
 	} catch (e) {
 		backendLog(`[NGL][Gamepad] Failed to sync achievements to native store: ${e}`);
@@ -109,34 +165,30 @@ export function syncAchievementsToNativeStore(
 export function NativeBigPictureAchievements(props: AchievementsSectionProps): ReactElement | null {
 	const achievements = props.data.achievements;
 	const items = achievements?.achievements || [];
-	if (props.hideIfEmpty && items.length === 0 && !props.hydrating) return null;
 	const numericAppId = Number(props.shortcut.id || 0);
 	if (!Number.isInteger(numericAppId) || numericAppId < 2147483648 || numericAppId > 4294967295
-		|| getCommittedShortcutSteamAppId(numericAppId) !== String(props.shortcut.steamAppId)) {
+		|| getCommittedShortcutSteamAppId(numericAppId) !== String(props.shortcut.steamAppId)
+		|| !isCurrentProjectionOwner(props.document, numericAppId, String(props.shortcut.steamAppId))) {
+		return null;
+	}
+	if (!achievements || getCachedLocalAchievementsForShortcut(props.shortcut.steamAppId, String(numericAppId)) !== achievements) {
+		restoreBigPictureAchievementProjections(numericAppId, props.document);
+		return null;
+	}
+	if (props.hideIfEmpty && items.length === 0 && !props.hydrating) {
+		restoreBigPictureAchievementProjections(numericAppId, props.document);
 		return null;
 	}
 
-	const NativeAchievements = resolveNativeAchievementsSectionComponent(props.document);
-	const store = resolveNativeAppDetailsStore(props.document);
-	const achievementStore = resolveNativeAchievementStore(props.document);
-
-	if (NativeAchievements && store && numericAppId > 0) {
-		syncAchievementsToNativeStore(store, numericAppId, achievements, achievementStore);
-		return (
-			<props.NativeDetailsBoundary
-				key={`native-achievements-${numericAppId}-${achievements?.unlocked ?? 0}-${items.length}`}
-				name="native-achievements"
-				fallback={<FallbackAchievementsSection {...props} />}
-			>
-				<NativeAchievements details={{ unAppID: numericAppId }} />
-			</props.NativeDetailsBoundary>
-		);
-	}
-
+	// Steam's AppID-backed summary opens its own account-backed achievement
+	// route. Use the same section/focus primitives with our explicit opener so
+	// the complete personal/global flow keeps this installation's local state.
 	return <FallbackAchievementsSection {...props} />;
 }
 
 function FallbackAchievementsSection(props: AchievementsSectionProps): ReactElement | null {
+	const ownerReact = getDocumentReact(props.document);
+	if (!ownerReact) return null;
 	const achievements = props.data.achievements;
 	const total = Math.max(0, Number(achievements?.total || props.data.game?.achievements?.total || 0));
 	const unlocked = Math.max(0, Math.min(total, Number(achievements?.unlocked || 0)));
@@ -150,11 +202,13 @@ function FallbackAchievementsSection(props: AchievementsSectionProps): ReactElem
 	const highlightedNames = highlightedAchievementNames(earned);
 	const carouselItems = earned.length > 0 ? earned : locked.slice(0, 16);
 
-	const [prioritizedRow, setPrioritizedRow] = React.useState<'earned' | 'locked'>(
+	const [prioritizedRow, setPrioritizedRow] = ownerReact.useState<'earned' | 'locked'>(
 		earned.length > 0 ? 'earned' : 'locked',
 	);
 
-	const onOpenAchievements = () => openNativeAchievementsScreen(props.document, props.shortcut.steamAppId);
+	const onOpenAchievements = () => {
+		if (achievements) openBigPictureAchievementsScreen(props.document, props.shortcut, achievements);
+	};
 
 	const highlight = total > 0 ? (
 		<div className={[native?.HighlightDiv, percent === 100 && native?.AllAchieved].filter(Boolean).join(' ')}>
@@ -171,7 +225,7 @@ function FallbackAchievementsSection(props: AchievementsSectionProps): ReactElem
 				<span className={native?.UnlockedLabelPercent}> ({percent}%)</span>
 			</div>
 			<div className={native?.AchievementProgressContainer}>
-				<props.NativeProgress nProgress={percent / 100} />
+				<props.NativeProgress nProgress={percent} />
 			</div>
 		</div>
 	) : null;
@@ -186,6 +240,7 @@ function FallbackAchievementsSection(props: AchievementsSectionProps): ReactElem
 			rightColumn
 		>
 			<FallbackAchievementCarousel
+				document={props.document}
 				items={carouselItems}
 				classes={props.classes}
 				name="NativeGameLink Achievements"
@@ -202,6 +257,7 @@ function FallbackAchievementsSection(props: AchievementsSectionProps): ReactElem
 						{loc('AppDetails_Achievements_Locked', 'Logros bloqueados')}
 					</div>
 					<FallbackAchievementCarousel
+						document={props.document}
 						items={locked}
 						classes={props.classes}
 						name="NativeGameLink Locked Achievements"
@@ -214,18 +270,14 @@ function FallbackAchievementsSection(props: AchievementsSectionProps): ReactElem
 				</>
 			) : null}
 			{total > 0 ? (
-				<props.NativeFocusable
-					focusable
-					role="button"
-					onActivate={onOpenAchievements}
+				<props.NativeButton
 					{...clickProps(onOpenAchievements)}
 					className={[native?.ViewAllAchievementsButton, 'gdl-bp-view-all-achievements'].filter(Boolean).join(' ')}
+					data-gdl-focus-key={`achievement-open-${props.shortcut.id}`}
 					style={{ marginTop: '12px', display: 'inline-flex' }}
 				>
-					<props.NativeButton {...clickProps(onOpenAchievements)}>
-						{loc('AppDetails_Achievements_ViewAll', 'Ver todos los logros')} ({unlocked}/{total})
-					</props.NativeButton>
-				</props.NativeFocusable>
+					{loc('AppDetails_Achievements_ViewAll', 'Ver todos los logros')} ({unlocked}/{total})
+				</props.NativeButton>
 			) : null}
 			{items.length === 0 ? (
 				<props.LoadingComponent
@@ -238,6 +290,7 @@ function FallbackAchievementsSection(props: AchievementsSectionProps): ReactElem
 }
 
 function FallbackAchievementCarousel({
+	document: doc,
 	items,
 	classes,
 	name,
@@ -248,6 +301,7 @@ function FallbackAchievementCarousel({
 	NativeFocusable,
 	NativeStrip,
 }: {
+	document: Document;
 	items: LocalAchievementItem[];
 	classes: NativeAppDetailsClasses;
 	name: string;
@@ -258,7 +312,9 @@ function FallbackAchievementCarousel({
 	NativeFocusable: React.ComponentType<any>;
 	NativeStrip: React.ComponentType<any>;
 }): ReactElement | null {
-	const [focused, setFocused] = React.useState(0);
+	const ownerReact = getDocumentReact(doc);
+	if (!ownerReact) return null;
+	const [focused, setFocused] = ownerReact.useState(0);
 	const achievement = classes.Achievement;
 	if (items.length === 0) return null;
 
@@ -277,6 +333,8 @@ function FallbackAchievementCarousel({
 							setFocused(index);
 						}}
 						onActivate={onSelect ? () => onSelect(item) : undefined}
+						{...(onSelect ? clickProps(() => onSelect(item)) : {})}
+						data-gdl-focus-key={`achievement-summary-${item.name}`}
 						className={[
 							achievement?.AchievementCarouselItem,
 							isDetailed && achievement?.Detailed,
@@ -299,7 +357,7 @@ function FallbackAchievementCarousel({
 							<div className={achievement?.AchivementCarouselItemDetails}>
 								<div className={achievement?.Name}>{item.display_name || item.name}</div>
 								<div className={achievement?.Description}>{item.description}</div>
-								{Number.isFinite(item.global_percent) ? (
+								{item.global_percent_known !== false && Number.isFinite(item.global_percent) ? (
 									<div className={achievement?.Achieved}>
 										{loc(
 											'AppDetails_PctUnlocked',

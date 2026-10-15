@@ -9,6 +9,7 @@ local settings = deps.achievement_settings
 local policy = deps.achievement_policy
 local sources = deps.achievement_sources
 local state_reader = deps.achievement_state
+local metadata_identity = deps.achievement_metadata
 local lru = deps.lru_cache
 local config = deps.config
 local USER_AGENT = deps.user_agent or "NativeGameLink-for-Steam/2.0.0"
@@ -30,28 +31,16 @@ local function disk_cache_path(appid, lang)
     return config.persistent_path(fs.join("metadata_cache", tostring(appid) .. "_" .. clean_lang .. ".json"))
 end
 
-local function read_disk_metadata_cache(appid, lang)
+local function read_disk_metadata_cache(appid, lang, allow_stale)
     local p = disk_cache_path(appid, lang)
     if not p then return nil end
-    local data = state_reader.decode(p)
-    if type(data) == "table" and next(data) then
-        return data
-    end
-    return nil
+    return metadata_identity.read_cached(p, tostring(appid), lang, allow_stale)
 end
 
 local function write_disk_metadata_cache(appid, lang, data)
     local p = disk_cache_path(appid, lang)
     if not p or type(data) ~= "table" or not next(data) then return end
-    pcall(function()
-        local dir = fs.parent_path(p)
-        if not fs.exists(dir) then pcall(fs.create_directories, dir) end
-        local f = io.open(p, "wb")
-        if f then
-            f:write(cjson.encode(data))
-            f:close()
-        end
-    end)
+    pcall(config.write_json_atomic, p, metadata_identity.cache_record(appid, lang, data))
 end
 
 local function reset_local_caches()
@@ -120,6 +109,21 @@ end
 
 local function map_to_steam_lang(lang)
     return util.safe_language(lang)
+end
+
+local function fetch_public_achievement_schema(appid, lang)
+    local url = "https://api.steampowered.com/IPlayerService/GetGameAchievements/v1/?appid="
+        .. tostring(appid) .. "&language=" .. map_to_steam_lang(lang)
+    local ok, res = pcall(http.get, url, {
+        headers = { ["Accept"] = "application/json", ["User-Agent"] = USER_AGENT },
+        timeout = 8
+    })
+    if not ok or not res or res.status ~= 200 or type(res.body) ~= "string"
+        or #res.body > 4 * 1024 * 1024 then return {} end
+    local okj, body = pcall(cjson.decode, res.body)
+    local response = okj and type(body) == "table" and body.response or nil
+    if type(response) ~= "table" or type(response.achievements) ~= "table" then return {} end
+    return metadata_identity.normalize_public_rows(appid, response.achievements, achievement_icon_url)
 end
 
 local LANGUAGE_KEY_ALIASES = util.LANGUAGE_KEY_ALIASES or {}
@@ -282,129 +286,74 @@ local function normalize_local_schema(appid, root_dir, lang)
     return {}, ""
 end
 
-local function match_public_metadata(appid, lang, root_dir)
+local function match_public_metadata(appid, lang, root_dir, native_hint)
     local key = tostring(appid) .. "|" .. tostring(lang or "spanish")
     local now = os.time()
+    local hinted = type(native_hint) == "table" and tostring(native_hint.appid) == tostring(appid)
+        and metadata_identity.normalize_rows(appid, native_hint.rows) or {}
     local cached = local_achievement_meta_cache[key]
-    local cache_ttl = (cached and next(cached.by_name or {})) and 1800 or 15
-    if cached and (now - (cached.time or 0)) < cache_ttl then
+    local cache_ttl = cached and cached.verified and 1800 or 15
+    if cached and (not next(hinted) or cached.verified) and now >= cached.time and now - cached.time < cache_ttl then
         lru.touch(cached)
-        return cached.by_name or {}, cached.source or "cache"
+        return metadata_identity.apply_client_permissions(appid, cached.by_name or {}), cached.source or "cache"
     end
-	if cached then local_achievement_meta_cache[key] = nil end
+    local_achievement_meta_cache[key] = nil
+    local disk_cached = read_disk_metadata_cache(appid, lang)
+    if not next(hinted) and disk_cached and next(disk_cached) then
+        set_metadata_cache(key, { time = now, by_name = disk_cached, source = "disk_cache", verified = true })
+        return metadata_identity.apply_client_permissions(appid, disk_cached), "disk_cache"
+    end
 
-    local schema, schema_path = normalize_local_schema(appid, root_dir, lang)
+    local schema, source = hinted, "steam_client_schema"
+    if not next(schema) then
+        schema, source = normalize_local_schema(appid, root_dir, lang)
+        if next(schema) then source = "local_schema:" .. source end
+    end
+    if not next(schema) then
+        schema, source = metadata_identity.native_schema(appid,
+            function(value) return extract_localized_text(value, lang) end, achievement_icon_url)
+    end
+    if not next(schema) then
+        schema = fetch_public_achievement_schema(appid, lang)
+        source = "steam_public_schema"
+    end
+    if next(schema) and source == "steam_public_schema" then
+        -- This response already binds names, icons and rarity to exact API IDs;
+        -- anonymous linked games do not need a personal Steam stats request.
+        write_disk_metadata_cache(appid, lang, schema)
+        set_metadata_cache(key, { time = now, by_name = schema, source = source, verified = true })
+        return metadata_identity.apply_client_permissions(appid, schema), source
+    end
+    local global_by_name, global_ordered = fetch_global_achievement_percentages(appid)
     if next(schema) then
-        local global_by_name = fetch_global_achievement_percentages(appid)
         local community = fetch_community_achievement_rows(appid, lang)
         if tostring(lang):lower() ~= "english" and #community == 0 then
             community = fetch_community_achievement_rows(appid, "english")
         end
-        local community_by_icon = {}
-        for idx, row in ipairs(community) do
-            local base = tostring(row.icon or ""):match("([^/]+)$")
-            if base then community_by_icon[base] = row end
-        end
-        local schema_list = {}
-        for name, m in pairs(schema) do
-            schema_list[#schema_list + 1] = m
-        end
-        for idx, m in ipairs(schema_list) do
-            m.global_percent = tonumber(global_by_name[m.name]) or 0
-            local base = tostring(m.icon or ""):match("([^/]+)$")
-            local row = (base and community_by_icon[base]) or community[idx]
-            if row then
-                if row.title ~= "" then m.title = row.title end
-                if row.description ~= "" then m.description = row.description end
-                if row.icon ~= "" and (m.icon == "" or not m.icon:find("^https?://")) then m.icon = row.icon end
-            end
-        end
-        set_metadata_cache(key, { time = now, by_name = schema, source = "local_schema:" .. schema_path })
-        return schema, "local_schema:" .. schema_path
+        schema = metadata_identity.enrich_by_icon(schema, community, global_by_name)
+        write_disk_metadata_cache(appid, lang, schema)
+        set_metadata_cache(key, { time = now, by_name = schema, source = source, verified = true })
+        return metadata_identity.apply_client_permissions(appid, schema), source
     end
 
-    local disk_cached = read_disk_metadata_cache(appid, lang)
-    if disk_cached and next(disk_cached) then
-        set_metadata_cache(key, { time = now, by_name = disk_cached, source = "disk_cache" })
-        return disk_cached, "disk_cache"
+    -- Neither percentage nor HTML order establishes an achievement's identity.
+    -- Keep API IDs truthful until a read-only native schema can supply its text.
+    -- Older unversioned caches may contain guessed pairings and are not reused.
+    local fallback_disk = read_disk_metadata_cache(appid, lang, true)
+    if fallback_disk and next(fallback_disk) then
+        -- A temporary schema outage must not erase verified names and icons
+        -- merely because the independent percentages endpoint is still online.
+        metadata_identity.enrich_by_icon(fallback_disk, {}, global_by_name)
+        set_metadata_cache(key, { time = now, by_name = fallback_disk, source = "disk_cache_stale", verified = false })
+        return metadata_identity.apply_client_permissions(appid, fallback_disk), "disk_cache_stale"
     end
-
-    local global_by_name, global_ordered = fetch_global_achievement_percentages(appid)
-    local community = fetch_community_achievement_rows(appid, lang)
-    if tostring(lang):lower() ~= "english" and #community == 0 then
-        community = fetch_community_achievement_rows(appid, "english")
+    local result = {}
+    for _, item in ipairs(global_ordered) do
+        result[item.name] = { name = item.name, title = item.name, description = "", icon = "",
+            icongray = "", hidden = false, global_percent = item.percent }
     end
-
-    -- Match global percentage order to community order
-    local result, used = {}, {}
-    for idx, g in ipairs(global_ordered) do
-        local best_i, best_diff = nil, 999
-        for i, row in ipairs(community) do
-            if not used[i] then
-                local diff = math.abs((tonumber(row.percent) or 0) - (tonumber(g.percent) or 0))
-                if diff < best_diff then
-                    best_diff = diff
-                    best_i = i
-                end
-            end
-        end
-        -- If within reasonable tolerance, take best match; otherwise fallback to exact index match if available
-        if (not best_i or best_diff > 1.5) and community[idx] and not used[idx] then
-            best_i = idx
-        end
-
-        if best_i and community[best_i] then
-            used[best_i] = true
-            local row = community[best_i]
-            result[g.name] = {
-                name = g.name,
-                title = (row.title ~= "" and row.title) or g.name,
-                description = row.description or "",
-                icon = row.icon or "",
-                icongray = "",
-                hidden = (row.description == "" or row.title:match("^%?%?%?")),
-                global_percent = tonumber(g.percent) or tonumber(row.percent) or 0,
-            }
-        else
-            result[g.name] = {
-                name = g.name,
-                title = g.name,
-                description = "",
-                icon = "",
-                icongray = "",
-                hidden = false,
-                global_percent = tonumber(g.percent) or 0,
-            }
-        end
-    end
-
-    if not next(result) and #community > 0 then
-        for i, row in ipairs(community) do
-            local pseudo_name = string.format("ACH_%04d", i - 1)
-            result[pseudo_name] = {
-                name = pseudo_name,
-                title = (row.title ~= "" and row.title) or pseudo_name,
-                description = row.description or "",
-                icon = row.icon or "",
-                icongray = "",
-                hidden = (row.description == "" or row.title:match("^%?%?%?")),
-                global_percent = tonumber(row.percent) or 0,
-            }
-        end
-    end
-
-	if next(result) then
-        write_disk_metadata_cache(appid, lang, result)
-		set_metadata_cache(key, { time = now, by_name = result, source = "steam_public" })
-	else
-        local fallback_disk = read_disk_metadata_cache(appid, "english")
-        if fallback_disk and next(fallback_disk) then
-            set_metadata_cache(key, { time = now, by_name = fallback_disk, source = "disk_cache_fallback" })
-            return fallback_disk, "disk_cache_fallback"
-        end
-		set_metadata_cache(key, { time = now, by_name = {}, source = "steam_public_empty" })
-	end
-    return result, "steam_public"
+    set_metadata_cache(key, { time = now, by_name = result, source = "steam_public_unverified", verified = false })
+    return metadata_identity.apply_client_permissions(appid, result), "steam_public_unverified"
 end
 
 function M.get_game_achievement_capabilities(request_json)
@@ -444,6 +393,7 @@ function M.fetch_local_achievement_data(request_json, language, state_app_id)
     local allow_simulated = false
     local simulate_unlock_all = false
     local unlock_online = false
+    local native_schema_hint = nil
 
     -- The Millennium Lua host iterates JSON object values in key order before
     -- invoking a function.  A single JSON-string argument avoids positional
@@ -453,6 +403,7 @@ function M.fetch_local_achievement_data(request_json, language, state_app_id)
         if ok_request and type(request) == "table" then
             steam_app_id = request.steam_app_id or request.appid or request[1]
             language = request.language or language
+            native_schema_hint = request.native_schema
             allow_simulated = request.allow_simulated == true
             simulate_unlock_all = request.simulate_unlock_all == true
             unlock_online = request.unlock_online == true
@@ -463,6 +414,7 @@ function M.fetch_local_achievement_data(request_json, language, state_app_id)
         end
     elseif type(request_json) == "table" then
         language = request_json.language or language
+        native_schema_hint = request_json.native_schema
         allow_simulated = request_json.allow_simulated == true
         simulate_unlock_all = request_json.simulate_unlock_all == true
         unlock_online = request_json.unlock_online == true
@@ -587,7 +539,7 @@ function M.fetch_local_achievement_data(request_json, language, state_app_id)
         -- complete achievement-name set with the official schema. Exact matches
         -- are ordered by file modification time, so the active or most recently
         -- used historical folder wins without moving or changing any file.
-        local discovery_metadata = select(1, match_public_metadata(metadata_appid, lang, metadata_dir))
+        local discovery_metadata = select(1, match_public_metadata(metadata_appid, lang, metadata_dir, native_schema_hint))
         local root_matches = sources.find_matching_root_candidates(
             root, discovery_metadata, metadata_appid, state_appid
         )
@@ -619,7 +571,7 @@ function M.fetch_local_achievement_data(request_json, language, state_app_id)
         -- Simulation changes only the earned state. The list, names,
         -- descriptions and icon URLs still come from Steam's real metadata,
         -- and this path never writes to Steam or to a game's save files.
-        local metadata, metadata_source = match_public_metadata(metadata_appid, lang, metadata_dir)
+        local metadata, metadata_source = match_public_metadata(metadata_appid, lang, metadata_dir, native_schema_hint)
         local meta_list = {}
         for name, m in pairs(metadata) do
             meta_list[#meta_list + 1] = {
@@ -630,6 +582,8 @@ function M.fetch_local_achievement_data(request_json, language, state_app_id)
                 icon_gray = tostring(m.icongray or m.icon or ""),
                 hidden = m.hidden == true,
                 global_percent = tonumber(m.global_percent) or 0,
+                global_percent_known = m.global_percent ~= nil,
+                client_writable = m.client_writable,
             }
         end
         if #meta_list == 0 then
@@ -746,6 +700,8 @@ function M.fetch_local_achievement_data(request_json, language, state_app_id)
                 icon_gray = item.icon_gray,
                 hidden = item.hidden,
                 global_percent = item.global_percent,
+                global_percent_known = item.global_percent_known,
+                client_writable = item.client_writable,
                 earned = is_earned,
                 earned_time = earned_time,
                 progress = 0,
@@ -786,7 +742,7 @@ function M.fetch_local_achievement_data(request_json, language, state_app_id)
 
     -- Never use the shortcut ID to look up Steam metadata: it is not a real
     -- Steam AppID and has no achievement schema on Steam's services.
-    local metadata, metadata_source = match_public_metadata(metadata_appid, lang, metadata_dir)
+    local metadata, metadata_source = match_public_metadata(metadata_appid, lang, metadata_dir, native_schema_hint)
     local all_names = {}
     local seen_names = {}
     local function add_name(name)
@@ -821,7 +777,6 @@ function M.fetch_local_achievement_data(request_json, language, state_app_id)
         local earned_time = tonumber(st.earned_time) or 0
         if is_earned then
             unlocked = unlocked + 1
-            if earned_time == 0 then earned_time = os.time() - 86400 end
         end
         achievements[#achievements + 1] = {
             name = name,
@@ -831,6 +786,8 @@ function M.fetch_local_achievement_data(request_json, language, state_app_id)
             icon_gray = tostring(m.icongray or m.icon or ""),
             hidden = m.hidden == true,
             global_percent = tonumber(m.global_percent) or 0,
+            global_percent_known = m.global_percent ~= nil,
+            client_writable = m.client_writable,
             earned = is_earned,
             earned_time = earned_time,
             progress = tonumber(st.progress) or 0,

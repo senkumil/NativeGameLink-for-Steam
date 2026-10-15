@@ -167,7 +167,6 @@ export interface ShortcutIdentitySyncResult {
 	nameApplied: boolean;
 	nameReady: boolean;
 	iconApplied: boolean;
-	trackingApplied: boolean;
 	noLauncherConfigured: boolean;
 	artwork: ArtworkApplyResult;
 	complete: boolean;
@@ -186,8 +185,6 @@ export async function synchronizeShortcutOfficialIdentity(options: {
 	steamAppId: string;
 	data?: SteamGameData | null;
 	canonicalName?: string;
-	trackingExecutable?: string;
-	trackingStartDir?: string;
 	skipLauncher?: boolean;
 	existingLaunchOptions?: string;
 	onIdentityResolved?: (shortcutAppId: number, officialName: string, relatedShortcutAppIds: number[]) => void;
@@ -207,26 +204,11 @@ export async function synchronizeShortcutOfficialIdentity(options: {
 	shortcutIdentityMutationDepth += 1;
 	try {
 		const staleIds = new Set<number>([originalShortcutId]);
-		let trackingApplied = false;
 		let noLauncherConfigured = false;
 		let nameApplied = false;
 		let nameReady = false;
 
 		const apps = (window as any).SteamClient?.Apps;
-		if (options.trackingExecutable && typeof apps?.SetShortcutExe === 'function') {
-			try {
-				await withTimeout(Promise.resolve(apps.SetShortcutExe(shortcutAppId, options.trackingExecutable)), 5000, 'shortcut_exe_timeout');
-				trackingApplied = true;
-				backendLog(`Tracking executable applied to ${shortcutAppId}: ${options.trackingExecutable}`);
-			} catch (error) {
-				backendLog(`Applying tracking executable failed for ${shortcutAppId}: ${error}`);
-			}
-		}
-		if (options.trackingStartDir && typeof apps?.SetShortcutStartDir === 'function') {
-			try {
-				await withTimeout(Promise.resolve(apps.SetShortcutStartDir(shortcutAppId, options.trackingStartDir)), 5000, 'shortcut_startdir_timeout');
-			} catch {}
-		}
 		const skipArg = getOptimalLauncherSkipArg(options.steamAppId);
 		if (typeof apps?.SetShortcutLaunchOptions === 'function') {
 			try {
@@ -410,8 +392,8 @@ export async function synchronizeShortcutOfficialIdentity(options: {
 				backendLog(`Playtime sync warning on link for ${shortcutAppId}: ${err}`);
 			});
 			const shortcutObj = getShortcutAppById(shortcutAppId);
-			const shortcutExe = readShortcutOverviewField(shortcutObj, 'strShortcutExe', 'm_strShortcutExe', 'shortcut_exe', 'strExePath') || options.trackingExecutable || '';
-			const shortcutStartDir = readShortcutOverviewField(shortcutObj, 'strShortcutStartDir', 'm_strShortcutStartDir', 'shortcut_start_dir', 'strStartDir') || options.trackingStartDir || '';
+			const shortcutExe = readShortcutOverviewField(shortcutObj, 'strShortcutExe', 'm_strShortcutExe', 'shortcut_exe', 'strExePath');
+			const shortcutStartDir = readShortcutOverviewField(shortcutObj, 'strShortcutStartDir', 'm_strShortcutStartDir', 'shortcut_start_dir', 'strStartDir');
 			void neutralizeSteamAppIdFileBackend({
 				request_json: JSON.stringify({
 					exe_path: shortcutExe,
@@ -428,7 +410,7 @@ export async function synchronizeShortcutOfficialIdentity(options: {
 		if (complete && options.refreshLibrary !== false) shortcutRuntimeHost().refreshLibraryArtwork?.(shortcutAppId);
 		return {
 			shortcutAppId, officialName, nameApplied, nameReady, iconApplied,
-			trackingApplied, noLauncherConfigured, artwork, complete,
+			noLauncherConfigured, artwork, complete,
 		};
 	} finally {
 		shortcutIdentityMutationDepth = Math.max(0, shortcutIdentityMutationDepth - 1);
@@ -442,8 +424,6 @@ interface ShortcutLinkOptions {
 	steamAppId: string;
 	skipLauncher?: boolean;
 	existingLaunchOptions?: string;
-	trackingExecutable?: string;
-	trackingStartDir?: string;
 	shortcutExecutable?: string;
 	onStatus?: ShortcutLinkStatus;
 	onPhase?: (phase: ShortcutLinkPhase) => void;
@@ -492,6 +472,5 @@ export function linkShortcutToSteam(options: ShortcutLinkOptions): Promise<Short
 		shortcutAppId: options.shortcutAppId,
 		title: options.title,
 		exePath: options.shortcutExecutable,
-		exePaths: [options.trackingExecutable],
 	}), () => linkShortcutToSteamUnlocked(options));
 }

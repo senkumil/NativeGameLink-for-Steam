@@ -5,6 +5,25 @@ export function ensureBigPictureDetailStyles(doc: Document): void {
 	const style = doc.createElement('style');
 	style.id = 'gdl-bp-detail-styles';
 	style.textContent = `
+/* Local primitives remain usable when a Steam presentation export is absent. */
+.gdl-bp-progress {
+	width: 100%;
+	height: 10px;
+	background: #3d4450;
+	border-radius: 3px;
+	overflow: hidden;
+}
+.gdl-bp-progress > div {
+	height: 100%;
+	background: #1a9fff;
+}
+.gdl-bp-loading {
+	width: 32px;
+	height: 32px;
+	border: 3px solid #3d4450;
+	border-top-color: #1a9fff;
+	border-radius: 50%;
+}
 /* Big Picture Community tab layout */
 .gdl-bp-community-grid {
 	display: grid !important;

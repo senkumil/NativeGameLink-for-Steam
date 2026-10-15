@@ -5,21 +5,11 @@ import { routedSteamAppId } from './native-route';
 import { installNativeLogoSources, refreshNativeLogoInventoryReadiness } from './native-logo-sources';
 
 const MAX_POSITION_KEYS = 128;
-const MAX_IMAGE_URLS = 16;
-const MAX_PENDING_IMAGES = 4;
-const MAX_ACTIVE_IMAGES = 2;
 
-type WarmImage = { image: HTMLImageElement; timer: ReturnType<typeof setTimeout>; foreground: boolean };
-type ImageRequest = { url: string; fallback?: string; foreground: boolean };
 type NativeStores = { details: any; apps: any };
 type WarmupState = {
 	positions: Map<string, true>;
-	imageUrls: Map<string, true>;
-	activeImages: Map<string, WarmImage>;
-	pendingImages: ImageRequest[];
 	pendingShortcuts: number[];
-	pendingLogoShortcuts: number[];
-	pumpingLogos: boolean;
 	missingShortcuts: Set<number>;
 	positionTimer?: ReturnType<typeof setTimeout>;
 	retryTimer?: ReturnType<typeof setTimeout>;
@@ -32,7 +22,7 @@ type WarmupState = {
 	logoSourcesCleanup?: () => void;
 };
 const states = new WeakMap<Document, WarmupState>();
-const BACKGROUND_KEYS = ['native-artwork-positions', 'native-artwork-logos', 'native-artwork-images'];
+const BACKGROUND_KEY = 'native-artwork-positions';
 
 function backgroundWork(doc: Document, state: WarmupState, key: string, work: () => void): void {
 	void runWhenLibrarySidebarIdle(doc, key, () => {
@@ -43,7 +33,7 @@ function backgroundWork(doc: Document, state: WarmupState, key: string, work: ()
 function stateFor(doc: Document): WarmupState {
 	let state = states.get(doc);
 	if (!state) {
-		state = { positions: new Map(), imageUrls: new Map(), activeImages: new Map(), pendingImages: [], pendingShortcuts: [], pendingLogoShortcuts: [], pumpingLogos: false, missingShortcuts: new Set(), retryAttempts: 0, disposed: false };
+		state = { positions: new Map(), pendingShortcuts: [], missingShortcuts: new Set(), retryAttempts: 0, disposed: false };
 		states.set(doc, state);
 	}
 	return state;
@@ -90,117 +80,8 @@ function nativeStores(doc: Document, state: WarmupState): NativeStores | null {
 	return typeof details?.GetCustomLogoPosition === 'function' && typeof apps?.GetAppOverviewByAppID === 'function' ? state.stores = { details, apps } : null;
 }
 
-function localLogoUrl(doc: Document, raw: unknown): string | null {
-	if (typeof raw !== 'string') return null;
-	try {
-		const base = doc.defaultView?.location.href;
-		if (!base) return null;
-		const url = new URL(raw, base), origin = new URL(base).origin;
-		return url.origin === origin && /^\/customimages\/\d+_logo\.(?:jpg|png)$/i.test(url.pathname) ? url.href : null;
-	} catch { return null; }
-}
-
-function drainImages(doc: Document, state: WarmupState, backgroundAllowed = false): void {
-	const ImageClass = (doc.defaultView as any)?.Image;
-	if (state.disposed || typeof ImageClass !== 'function') return;
-	while (state.activeImages.size < MAX_ACTIVE_IMAGES && state.pendingImages.length) {
-		let index = state.pendingImages.findIndex(request => request.foreground);
-		if (index < 0) {
-			if (!backgroundAllowed) {
-				backgroundWork(doc, state, BACKGROUND_KEYS[2], () => drainImages(doc, state, true));
-				return;
-			}
-			index = 0;
-		}
-		const { url, fallback, foreground } = state.pendingImages.splice(index, 1)[0];
-		const image: HTMLImageElement = new ImageClass();
-		const finish = (loaded: boolean): void => {
-			const active = state.activeImages.get(url);
-			if (!active || active.image !== image) return;
-			clearTimeout(active.timer);
-			image.onload = image.onerror = null;
-			image.removeAttribute('src');
-			state.activeImages.delete(url);
-			if (!loaded && fallback && !state.imageUrls.has(fallback)) {
-				remember(state.imageUrls, fallback, MAX_IMAGE_URLS);
-				if (state.pendingImages.length >= MAX_PENDING_IMAGES) {
-					const dropped = state.pendingImages.pop();
-					if (dropped) state.imageUrls.delete(dropped.url);
-				}
-				state.pendingImages.unshift({ url: fallback, foreground: active.foreground });
-			}
-			drainImages(doc, state);
-			drainBackgroundLogos(doc, state);
-		};
-		image.decoding = 'async';
-		image.fetchPriority = 'low';
-		image.onload = () => finish(true);
-		image.onerror = () => finish(false);
-		state.activeImages.set(url, { image, timer: setTimeout(() => finish(false), 2_000), foreground });
-		image.src = url;
-	}
-}
-
-function reserveSelectedLogoSlot(state: WarmupState): void {
-	if (state.activeImages.size < MAX_ACTIVE_IMAGES) return;
-	for (const [url, active] of state.activeImages) {
-		if (active.foreground) continue;
-		clearTimeout(active.timer);
-		active.image.onload = active.image.onerror = null;
-		active.image.removeAttribute('src');
-		state.activeImages.delete(url); state.imageUrls.delete(url);
-		return;
-	}
-}
-
-function warmLogoImages(doc: Document, state: WarmupState, apps: any, overview: any, foreground: boolean): void {
-	if (typeof apps.GetCustomLogoImageURLs !== 'function') return;
-	let urls: unknown;
-	try { urls = apps.GetCustomLogoImageURLs(overview); } catch { return; }
-	if (!Array.isArray(urls)) return;
-	const candidates = urls.slice(0, 2).map(raw => localLogoUrl(doc, raw)).filter((url): url is string => Boolean(url));
-	// Plugin-written logos are normalized to PNG. Prefer that candidate for
-	// warming, but retain Steam's JPG candidate if the local PNG is absent.
-	candidates.sort((left, right) => Number(/\.png(?:\?|$)/i.test(right)) - Number(/\.png(?:\?|$)/i.test(left)));
-	const [url, fallback] = candidates;
-	if (!url) return;
-	if (foreground) {
-		const pending = state.pendingImages.find(request => request.url === url);
-		if (pending) { pending.foreground = true; reserveSelectedLogoSlot(state); drainImages(doc, state); return; }
-		const active = state.activeImages.get(url);
-		if (active) { active.foreground = true; return; }
-	}
-	if (state.imageUrls.has(url)) return;
-	if (foreground) reserveSelectedLogoSlot(state);
-	remember(state.imageUrls, url, MAX_IMAGE_URLS);
-	if (state.pendingImages.length >= MAX_PENDING_IMAGES) {
-		const dropped = state.pendingImages.shift();
-		if (dropped) state.imageUrls.delete(dropped.url);
-	}
-	state.pendingImages.push({ url, fallback, foreground });
-	// Hero images are deliberately left to Steam: warming them would decode
-	// large bitmaps for games the user may never open.
-	drainImages(doc, state);
-}
-
-function drainBackgroundLogos(doc: Document, state: WarmupState): void {
-	if (state.disposed || state.pumpingLogos) return;
-	backgroundWork(doc, state, BACKGROUND_KEYS[1], () => {
-		state.pumpingLogos = true;
-		try {
-			while (state.pendingLogoShortcuts.length && state.activeImages.size + state.pendingImages.length < MAX_ACTIVE_IMAGES + MAX_PENDING_IMAGES) {
-				warmShortcutArtwork(doc, state.pendingLogoShortcuts.shift()!, true, false);
-			}
-		} finally { state.pumpingLogos = false; }
-	});
-}
-
 /** Prime Steam's own grid.json cache; never assign metadata, image URLs or DOM. */
-export function warmNativeShortcutArtwork(doc: Document, rawId: number, warmImages = false): boolean {
-	return warmShortcutArtwork(doc, rawId, warmImages, true);
-}
-
-function warmShortcutArtwork(doc: Document, rawId: number, warmImages: boolean, foreground: boolean): boolean {
+export function warmNativeShortcutArtwork(doc: Document, rawId: number): boolean {
 	if (!isMappingSnapshotVerified()) return false;
 	const id = shortcutId(rawId);
 	if (id === null) return false;
@@ -229,11 +110,10 @@ function warmShortcutArtwork(doc: Document, rawId: number, warmImages: boolean, 
 		try { stores.details.GetCustomLogoPosition(overview); }
 		catch { state.positions.delete(key); return false; }
 	}
-	if (warmImages) warmLogoImages(doc, state, stores.apps, overview, foreground);
 	return true;
 }
 
-/** Warm local native caches without starting an unbounded image-fetch wave. */
+/** Warm only native position metadata; Steam owns all artwork image loading. */
 export function warmMappedNativeArtwork(doc: Document): void { runMappedWarmup(doc, false); }
 
 function scheduleMissingRetry(doc: Document, state: WarmupState, inventoryRetry = false): void {
@@ -250,7 +130,6 @@ function runMappedWarmup(doc: Document, retry: boolean): void {
 	if (state.positionTimer) clearTimeout(state.positionTimer);
 	state.positionTimer = undefined;
 	state.pendingShortcuts = [];
-	state.pendingLogoShortcuts = [];
 	if (!retry) {
 		if (state.retryTimer) clearTimeout(state.retryTimer);
 		state.retryTimer = undefined; state.retryAttempts = 0; state.missingShortcuts.clear();
@@ -270,15 +149,14 @@ function runMappedWarmup(doc: Document, retry: boolean): void {
 		const current = shortcutId(routedSteamAppId(doc));
 		if (current !== null) {
 			state.pendingShortcuts = [current, ...state.pendingShortcuts.filter(id => id !== current)];
-			warmNativeShortcutArtwork(doc, current, true);
+			warmNativeShortcutArtwork(doc, current);
 		}
 	}
-	state.pendingLogoShortcuts = state.pendingShortcuts.slice(0, MAX_POSITION_KEYS);
 	const batch = (): void => {
 		state.positionTimer = undefined;
 		if (state.disposed) return;
-		backgroundWork(doc, state, BACKGROUND_KEYS[0], () => {
-			for (const id of state.pendingShortcuts.splice(0, 4)) warmShortcutArtwork(doc, id, false, false);
+		backgroundWork(doc, state, BACKGROUND_KEY, () => {
+			for (const id of state.pendingShortcuts.splice(0, 4)) warmNativeShortcutArtwork(doc, id);
 			if (state.pendingShortcuts.length) state.positionTimer = setTimeout(batch, 50);
 			else {
 				scheduleMissingRetry(doc, state);
@@ -289,11 +167,10 @@ function runMappedWarmup(doc: Document, retry: boolean): void {
 		});
 	};
 	batch();
-	drainBackgroundLogos(doc, state);
 }
 
-/** Route/header synchronization primes the selected game's logo. The native
- * game list has no artwork listeners or React-fiber reads from this feature. */
+/** Route/header synchronization primes only the selected game's logo position.
+ * The native game list has no artwork listeners or React-fiber reads here. */
 export function installNativeArtworkWarmup(doc: Document): () => void {
 	const state = stateFor(doc);
 	if (state.dispose) return state.dispose;
@@ -304,14 +181,11 @@ export function installNativeArtworkWarmup(doc: Document): () => void {
 		state.disposed = true;
 		state.logoSourcesCleanup?.();
 		unsubscribe();
-		for (const key of BACKGROUND_KEYS) cancelLibrarySidebarWork(doc, key);
+		cancelLibrarySidebarWork(doc, BACKGROUND_KEY);
 		if (state.positionTimer) clearTimeout(state.positionTimer);
 		if (state.retryTimer) clearTimeout(state.retryTimer);
-		for (const active of state.activeImages.values()) {
-			clearTimeout(active.timer); active.image.onload = active.image.onerror = null; active.image.removeAttribute('src');
-		}
-		state.activeImages.clear(); state.pendingImages = []; state.pendingShortcuts = []; state.pendingLogoShortcuts = [];
-		state.positions.clear(); state.imageUrls.clear(); state.store = undefined; state.stores = undefined;
+		state.pendingShortcuts = [];
+		state.positions.clear(); state.store = undefined; state.stores = undefined;
 		state.missingShortcuts.clear();
 		states.delete(doc);
 	};

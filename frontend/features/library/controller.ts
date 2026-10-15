@@ -7,9 +7,11 @@ import { ensureControllerStyles } from './styles/controller';
 import { buildNativeSidebarSection, type NativeLibraryLayout } from './layout';
 import { getSteamStore } from '../../steam/modules/SteamModuleResolver';
 import { steamWebpackRuntime } from '../../steam/modules/SteamWebpackRuntime';
-import { withoutLibrarySidebarMutations, isLibrarySidebarNode } from '../../steam/library-sidebar';
-import { mutationIsWithinSelector } from '../../core/dom';
+import { isLibrarySidebarNode } from '../../steam/library-sidebar';
 import { isLibrarySidebarInteractionActive } from '../../steam/sidebar-interaction';
+import { linkedAchievementTarget } from '../achievements/navigation';
+import { committedHeaderAppId } from '../../steam/library-details';
+import { getLinkedSidebarOrder, hasLinkedSidebarOrder, publishLinkedSidebarSection } from './sidebar-order';
 import {
 	NATIVE_SVG_XBOX,
 	NATIVE_SVG_XBOX_PARTIAL,
@@ -57,11 +59,11 @@ function getSteamControllerStore(doc?: Document): any {
 	try {
 		const win = doc?.defaultView || (typeof window !== 'undefined' ? window : null);
 		const candidates = [
-			typeof window !== 'undefined' ? window : null,
 			win,
 			(win as any)?.opener,
 			(win as any)?.top,
 			(win as any)?.parent,
+			typeof window !== 'undefined' ? window : null,
 		];
 		for (const w of candidates) {
 			if (w?.ControllerStore) return w.ControllerStore;
@@ -99,11 +101,8 @@ function classifyGamepadId(rawId: string): ControllerDeviceType {
 	if (id.includes('dualsense') || id.includes('0ce6') || id.includes('0df2') || (id.includes('ps5') && !id.includes('xinput'))) {
 		return 'dualsense';
 	}
-	if (id.includes('dualshock') || id.includes('05c4') || id.includes('09cc') || (id.includes('ps4') && !id.includes('xinput'))) {
+	if (id.includes('dualshock') || id.includes('05c4') || id.includes('09cc') || ((id.includes('ps4') || id.includes('ps3')) && !id.includes('xinput'))) {
 		return 'dualshock';
-	}
-	if (id.includes('playstation') || id.includes('sony') || id.includes('054c')) {
-		return 'dualsense';
 	}
 	if (id.includes('switch') || id.includes('nintendo') || id.includes('joy-con') || id.includes('057e') || id.includes('pro controller')) {
 		return 'switch';
@@ -111,7 +110,7 @@ function classifyGamepadId(rawId: string): ControllerDeviceType {
 	if (id.includes('xbox') || id.includes('xinput') || id.includes('045e') || id.includes('microsoft')) {
 		return 'xbox';
 	}
-	return 'xbox';
+	return 'generic';
 }
 
 function classifySteamControllerType(eType: number, name: string): ControllerDeviceType {
@@ -123,7 +122,19 @@ function classifySteamControllerType(eType: number, name: string): ControllerDev
 	return classifyGamepadId(name);
 }
 
-let g_primaryController: { name: string; type: ControllerDeviceType } | null = null;
+const primaryControllers = new WeakMap<Window, { name: string; type: ControllerDeviceType }>();
+
+function controllerWindow(doc?: Document): Window | null {
+	return doc?.defaultView || (typeof window !== 'undefined' ? window : null);
+}
+
+/** Connection detection is synchronous. An asynchronous Input API is not an
+ * authoritative empty list; let the next available native/browser source win. */
+function controllerList(value: any): any[] | null {
+	if (Array.isArray(value)) return value;
+	if (value && typeof value.then === 'function' && typeof value.catch === 'function') value.catch(() => {});
+	return null;
+}
 
 function getConnectedControllers(doc?: Document): Array<{ name: string; type: ControllerDeviceType }> {
 	const result: Array<{ name: string; type: ControllerDeviceType }> = [];
@@ -134,12 +145,8 @@ function getConnectedControllers(doc?: Document): Array<{ name: string; type: Co
 		const store = getSteamControllerStore(doc);
 		if (store) {
 			const rawList = typeof store.GetControllers === 'function' ? store.GetControllers() : store.m_controllerList;
-			if (rawList !== null && rawList !== undefined) {
-				const list = Array.isArray(rawList) ? rawList : [];
-				const candidate = list.find(isSteamControllerConnected);
-				if (candidate) {
-					// ensure candidate is referenced
-				}
+			const list = controllerList(rawList);
+			if (list) {
 				for (const ctrl of list) {
 					if (!isSteamControllerConnected(ctrl)) continue;
 					const eType = Number(ctrl?.eControllerType || 0);
@@ -164,8 +171,8 @@ function getConnectedControllers(doc?: Document): Array<{ name: string; type: Co
 				|| steamInput.m_rgControllers
 				|| steamInput.m_controllerList
 				|| steamInput.m_controllers;
-			if (rawList !== null && rawList !== undefined) {
-				const list = Array.isArray(rawList) ? rawList : [];
+			const list = controllerList(rawList);
+			if (list) {
 				for (const ctrl of list) {
 					if (!isSteamControllerConnected(ctrl)) continue;
 					const eType = Number(ctrl?.eControllerType || 0);
@@ -184,10 +191,10 @@ function getConnectedControllers(doc?: Document): Array<{ name: string; type: Co
 	try {
 		const win = doc?.defaultView || (typeof window !== 'undefined' ? window : null);
 		const navList = [
-			typeof navigator !== 'undefined' ? navigator : null,
 			win?.navigator,
 			(win as any)?.opener?.navigator,
 			(win as any)?.top?.navigator,
+			typeof navigator !== 'undefined' ? navigator : null,
 		].filter(Boolean);
 
 		for (const nav of navList) {
@@ -214,32 +221,34 @@ function getConnectedControllers(doc?: Document): Array<{ name: string; type: Co
 
 export function detectConnectedController(doc?: Document): ConnectedControllerInfo {
 	const connectedList = getConnectedControllers(doc);
+	const win = controllerWindow(doc);
+	const primary = win ? primaryControllers.get(win) : undefined;
 
 	if (connectedList.length === 0) {
-		g_primaryController = null;
+		if (win) primaryControllers.delete(win);
 		return { connected: false, name: '', type: 'generic' };
 	}
 
 	// In native Steam, the first connected controller detected remains selected.
 	// It does NOT switch to another controller on button presses.
 	// It ONLY switches when the active controller is disconnected or powered down.
-	if (g_primaryController) {
-		const stillConnected = connectedList.find(c => c.type === g_primaryController?.type);
+	if (primary) {
+		const stillConnected = connectedList.find(c => c.type === primary.type);
 		if (stillConnected) {
 			return {
 				connected: true,
-				name: stillConnected.name || g_primaryController.name,
+				name: stillConnected.name || primary.name,
 				type: stillConnected.type,
 			};
 		}
-		g_primaryController = null;
+		if (win) primaryControllers.delete(win);
 	}
 
 	const first = connectedList[0];
-	g_primaryController = {
+	if (win) primaryControllers.set(win, {
 		name: first.name,
 		type: first.type,
-	};
+	});
 
 	return {
 		connected: true,
@@ -250,14 +259,13 @@ export function detectConnectedController(doc?: Document): ConnectedControllerIn
 
 export function subscribeControllerChanges(doc: Document, onChange: (info: ConnectedControllerInfo) => void): () => void {
 	let lastState = detectConnectedController(doc);
-	let timer: any = null;
-	let fastTimer: any = null;
+	let disposed = false;
+	const retryTimers = new Set<ReturnType<typeof setTimeout>>();
+	const win = controllerWindow(doc);
 
 	const check = () => {
+		if (disposed || win?.closed) return;
 		const current = detectConnectedController(doc);
-		if (!current.connected) {
-			doc.querySelectorAll('#gdl-controller-section').forEach(s => s.remove());
-		}
 		if (current.connected !== lastState.connected || current.type !== lastState.type || current.name !== lastState.name) {
 			lastState = current;
 			onChange(current);
@@ -266,34 +274,42 @@ export function subscribeControllerChanges(doc: Document, onChange: (info: Conne
 
 	check();
 
-	const onGamepadConnected = () => {
+	const recheck = () => {
+		if (disposed) return;
 		check();
-		setTimeout(check, 40);
-		setTimeout(check, 120);
-		setTimeout(check, 250);
+		// Multiple native/browser events describe the same device transition.
+		// Keep one bounded settling batch instead of retaining one per event.
+		for (const timer of retryTimers) clearTimeout(timer);
+		retryTimers.clear();
+		for (const delay of [40, 120, 250]) {
+			const timer = setTimeout(() => { retryTimers.delete(timer); check(); }, delay);
+			retryTimers.add(timer);
+		}
+	};
+
+	const onGamepadConnected = () => {
+		recheck();
 	};
 
 	const onGamepadDisconnected = (e: any) => {
+		if (disposed) return;
 		const gp = e?.gamepad;
-		if (gp && g_primaryController) {
+		const primary = win ? primaryControllers.get(win) : undefined;
+		if (gp && primary && win) {
 			const type = classifyGamepadId(gp.id || '');
-			if (g_primaryController.type === type) {
-				g_primaryController = null;
+			if (primary.type === type) {
+				primaryControllers.delete(win);
 			}
 		}
-		check();
-		setTimeout(check, 40);
-		setTimeout(check, 120);
-		setTimeout(check, 250);
+		recheck();
 	};
 
-	const win = doc.defaultView || (typeof window !== 'undefined' ? window : null);
 	const targets = [
-		typeof window !== 'undefined' ? window : null,
 		win,
 		(win as any)?.parent,
 		(win as any)?.top,
 		(win as any)?.opener,
+		typeof window !== 'undefined' ? window : null,
 	].filter((w, idx, arr): w is Window => Boolean(w && arr.indexOf(w) === idx));
 
 	for (const target of targets) {
@@ -321,7 +337,9 @@ export function subscribeControllerChanges(doc: Document, onChange: (info: Conne
 						const reg = steamInput[method](() => {
 							check();
 						});
-						if (reg && typeof reg.unregister === 'function') {
+						if (typeof reg === 'function') {
+							unregisters.push(() => { try { reg(); } catch {} });
+						} else if (reg && typeof reg.unregister === 'function') {
 							unregisters.push(() => {
 								try { reg.unregister(); } catch {}
 							});
@@ -332,19 +350,22 @@ export function subscribeControllerChanges(doc: Document, onChange: (info: Conne
 		}
 	} catch {}
 
-	// Fast polling (150ms) ensures instant detection when a controller is powered down or disconnected
-	fastTimer = setInterval(check, 150);
-	timer = setInterval(check, 1000);
+	// Native events handle immediate changes; one watchdog also catches devices
+	// that power down without delivering a browser connection event.
+	const timer = setInterval(check, 250);
 
 	return () => {
+		if (disposed) return;
+		disposed = true;
 		for (const target of targets) {
 			try {
 				target.removeEventListener('gamepadconnected', onGamepadConnected as EventListener);
 				target.removeEventListener('gamepaddisconnected', onGamepadDisconnected as EventListener);
 			} catch {}
 		}
-		if (fastTimer) clearInterval(fastTimer);
-		if (timer) clearInterval(timer);
+		clearInterval(timer);
+		for (const retry of retryTimers) clearTimeout(retry);
+		retryTimers.clear();
 		for (const unreg of unregisters) {
 			unreg();
 		}
@@ -402,7 +423,7 @@ function controllerDesc(state: ControllerSupportState): string {
 		return loc('AppDetailsControllerSection_Unknown', gdlText('controller_unknown_desc', 'This game has not yet provided new controller support information and its compatibility with your device is unknown.'));
 	}
 	if (state === 'partial') {
-		return loc('AppDetailsControllerSection_SteamInput', gdlText('controller_steam_input_desc', 'Steam Input is enabled for this device.'));
+		return gdlText('controller_partial_desc', 'This game has partial controller support. Some actions may require a keyboard or mouse.');
 	}
 	return loc('AppDetailsControllerSection_DevSupported', gdlText('controller_supported_desc', 'This game should work very well with your controller'));
 }
@@ -443,20 +464,29 @@ export function renderControllerSidebarHtml(info: ConnectedControllerInfo, state
 		+ `</div></div></div>`;
 }
 
-export function openControllerConfig(steamAppId: string, shortcutAppId: string | null): void {
+export function openControllerConfig(steamAppId: string, shortcutAppId: string | null, doc?: Document): void {
 	const targetId = Number(shortcutAppId || steamAppId);
+	const view = doc?.defaultView || (typeof window !== 'undefined' ? window : null);
 	try {
-		if ((window as any).SteamClient?.Apps?.ShowControllerConfigurator) {
-			(window as any).SteamClient.Apps.ShowControllerConfigurator(targetId);
+		if ((view as any)?.SteamClient?.Apps?.ShowControllerConfigurator) {
+			(view as any).SteamClient.Apps.ShowControllerConfigurator(targetId);
 			return;
 		}
-		if ((window as any).SteamClient?.Input?.ShowControllerSettings) {
-			(window as any).SteamClient.Input.ShowControllerSettings();
+		if ((view as any)?.SteamClient?.Input?.ShowControllerSettings) {
+			(view as any).SteamClient.Input.ShowControllerSettings();
 			return;
 		}
 	} catch (e) {
 		backendLog('Error opening controller configurator: ' + String(e));
 	}
+}
+
+export function getOwnedControllerSidebar(doc: Document, steamAppId: string, shortcutAppId: string | null): HTMLElement | null {
+	const target = linkedAchievementTarget(doc);
+	if (!shortcutAppId || target?.steamAppId !== steamAppId || target.shortcutAppId !== shortcutAppId) return null;
+	const section = doc.getElementById('gdl-controller-section');
+	return section?.isConnected && section.dataset.gdlSteamAppId === steamAppId
+		&& section.dataset.gdlShortcutAppId === shortcutAppId ? section : null;
 }
 
 export function syncControllerSidebarSection(
@@ -467,9 +497,18 @@ export function syncControllerSidebarSection(
 ): HTMLElement | null {
 	const { sidebarColumn } = layout;
 	if (!sidebarColumn || !sidebarColumn.isConnected) return null;
+	const target = linkedAchievementTarget(doc);
+	if (!shortcutAppId || target?.steamAppId !== steamAppId || target.shortcutAppId !== shortcutAppId) return null;
+	for (const native of [sidebarColumn, layout.anchorRegion]) {
+		const committed = native && committedHeaderAppId(native);
+		if (committed != null && committed !== Number(shortcutAppId)) return null;
+	}
+	if (hasLinkedSidebarOrder(doc) && !getLinkedSidebarOrder(doc, layout, steamAppId, shortcutAppId)) return null;
 
 	const controllerInfo = detectConnectedController(doc);
 	let section = doc.getElementById('gdl-controller-section');
+	if (section && (section !== getOwnedControllerSidebar(doc, steamAppId, shortcutAppId)
+		|| section.parentElement !== sidebarColumn)) { section.remove(); section = null; }
 
 	if (!controllerInfo.connected) {
 		if (section) {
@@ -483,49 +522,54 @@ export function syncControllerSidebarSection(
 	ensureControllerStyles(doc);
 
 	if (section) {
-		const inner = doc.getElementById('gdl-controller-content');
+		const inner = section.querySelector<HTMLElement>('#gdl-controller-content');
 		if (inner && (inner.dataset.controllerType !== controllerInfo.type || inner.dataset.controllerState !== supportState)) {
 			inner.dataset.controllerType = controllerInfo.type;
 			inner.dataset.controllerState = supportState;
 			inner.innerHTML = renderControllerSidebarHtml(controllerInfo, supportState);
 		}
-		return section;
-	}
-
-	const node = buildNativeSidebarSection(doc, layout, {
-		sectionId: 'gdl-controller-section',
-		headerText: controllerSectionHeader(),
-		innerId: 'gdl-controller-content',
-		innerHtml: renderControllerSidebarHtml(controllerInfo, supportState),
-		cloneInnerClass: false,
-	});
-
-	if (!node) return null;
-
-	const inner = node.querySelector('#gdl-controller-content') as HTMLElement | null;
-	if (inner) {
-		inner.dataset.controllerType = controllerInfo.type;
-		inner.dataset.controllerState = supportState;
-	}
-
-	const clickHandler = (event: Event) => {
-		event.preventDefault();
-		event.stopPropagation();
-		openControllerConfig(steamAppId, shortcutAppId);
-	};
-	node.addEventListener('click', clickHandler);
-
-	const firstTarget = doc.getElementById('gdl-friends-section')
-		|| doc.getElementById('gdl-achievements-section')
-		|| sidebarColumn.firstChild;
-
-	if (firstTarget && firstTarget !== node) {
-		sidebarColumn.insertBefore(node, firstTarget);
 	} else {
-		sidebarColumn.appendChild(node);
+		const node = buildNativeSidebarSection(doc, layout, {
+			sectionId: 'gdl-controller-section',
+			headerText: controllerSectionHeader(),
+			innerId: 'gdl-controller-content',
+			innerHtml: renderControllerSidebarHtml(controllerInfo, supportState),
+			cloneInnerClass: false,
+		});
+
+		if (!node) return null;
+		node.dataset.gdlSteamAppId = steamAppId;
+		node.dataset.gdlShortcutAppId = shortcutAppId;
+
+		const inner = node.querySelector('#gdl-controller-content') as HTMLElement | null;
+		if (inner) {
+			inner.dataset.controllerType = controllerInfo.type;
+			inner.dataset.controllerState = supportState;
+		}
+
+		const clickHandler = (event: Event) => {
+			if (getOwnedControllerSidebar(doc, steamAppId, shortcutAppId) !== node) return;
+			event.preventDefault();
+			event.stopPropagation();
+			openControllerConfig(steamAppId, shortcutAppId, doc);
+		};
+		node.addEventListener('click', clickHandler);
+		section = node;
 	}
 
-	return node;
+	if (getLinkedSidebarOrder(doc, layout, steamAppId, shortcutAppId)) {
+		if (!publishLinkedSidebarSection(doc, layout, section, 'controller')) return null;
+	} else {
+		if (hasLinkedSidebarOrder(doc)) return null;
+		// A standalone controller mount can precede the complete column owner.
+		// The full renderer and early paint establish the shared order first.
+		const firstTarget = [doc.getElementById('gdl-friends-section'), doc.getElementById('gdl-achievements-section')]
+			.find(node => node?.parentElement === sidebarColumn) || null;
+		if (firstTarget && section.nextElementSibling !== firstTarget) sidebarColumn.insertBefore(section, firstTarget);
+		else if (section.parentElement !== sidebarColumn) sidebarColumn.insertBefore(section, sidebarColumn.firstChild);
+	}
+
+	return section;
 }
 
 const CONTROLLER_SCROLL_TRANSLUCENCY_THRESHOLD = 2;
@@ -555,7 +599,8 @@ function updateControllerScrollState(doc: Document, section: HTMLElement | null)
 	const top = currentControllerScrollTop(doc, section);
 	const wasScrolled = section.dataset.gdlControllerScrolled === '1';
 	const scrolled = wasScrolled ? top > 0.25 : top >= CONTROLLER_SCROLL_TRANSLUCENCY_THRESHOLD;
-	section.dataset.gdlControllerScrolled = scrolled ? '1' : '0';
+	const value = scrolled ? '1' : '0';
+	if (section.dataset.gdlControllerScrolled !== value) section.dataset.gdlControllerScrolled = value;
 }
 
 function setupControllerScrollTranslucencyWatcher(
@@ -564,6 +609,7 @@ function setupControllerScrollTranslucencyWatcher(
 	steamAppId: string,
 	shortcutAppId: string | null,
 	isCurrent: () => boolean,
+	onSection?: (section: HTMLElement | null) => void,
 ): () => void {
 	let frame = 0;
 	let disconnected = false;
@@ -576,6 +622,7 @@ function setupControllerScrollTranslucencyWatcher(
 			frame = 0;
 			if (disconnected || !isCurrent()) return;
 			const section = syncControllerSidebarSection(doc, layout, steamAppId, shortcutAppId);
+			onSection?.(section);
 			updateControllerScrollState(doc, section);
 		});
 	};
@@ -583,23 +630,33 @@ function setupControllerScrollTranslucencyWatcher(
 	const onScroll = (event: Event) => { if (!isLibrarySidebarNode(event.target)) schedule(); };
 	const onResize = () => schedule();
 	const observer = new MutationObserver(records => {
-		if (withoutLibrarySidebarMutations(records).some(record => !mutationIsWithinSelector(record,
-			'[id^="gdl-"], [data-gdl-injected]'))) schedule();
+		if (records.some(record => record.target === layout.sidebarColumn && Array.from(record.removedNodes)
+			.some(node => node instanceof HTMLElement && node.id === 'gdl-controller-section'))) schedule();
 	});
 	try {
-		if (doc.body) observer.observe(doc.body, { childList: true, subtree: true });
+		if (layout.sidebarColumn) observer.observe(layout.sidebarColumn, { childList: true });
 	} catch {}
-	window.addEventListener('scroll', onScroll, true);
-	window.addEventListener('resize', onResize);
+	const view = doc.defaultView;
+	view?.addEventListener('scroll', onScroll, true);
+	view?.addEventListener('resize', onResize);
 	schedule();
 
 	return () => {
 		disconnected = true;
 		observer.disconnect();
-		window.removeEventListener('scroll', onScroll, true);
-		window.removeEventListener('resize', onResize);
+		view?.removeEventListener('scroll', onScroll, true);
+		view?.removeEventListener('resize', onResize);
 		if (frame && doc.defaultView) doc.defaultView.cancelAnimationFrame(frame);
 	};
+}
+
+const controllerSidebarOwners = new WeakMap<HTMLElement, object>();
+const controllerSidebarWatchers = new WeakMap<Document, (preserveSection?: boolean) => void>();
+
+export function disposeControllerSidebarWatcher(doc: Document, preserveSection = false): void {
+	const dispose = controllerSidebarWatchers.get(doc);
+	controllerSidebarWatchers.delete(doc);
+	dispose?.(preserveSection);
 }
 
 export function setupControllerSidebarWatcher(
@@ -609,18 +666,42 @@ export function setupControllerSidebarWatcher(
 	shortcutAppId: string | null,
 	isCurrent: () => boolean,
 ): () => void {
-	const scrollCleanup = setupControllerScrollTranslucencyWatcher(doc, layout, steamAppId, shortcutAppId, isCurrent);
+	disposeControllerSidebarWatcher(doc, true);
+	let disposed = false, ownedSection: HTMLElement | null = null;
+	const owner = {};
+	const current = (): boolean => !disposed && isCurrent();
+	const adopt = (section: HTMLElement | null): void => {
+		ownedSection = section;
+		if (section) controllerSidebarOwners.set(section, owner);
+	};
+	// Publish Controller and Achievements in their final order in this task,
+	// before any browser frame or controller event can expose the sidebar.
+	if (current()) {
+		adopt(syncControllerSidebarSection(doc, layout, steamAppId, shortcutAppId));
+		updateControllerScrollState(doc, ownedSection);
+	}
+	const scrollCleanup = setupControllerScrollTranslucencyWatcher(doc, layout, steamAppId, shortcutAppId, current, adopt);
 	const unsubscribe = subscribeControllerChanges(doc, () => {
-		if (!isCurrent()) return;
+		if (!current()) return;
 		const section = syncControllerSidebarSection(doc, layout, steamAppId, shortcutAppId);
+		adopt(section);
 		updateControllerScrollState(doc, section);
 	});
 
-	return () => {
+	const dispose = (preserveSection = false): void => {
+		if (disposed) return;
+		disposed = true;
 		scrollCleanup();
 		unsubscribe();
-		doc.getElementById('gdl-controller-section')?.remove();
+		if (ownedSection && controllerSidebarOwners.get(ownedSection) === owner) {
+			controllerSidebarOwners.delete(ownedSection);
+			if (!preserveSection) ownedSection.remove();
+		}
+		ownedSection = null;
+		if (controllerSidebarWatchers.get(doc) === dispose) controllerSidebarWatchers.delete(doc);
 	};
+	controllerSidebarWatchers.set(doc, dispose);
+	return dispose;
 }
 
 export interface GameControllerSupport {
@@ -629,48 +710,64 @@ export interface GameControllerSupport {
 	ps5: boolean;
 }
 
-export function detectGameControllerSupport(steamAppId: string, _doc?: Document): GameControllerSupport {
-	const numId = Number(steamAppId);
-	if (Number.isFinite(numId) && numId > 0) {
-		try {
-			const overview = AppStoreAdapter.getAppOverview(numId);
-			if (overview) {
-				const xbox = Number(overview.xbox_controller_support ?? overview.controller_support ?? 0) > 0;
-				const ps4 = Number(overview.ps4_controller_support ?? 0) > 0;
-				const ps5 = Number(overview.ps5_controller_support ?? 0) > 0;
-				if (xbox || ps4 || ps5) {
-					return { xbox: xbox || (!ps4 && !ps5), ps4, ps5 };
-				}
-			}
-		} catch {}
+type ControllerSupportLevel = 0 | 1 | 2 | null;
+interface ControllerSupportLevels {
+	xbox: ControllerSupportLevel;
+	ps4: ControllerSupportLevel;
+	ps5: ControllerSupportLevel;
+}
 
-		try {
-			const lang = steamLanguageSync() || 'english';
-			const cached = getCachedGameData(String(numId), lang)?.data;
-			if (cached) {
-				const catIds = new Set((cached.categories || []).map(c => Number(c.id)));
-				const catDescs = (cached.categories || []).map(c => String(c.description || '').toLowerCase());
-				const hasDualShock = catIds.has(55) || catIds.has(56) || catDescs.some(d => d.includes('dualshock') || d.includes('ps4'));
-				const hasDualSense = catIds.has(57) || catIds.has(58) || catDescs.some(d => d.includes('dualsense') || d.includes('ps5'));
-				const hasXbox = catIds.has(28) || catIds.has(18) || cached.controller_support === 'full' || cached.controller_support === 'partial' || catDescs.some(d => d.includes('controller') || d.includes('mando') || d.includes('control'));
-				if (hasXbox || hasDualShock || hasDualSense) {
-					return {
-						xbox: hasXbox || (!hasDualShock && !hasDualSense),
-						ps4: hasDualShock,
-						ps5: hasDualSense,
-					};
-				}
-			}
-		} catch {}
+function supportLevel(value: unknown): ControllerSupportLevel {
+	if (value === 'none') return 0;
+	if (value === 'partial') return 1;
+	if (value === 'full') return 2;
+	return value === 0 || value === 1 || value === 2 ? value : null;
+}
 
-		if (numId === 49520) {
-			return { xbox: true, ps4: false, ps5: false };
-		}
-		if (numId === 1030300) {
-			return { xbox: true, ps4: true, ps5: true };
-		}
+function scopedGameOverview(appid: number, doc?: Document): any {
+	const view = doc?.defaultView as any;
+	const store = view?.appStore || view?.AppStore;
+	if (store) {
+		if (typeof store.GetAppOverviewByAppID === 'function') return store.GetAppOverviewByAppID(appid);
+		if (typeof store.m_mapApps?.get === 'function') return store.m_mapApps.get(appid);
+		return null;
 	}
-	return { xbox: true, ps4: false, ps5: false };
+	return AppStoreAdapter.getAppOverview(appid);
+}
+
+function gameControllerSupportLevels(steamAppId: string, doc?: Document): ControllerSupportLevels {
+	const levels: ControllerSupportLevels = { xbox: null, ps4: null, ps5: null };
+	const appid = Number(steamAppId);
+	if (!Number.isInteger(appid) || appid <= 0) return levels;
+	try {
+		const overview = scopedGameOverview(appid, doc);
+		if (overview) {
+			levels.xbox = supportLevel(overview.xbox_controller_support ?? overview.controller_support);
+			levels.ps4 = supportLevel(overview.ps4_controller_support);
+			levels.ps5 = supportLevel(overview.ps5_controller_support);
+		}
+	} catch {}
+	try {
+		const cached = getCachedGameData(String(appid), steamLanguageSync() || 'english')?.data;
+		if (cached) {
+			const categories = new Set((cached.categories || []).map(category => Number(category.id)));
+			const declared = supportLevel(cached.controller_support);
+			const metadata: ControllerSupportLevels = {
+				xbox: categories.has(28) ? 2 : categories.has(18) ? 1 : declared,
+				ps4: categories.has(55) ? 2 : categories.has(56) ? 1 : declared === 0 ? 0 : null,
+				ps5: categories.has(57) ? 2 : categories.has(58) ? 1 : declared === 0 ? 0 : null,
+			};
+			for (const device of ['xbox', 'ps4', 'ps5'] as const) {
+				if (levels[device] === null) levels[device] = metadata[device];
+			}
+		}
+	} catch {}
+	return levels;
+}
+
+export function detectGameControllerSupport(steamAppId: string, doc?: Document): GameControllerSupport {
+	const levels = gameControllerSupportLevels(steamAppId, doc);
+	return { xbox: Number(levels.xbox) > 0, ps4: Number(levels.ps4) > 0, ps5: Number(levels.ps5) > 0 };
 }
 
 export function detectGameControllerSupportState(
@@ -678,52 +775,15 @@ export function detectGameControllerSupportState(
 	controllerType: ControllerDeviceType = 'xbox',
 	doc?: Document,
 ): ControllerSupportState {
-	const numId = Number(steamAppId);
-	if (!Number.isFinite(numId) || numId <= 0) return 'unknown';
-
-	const support = detectGameControllerSupport(steamAppId, doc);
-
-	try {
-		const overview = AppStoreAdapter.getAppOverview(numId);
-		if (overview) {
-			const xSupport = Number(overview.xbox_controller_support ?? (overview.controller_support === 'none' ? 0 : -1));
-			if (xSupport === 0 && !support.xbox && !support.ps4 && !support.ps5) {
-				return 'unsupported';
-			}
-		}
-	} catch {}
-
-	try {
-		const lang = steamLanguageSync() || 'english';
-		const cached = getCachedGameData(String(numId), lang)?.data;
-		if (cached && cached.categories && cached.categories.length > 0) {
-			const catIds = new Set((cached.categories || []).map(c => Number(c.id)));
-			const hasAnyControllerCat = catIds.has(28) || catIds.has(18) || catIds.has(55) || catIds.has(56) || catIds.has(57) || catIds.has(58);
-			if (!hasAnyControllerCat && (cached.controller_support === 'none' || !cached.controller_support)) {
-				return 'unsupported';
-			}
-		}
-	} catch {}
-
-	if (controllerType === 'dualsense') {
-		if (support.ps5) return 'supported';
-		return 'unknown';
-	}
-
-	if (controllerType === 'dualshock') {
-		if (support.ps4) return 'supported';
-		return 'unknown';
-	}
-
-	if (controllerType === 'xbox') {
-		if (support.xbox) return 'supported';
-		return 'unknown';
-	}
-
-	if (support.xbox || support.ps4 || support.ps5) {
-		return 'supported';
-	}
-
-	return 'unknown';
+	const levels = gameControllerSupportLevels(steamAppId, doc);
+	const selected = controllerType === 'dualsense' ? levels.ps5
+		: controllerType === 'dualshock' ? levels.ps4
+			: controllerType === 'xbox' ? levels.xbox
+				: Math.max(...Object.values(levels).map(level => level ?? -1));
+	if (selected === 2) return 'supported';
+	if (selected === 1) return 'partial';
+	// Steam may document Xbox support while leaving PlayStation compatibility
+	// unknown. Only an explicit absence for every device means unsupported.
+	return Object.values(levels).every(level => level === 0) ? 'unsupported' : 'unknown';
 }
 

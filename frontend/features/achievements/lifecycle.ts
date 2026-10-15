@@ -3,7 +3,7 @@ import { backendLog } from '../../api/backend';
 import { mutationIsWithinSelector } from '../../core/dom';
 import { cacheLocalAchievements, clearLocalAchievementCache, getCachedLocalAchievementsForShortcut, localAchievementDataSignature } from './cache';
 import { clearAchievementRuntimeHost } from './context';
-import { openLocalAchievementsModal } from './modal';
+import { disposeAllLocalAchievementsModals, disposeLocalAchievementsModal, openLocalAchievementsModal } from './modal';
 import { detectLinkedSteamAppId, isCurrentAchievementTarget, linkedAchievementTarget, ownsAchievementSidebar, type LinkedAchievementTarget } from './navigation';
 import { disposeAchievementNotifications } from './notifications';
 import { ensureLocalPlaybarStat } from './playbar';
@@ -43,7 +43,7 @@ const localAchievementDocState = new WeakMap<Document, LocalAchievementDocumentS
 const localAchievementDocuments = new Set<Document>();
 export const ACHIEVEMENT_REFRESH_STORAGE_KEY = 'gdl_achievement_refresh_v1';
 export const OPTIMISTIC_ACHIEVEMENT_STORAGE_KEY = 'gdl_optimistic_achievements_v1';
-let achievementRefreshStorageInstalled = false;
+let achievementRefreshStorageListener: ((event: StorageEvent) => void) | null = null;
 
 interface AchievementRefreshMessage {
 	steamAppId?: string;
@@ -79,6 +79,7 @@ function isShortcutRunning(shortcutAppId: string | number | null): boolean {
 }
 
 export function disposeLocalAchievementUI(doc: Document): void {
+	disposeLocalAchievementsModal(doc);
 	const state = localAchievementDocState.get(doc);
 	if (!state) return;
 	localAchievementDocState.delete(doc);
@@ -120,7 +121,10 @@ export function installLocalAchievementUI(doc: Document): void {
 			return node.nodeType === 1 && ((node as Element).id === 'gdl-library-injected'
 				|| Boolean((node as Element).querySelector?.('#gdl-library-injected')));
 		}));
-		if (identity !== observedIdentity || retiredRoot || (observedRoot && observedRoot !== root)) ownershipEpoch += 1;
+		if (identity !== observedIdentity || retiredRoot || (observedRoot && observedRoot !== root)) {
+			ownershipEpoch += 1;
+			disposeLocalAchievementsModal(doc);
+		}
 		observedIdentity = identity;
 		observedRoot = root;
 		return ownershipEpoch;
@@ -310,9 +314,9 @@ function performLocalAchievementRefresh(target?: LocalAchievementRefreshTarget):
 }
 
 function installAchievementRefreshStorageListener(): void {
-	if (achievementRefreshStorageInstalled) return;
-	achievementRefreshStorageInstalled = true;
-	window.addEventListener('storage', event => {
+	if (achievementRefreshStorageListener) return;
+	const listener = (event: StorageEvent): void => {
+		if (achievementRefreshStorageListener !== listener) return;
 		if (event.key === ACHIEVEMENT_REFRESH_STORAGE_KEY) {
 			performLocalAchievementRefresh(parseAchievementRefreshMessage(event.newValue));
 		} else if (event.key === OPTIMISTIC_ACHIEVEMENT_STORAGE_KEY) {
@@ -327,7 +331,9 @@ function installAchievementRefreshStorageListener(): void {
 				}
 			} catch {}
 		}
-	});
+	};
+	achievementRefreshStorageListener = listener;
+	window.addEventListener('storage', listener);
 }
 
 function broadcastLocalAchievementRefresh(target?: LocalAchievementRefreshTarget): void {
@@ -359,7 +365,10 @@ export function refreshLocalAchievementUI(target?: LocalAchievementRefreshTarget
 }
 
 export function disposeAchievementRuntime(): void {
+	if (achievementRefreshStorageListener) window.removeEventListener('storage', achievementRefreshStorageListener);
+	achievementRefreshStorageListener = null;
 	for (const doc of Array.from(localAchievementDocuments)) disposeLocalAchievementUI(doc);
+	disposeAllLocalAchievementsModals();
 	disposeAchievementNotifications();
 	// A Steam restart should retain the last confirmed snapshot for immediate
 	// stale-while-revalidate painting. Explicit policy/path/language changes use

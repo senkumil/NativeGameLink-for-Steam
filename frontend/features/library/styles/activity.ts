@@ -8,9 +8,9 @@ export function ensureActivityStyles(doc: Document): void {
 		   A 100%-wide injected child cannot flow beside it and is moved below the
 		   entire sidebar. Mirror Steam's own SpotlightLeftColumn breakpoints so
 		   Activity and Community remain one stack in the actual left column. */
-		#gdl-main-content-stack { width:calc(67% - 32px) !important; }
-		div.NarrowWindow #gdl-main-content-stack { width:calc(67% - 22px) !important; }
-		div.UltraNarrowRightPanel #gdl-main-content-stack { width:100% !important; }
+		#gdl-main-content-stack, #gdl-skeleton { width:calc(67% - 32px) !important; }
+		div.NarrowWindow #gdl-main-content-stack, div.NarrowWindow #gdl-skeleton { width:calc(67% - 22px) !important; }
+		div.UltraNarrowRightPanel #gdl-main-content-stack, div.UltraNarrowRightPanel #gdl-skeleton { width:100% !important; }
 		.gdl-activity-container,
 		#gdl-activity-feed { font-family:"Motiva Sans",Arial,Helvetica,sans-serif; }
 		.gdl-activity-container .${event.AppActivityDate},

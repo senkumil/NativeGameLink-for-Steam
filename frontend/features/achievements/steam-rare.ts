@@ -1,4 +1,4 @@
-import { findModuleExport } from '@steambrew/client';
+import { resolveSteamClassModule } from '../../steam/class-module-cache';
 
 export interface SteamRareAchievementClasses {
 	wrapper: string;
@@ -20,36 +20,37 @@ export const FALLBACK_RARE_CLASSES: Readonly<SteamRareAchievementClasses> = Obje
 	noAnimation: '_1a4bwiE4yUR3XXBKI6mKqt',
 });
 
-let cachedRareClasses: SteamRareAchievementClasses | null = null;
+const RARE_CLASS_MODULE_FALLBACK = {
+	AchievementIconWrapper: FALLBACK_RARE_CLASSES.wrapper,
+	RareAchievementIconGlowContainerRoot: FALLBACK_RARE_CLASSES.glowRoot,
+	RareAchievementIconGlowContainer: FALLBACK_RARE_CLASSES.glowContainer,
+	RareAchievementIconGlow: FALLBACK_RARE_CLASSES.glow,
+	IconGlow: FALLBACK_RARE_CLASSES.iconGlow,
+	Icon: FALLBACK_RARE_CLASSES.icon,
+	RareAchievementNoAnimation: FALLBACK_RARE_CLASSES.noAnimation,
+};
 
 /**
  * Resolves Steam's official rare achievement CSS class names directly from
- * Webpack Module 33175 at runtime, falling back to verified extracted hashes.
+ * the owning document's loaded Webpack exports, with a bounded fallback retry.
  */
-export function getSteamRareAchievementClasses(): SteamRareAchievementClasses {
-	if (cachedRareClasses) return cachedRareClasses;
-	try {
-		const mod = findModuleExport(
-			(m: any) =>
-				m &&
-				typeof m === 'object' &&
-				'RareAchievementIconGlowContainerRoot' in m &&
-				'RareAchievementIconGlow' in m,
-		);
-		if (mod) {
-			cachedRareClasses = {
-				wrapper: String(mod.AchievementIconWrapper || FALLBACK_RARE_CLASSES.wrapper),
-				glowRoot: String(mod.RareAchievementIconGlowContainerRoot || FALLBACK_RARE_CLASSES.glowRoot),
-				glowContainer: String(mod.RareAchievementIconGlowContainer || FALLBACK_RARE_CLASSES.glowContainer),
-				glow: String(mod.RareAchievementIconGlow || FALLBACK_RARE_CLASSES.glow),
-				iconGlow: String(mod.IconGlow || FALLBACK_RARE_CLASSES.iconGlow),
-				icon: String(mod.Icon || FALLBACK_RARE_CLASSES.icon),
-				noAnimation: String(mod.RareAchievementNoAnimation || FALLBACK_RARE_CLASSES.noAnimation),
-			};
-			return cachedRareClasses;
-		}
-	} catch {}
-	return FALLBACK_RARE_CLASSES;
+export function getSteamRareAchievementClasses(doc?: Document): SteamRareAchievementClasses {
+	const { classes: mod, native } = resolveSteamClassModule(
+		module => typeof module.RareAchievementIconGlowContainerRoot === 'string'
+			&& typeof module.RareAchievementIconGlow === 'string',
+		RARE_CLASS_MODULE_FALLBACK,
+		doc,
+	);
+	if (!native) return FALLBACK_RARE_CLASSES;
+	return {
+		wrapper: String(mod.AchievementIconWrapper || FALLBACK_RARE_CLASSES.wrapper),
+		glowRoot: String(mod.RareAchievementIconGlowContainerRoot || FALLBACK_RARE_CLASSES.glowRoot),
+		glowContainer: String(mod.RareAchievementIconGlowContainer || FALLBACK_RARE_CLASSES.glowContainer),
+		glow: String(mod.RareAchievementIconGlow || FALLBACK_RARE_CLASSES.glow),
+		iconGlow: String(mod.IconGlow || FALLBACK_RARE_CLASSES.iconGlow),
+		icon: String(mod.Icon || FALLBACK_RARE_CLASSES.icon),
+		noAnimation: String(mod.RareAchievementNoAnimation || FALLBACK_RARE_CLASSES.noAnimation),
+	};
 }
 
 /**

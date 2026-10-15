@@ -4,7 +4,7 @@ const localAchievementMemoryCache = new Map<string, LocalAchievementData>();
 const MAX_LOCAL_ACHIEVEMENT_ALIASES = 192;
 // Older snapshots could be aliased to the next shortcut by an in-flight
 // navigation. Ignore that renderer cache; the underlying progress files remain.
-const LOCAL_ACHIEVEMENT_SNAPSHOT_STORAGE_KEY = 'gdl_local_achievement_snapshots_v3';
+const LOCAL_ACHIEVEMENT_SNAPSHOT_STORAGE_KEY = 'gdl_local_achievement_snapshots_v4';
 const MAX_PERSISTED_ACHIEVEMENT_SNAPSHOTS = 64;
 const PERSISTED_ACHIEVEMENT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -27,7 +27,7 @@ export function localAchievementDataSignature(data: LocalAchievementData): strin
 		...data.achievements.map(item => [
 			item.name, item.display_name, item.description, item.icon, item.icon_gray,
 			item.earned ? 1 : 0, item.earned_time, item.progress, item.max_progress,
-			item.is_online ? 1 : 0,
+			item.is_online ? 1 : 0, item.hidden ? 1 : 0, item.global_percent ?? '', item.global_percent_known === false ? 0 : 1,
 		].join(':')),
 	].join('|');
 	let hash = 2166136261;
@@ -203,7 +203,9 @@ export function hasCachedLocalAchievements(key: string): boolean {
 
 export function cacheLocalAchievements(data: LocalAchievementData, ...aliases: Array<string | null | undefined>): void {
 	if (!validPersistentData(data)) return;
-	const allAliases = Array.from(new Set([data.appid, data.state_appid, ...aliases]
+	// state_appid identifies the backend progress file, which can be shared by
+	// installations. Only the caller's explicit alias proves shortcut ownership.
+	const allAliases = Array.from(new Set([data.metadata_appid || data.appid, ...aliases]
 		.map(value => String(value || '')).filter(Boolean)));
 	memoryCache(data, allAliases);
 	loadPersistedSnapshots();

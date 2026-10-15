@@ -9,8 +9,8 @@ export interface HeroCandidate {
 	matchedSignatures: string[];
 }
 
-export function findTopHeroCandidates(maxResults = 3): HeroCandidate[] {
-	const modules = steamWebpackRuntime.getAllModules();
+export function findTopHeroCandidates(maxResults = 3, doc?: Document): HeroCandidate[] {
+	const modules = steamWebpackRuntime.getAllModules(doc);
 	const candidates: HeroCandidate[] = [];
 
 	for (const mod of modules) {

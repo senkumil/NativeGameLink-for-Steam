@@ -17,9 +17,6 @@ export function steamRareAchievementStyles(): string {
 		@keyframes gdl-rare-rotate {
 			to { transform: rotate(1turn); }
 		}
-		@keyframes _2liIQspBwdpNtEmYw2bU9j {
-			to { transform: rotate(1turn); }
-		}
 
 		/* Static root mask container - strictly scoped to GDL containers */
 		#gdl-achievements-section .gdl-rare-glow-root,

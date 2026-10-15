@@ -10,11 +10,14 @@ import ts from 'typescript';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const edge = process.env.CLOUD_BROWSER_EXECUTABLE
   || 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
-const steamCss = process.env.STEAM_PLAYBAR_CSS
-  || 'C:/Program Files (x86)/Steam/steamui/css/chunk~2dcc5aaf7.css';
+const steamCss = process.env.STEAM_PLAYBAR_CSS || [
+  'C:/Program Files (x86)/Steam/steamui/css/sp.css',
+  'C:/Program Files (x86)/Steam/steamui/css/chunk~2dcc5aaf7.css',
+].find(filename => fs.existsSync(filename));
 assert.ok(fs.existsSync(edge), `Edge executable missing: ${edge}`);
-assert.ok(fs.existsSync(steamCss), `Installed Steam play-bar CSS missing: ${steamCss}`);
+assert.ok((steamCss && fs.existsSync(steamCss)), `Installed Steam play-bar CSS missing: ${steamCss}`);
 const sources = Object.fromEntries([
+  ['class-module-cache', 'frontend/steam/class-module-cache.ts'],
   ['css', 'frontend/steam/css.ts'],
   ['native-dom', 'frontend/steam/native-dom.ts'],
   ['library-details', 'frontend/steam/library-details.ts'],
@@ -54,6 +57,7 @@ function browserChecks(sources) {
     token => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[token]);
   const dependencies = {
     '@steambrew/client': { findClassModule: () => null },
+    './modules/SteamWebpackRuntime': { steamWebpackRuntime: { getRuntimeIdentity: () => null, getAllModules: () => [] } },
     './localization': localization,
     '../../steam/localization': localization,
     '../../core/text': { escapeHtml },

@@ -97,6 +97,9 @@ const renderer = load('frontend/features/library/renderer.ts', {
   '../../api/backend': { backendLog() {} },
   '../../steam/sidebar-interaction': interaction,
   './render-session': renderSession,
+  './first-content': { adoptLinkedLoadingActivity: () => null, getLinkedLoadingActivity: () => null },
+  './early-achievement-sidebar': { getOwnedAchievementSidebar: () => null },
+  './sidebar-order': { disposeLinkedSidebarOrder() {}, ensureLinkedSidebarOrder() {} },
   './constants': { GDL_INJECTED: 'gdl-library-injected' },
   './artwork': {
     getResolvedLibraryAssets: () => ({ portrait: 'instant' }),
@@ -122,9 +125,10 @@ const renderer = load('frontend/features/library/renderer.ts', {
     renderLinkedSidebarCore() {},
     refreshHistoricalSidebarSections: (_doc, _layout, _data, steam, assets) => writes.push(['history', steam, assets]),
   },
-  './controller': { setupControllerSidebarWatcher: () => () => {} },
+  './controller': { setupControllerSidebarWatcher: () => () => {}, getOwnedControllerSidebar: () => null, disposeControllerSidebarWatcher() {} },
   './optional-sections': { renderOptionalStoreSections: () => ({ hasWorkshop: false, dlcIds: [] }) },
   './activity-view': {
+    parkSharedActivityComposer() {},
     createActivityView: (_doc, _layout, options) => {
       const activity = new Element(doc); activity.id = 'gdl-library-injected';
       activity.dataset = { gdlSteamAppId: options.steamAppId, gdlShortcutAppId: options.shortcutAppId };
@@ -232,12 +236,15 @@ const controllerDoc = controllerScope.doc;
 const controllerWindow = Object.assign(controllerDoc.defaultView, { navigator: { getGamepads: () => [] } });
 const svg = new Proxy({}, { get: () => '' });
 const controller = load('frontend/features/library/controller.ts', {
+	'../achievements/navigation': { linkedAchievementTarget: () => null },
+	'../../steam/library-details': { committedHeaderAppId: () => null },
   '../../api/backend': { backendLog() {} },
   '../../core/text': { escapeHtml: value => value },
   '../../core/game-data': { getCachedGameData: () => null },
   '../../steam/gamepad/stores/AppStoreAdapter': { AppStoreAdapter: {} },
   '../../steam/localization': { gdlText: (_key, fallback) => fallback, loc: (_key, fallback) => fallback, steamLanguageSync: () => 'english' },
   './styles/controller': { ensureControllerStyles() {} },
+  './sidebar-order': { getLinkedSidebarOrder: () => null, hasLinkedSidebarOrder: () => false },
   './layout': { buildNativeSidebarSection: () => null },
   '../../steam/modules/SteamModuleResolver': { getSteamStore: () => { resolverCalls++; return null; } },
   '../../steam/modules/SteamWebpackRuntime': { steamWebpackRuntime: {
@@ -341,7 +348,7 @@ const lifecycle = load('frontend/features/achievements/lifecycle.ts', {
   '../../api/backend': { backendLog() {} }, '../../core/dom': { mutationIsWithinSelector: () => false },
   '../../steam/sidebar-interaction': interaction, '../../steam/library-sidebar': { withoutLibrarySidebarMutations: records => records },
   './cache': cache, './navigation': navigation, './service': service,
-  './context': { clearAchievementRuntimeHost() {} }, './modal': { openLocalAchievementsModal: async () => {} },
+  './context': { clearAchievementRuntimeHost() {} }, './modal': { openLocalAchievementsModal: async () => {}, disposeLocalAchievementsModal() {}, disposeAllLocalAchievementsModals() {} },
   './notifications': { disposeAchievementNotifications() {} }, './playbar': { ensureLocalPlaybarStat: paintStat },
   './sidebar': { renderLocalAchievementSidebar: paintSidebar }, './styles': { ensureLocalAchievementStyles() {} },
   './game-info': { clearLocalAchievementGameInfoCache() {} },

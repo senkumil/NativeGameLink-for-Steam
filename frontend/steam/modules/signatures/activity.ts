@@ -9,8 +9,8 @@ export interface ActivityCandidate {
 	matchedSignatures: string[];
 }
 
-export function findTopActivityCandidates(maxResults = 3): ActivityCandidate[] {
-	const modules = steamWebpackRuntime.getAllModules();
+export function findTopActivityCandidates(maxResults = 3, doc?: Document): ActivityCandidate[] {
+	const modules = steamWebpackRuntime.getAllModules(doc);
 	const candidates: ActivityCandidate[] = [];
 
 	for (const mod of modules) {

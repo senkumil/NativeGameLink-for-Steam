@@ -1,6 +1,7 @@
 import type { ComponentType } from 'react';
 import { backendLog } from '../../../api/backend';
 import { steamWebpackRuntime, type WebpackModuleEntry } from '../../modules/SteamWebpackRuntime';
+import { readPureClassFactory } from './pure-class-factory';
 
 export type NativeClassModule = Readonly<Record<string, string>>;
 
@@ -48,19 +49,32 @@ const signatures: Record<NativeClassFamily, readonly string[]> = {
 	PostTextEntry: ['PostTextEntry', 'PostTextEntryArea', 'Controls', 'PostButton'],
 };
 
-const cache = new Map<NativeClassFamily, NativeClassModule | null>();
-let scanned = false;
-let summaryCarousel: ComponentType<any> | null | undefined;
-let cachedRuntimeIdentity: object | null = null;
+interface NativeClassState {
+	cache: Map<NativeClassFamily, NativeClassModule | null>;
+	scanned: boolean;
+	summaryCarousel: ComponentType<any> | null | undefined;
+	runtimeIdentity: object;
+	factoryCount: number;
+}
 
-function ensureNativeClassRuntime(doc?: Document): void {
-	steamWebpackRuntime.captureRuntime(doc);
-	const identity = steamWebpackRuntime.getRuntimeIdentity(doc);
-	if (identity && cachedRuntimeIdentity === identity) return;
-	cache.clear();
-	scanned = false;
-	summaryCarousel = undefined;
-	cachedRuntimeIdentity = identity;
+let documentStates = new WeakMap<Document, NativeClassState>();
+
+function ensureNativeClassRuntime(doc?: Document): { doc: Document; state: NativeClassState } | null {
+	const owner = doc || (typeof document !== 'undefined' ? document : null);
+	if (!owner) return null;
+	try {
+		const view = owner.defaultView;
+		if (!view || view.closed || view.document !== owner) return null;
+	} catch { return null; }
+	steamWebpackRuntime.captureRuntime(owner);
+	const identity = steamWebpackRuntime.getRuntimeIdentity(owner);
+	if (!identity) return null;
+	let state = documentStates.get(owner);
+	if (!state || state.runtimeIdentity !== identity) {
+		state = { cache: new Map(), scanned: false, summaryCarousel: undefined, runtimeIdentity: identity, factoryCount: -1 };
+		documentStates.set(owner, state);
+	}
+	return { doc: owner, state };
 }
 
 function classModuleCandidates(module: WebpackModuleEntry): NativeClassModule[] {
@@ -78,29 +92,44 @@ function matches(module: NativeClassModule, keys: readonly string[]): boolean {
 	return keys.every(key => typeof module[key] === 'string' && module[key].length > 0);
 }
 
-function scanNativeAppDetailsClasses(doc?: Document): void {
-	ensureNativeClassRuntime(doc);
-	if (scanned) return;
+function scanNativeAppDetailsClasses(doc: Document, state: NativeClassState): void {
+	const factoryCount = steamWebpackRuntime.getModuleFactoryCount?.(doc) || 0;
+	if (state.scanned && state.factoryCount === factoryCount) return;
 	const modules = steamWebpackRuntime.getAllModules(doc);
-	if (modules.length === 0) return;
 	const unresolved = new Set<NativeClassFamily>(Object.keys(signatures) as NativeClassFamily[]);
-	for (const module of modules) {
+	const accept = (module: WebpackModuleEntry) => {
 		const candidates = classModuleCandidates(module);
 		for (const family of [...unresolved]) {
 			const candidate = candidates.find(value => matches(value, signatures[family]));
 			if (!candidate) continue;
-			cache.set(family, candidate);
+			state.cache.set(family, candidate);
 			unresolved.delete(family);
 			backendLog(`[NGL][Gamepad][AppDetails] Resolved native ${family} classes from module ${module.id}`);
 		}
+	};
+	for (const module of modules) {
+		accept(module);
 		if (unresolved.size === 0) break;
 	}
-	for (const family of unresolved) cache.set(family, null);
-	scanned = true;
+	// Production's require cache is private. Identify only pure CSS factories
+	// with the exact presentation keys we need, at most one per missing family.
+	const req = steamWebpackRuntime.getRequire?.(doc);
+	if (req && unresolved.size) for (const { id, factory } of steamWebpackRuntime.getModuleFactories?.(doc) || []) {
+		const literal = readPureClassFactory(factory);
+		if (!literal || ![...unresolved].some(family => matches(literal, signatures[family]))) continue;
+		try { if (req.m?.[id] === factory) accept({ id, exports: req(id) }); } catch {}
+		if (!unresolved.size) break;
+	}
+	if (modules.length === 0 && state.cache.size === 0) return;
+	for (const family of unresolved) state.cache.set(family, null);
+	state.scanned = true;
+	state.factoryCount = factoryCount;
 }
 
 export function resolveNativeAppDetailsClasses(doc?: Document): NativeAppDetailsClasses {
-	scanNativeAppDetailsClasses(doc);
+	const realm = ensureNativeClassRuntime(doc);
+	if (realm) scanNativeAppDetailsClasses(realm.doc, realm.state);
+	const cache = realm?.state.cache || new Map<NativeClassFamily, NativeClassModule | null>();
 	return {
 		Section: cache.get('Section') || null,
 		SectionHeader: cache.get('SectionHeader') || null,
@@ -141,9 +170,11 @@ export const FALLBACK_FOCUS_RING_CLASSES: Readonly<{
 
 /** Steam's AppDetails carousel is not the public Millennium Carousel. */
 export function resolveNativeSummaryCarousel(doc?: Document): ComponentType<any> | null {
-	ensureNativeClassRuntime(doc);
-	if (summaryCarousel !== undefined) return summaryCarousel;
-	const modules = steamWebpackRuntime.getAllModules(doc);
+	const realm = ensureNativeClassRuntime(doc);
+	if (!realm) return null;
+	const { state } = realm;
+	if (state.summaryCarousel !== undefined) return state.summaryCarousel;
+	const modules = steamWebpackRuntime.getAllModules(realm.doc);
 	if (modules.length === 0) return null;
 	for (const module of modules) {
 		const exports = module.exports as any;
@@ -151,18 +182,17 @@ export function resolveNativeSummaryCarousel(doc?: Document): ComponentType<any>
 		for (const candidate of candidates) {
 			const prototype = typeof candidate === 'function' ? candidate.prototype : null;
 			if (!prototype || typeof prototype.ScrollToElement !== 'function' || typeof prototype.UpdateScrollArrows !== 'function') continue;
-			summaryCarousel = candidate as ComponentType<any>;
+			state.summaryCarousel = candidate as ComponentType<any>;
 			backendLog(`[NGL][Gamepad][AppDetails] Resolved native BoxCarousel from module ${module.id}`);
-			return summaryCarousel;
+			return state.summaryCarousel;
 		}
 	}
-	summaryCarousel = null;
+	state.summaryCarousel = null;
 	return null;
 }
 
-export function clearNativeAppDetailsClassCache(): void {
-	cachedRuntimeIdentity = null;
-	cache.clear();
-	scanned = false;
-	summaryCarousel = undefined;
+/** Omit doc only for full plugin teardown; runtime resets must name their owner. */
+export function clearNativeAppDetailsClassCache(doc?: Document): void {
+	if (doc) documentStates.delete(doc);
+	else documentStates = new WeakMap<Document, NativeClassState>();
 }

@@ -1,6 +1,7 @@
 import { normalizeTitle } from '../../core/text';
 import { getMappedShortcuts, getShortcutAppById, looseMatchTitle, toSignedShortcutAppId } from '../shortcuts';
-import { findMappingForTitle, mappings, shortcutMappingKey } from '../../core/mappings';
+import { findMappingForTitle, isMappingSnapshotVerified, mappings, shortcutMappingKey } from '../../core/mappings';
+import { getNativeWindowInstance } from '../native-window-store';
 
 export interface LinkedGameIdentity {
 	shortcutAppId: number;
@@ -22,17 +23,28 @@ export interface ActiveGameContext {
 
 type MappedShortcut = ReturnType<typeof getMappedShortcuts>[number];
 
+/** Accept Steam's signed shortcut representation without wrapping invalid IDs. */
+export function normalizeGamepadAppId(value: unknown): number | null {
+	const raw = Number(value);
+	if (!Number.isInteger(raw) || raw === 0 || raw < -2147483648 || raw > 4294967295) return null;
+	return raw < 0 ? raw >>> 0 : raw;
+}
+
 function mappedShortcutIds(shortcut: MappedShortcut): number[] {
 	const raw = Number(shortcut.id);
-	const unsigned = raw >>> 0;
+	const unsigned = normalizeGamepadAppId(raw);
+	if (unsigned === null || unsigned < 2147483648) return [];
 	const signed = toSignedShortcutAppId(unsigned);
 	return Array.from(new Set([raw, unsigned, signed])).filter(Number.isFinite);
 }
 
-function linkedContext(shortcut: MappedShortcut): ActiveGameContext {
-	const unsigned = Number(shortcut.id) >>> 0;
+function linkedContext(shortcut: MappedShortcut, doc: Document): ActiveGameContext {
+	const unsigned = normalizeGamepadAppId(shortcut.id)!;
 	const steamAppId = Number(shortcut.steamAppId);
-	const app = getShortcutAppById(shortcut.id);
+	if (!Number.isInteger(steamAppId) || steamAppId <= 0 || steamAppId >= 2147483648) {
+		return { type: 'shortcut-unlinked', shortcutAppId: unsigned, title: shortcut.title };
+	}
+	const app = getShortcutAppById(unsigned, doc);
 	return {
 		type: 'shortcut-linked',
 		shortcutAppId: unsigned,
@@ -50,39 +62,22 @@ function linkedContext(shortcut: MappedShortcut): ActiveGameContext {
 	};
 }
 
-function contextForRawAppId(rawAppId: unknown, shortcuts: MappedShortcut[]): ActiveGameContext | null {
+function contextForRawAppId(rawAppId: unknown, shortcuts: MappedShortcut[], doc: Document): ActiveGameContext | null {
 	const numeric = Number(rawAppId);
-	if (!Number.isFinite(numeric) || numeric === 0) return null;
+	const unsigned = normalizeGamepadAppId(rawAppId);
+	if (unsigned === null) return null;
+	// A public AppID is always Steam-owned, even if a malformed mapping or stale
+	// plugin marker happens to contain it.
+	if (unsigned < 2147483648) return { type: 'steam', steamAppId: unsigned };
 	const shortcut = shortcuts.find(item => mappedShortcutIds(item).includes(numeric));
-	if (shortcut) return linkedContext(shortcut);
-	const unsigned = numeric < 0 ? (numeric >>> 0) : numeric;
-	if (unsigned > 0 && unsigned < 2147483648) return { type: 'steam', steamAppId: unsigned };
-	return null;
+	if (shortcut) return linkedContext(shortcut, doc);
+	return { type: 'shortcut-unlinked', shortcutAppId: unsigned };
 }
 
 function collectWindows(doc: Document): any[] {
-	const result: any[] = [];
-	const add = (value: any): void => {
-		if (value && !result.includes(value)) result.push(value);
-	};
-	add(doc.defaultView);
-	try {
-		if (doc.defaultView?.parent && doc.defaultView.parent !== doc.defaultView) {
-			add(doc.defaultView.parent);
-		}
-	} catch {}
-	try {
-		if (doc.defaultView?.top && doc.defaultView.top !== doc.defaultView) {
-			add(doc.defaultView.top);
-		}
-	} catch {}
-	for (const frame of Array.from(doc.querySelectorAll<HTMLIFrameElement>('iframe'))) {
-		try { add(frame.contentWindow); } catch {}
-	}
-	if (result.length === 0 && typeof window !== 'undefined') {
-		add(window);
-	}
-	return result;
+	// Parent/child browser windows can be displaying a different game. Their
+	// route or selected app is never evidence of ownership of this Document.
+	return doc.defaultView ? [doc.defaultView] : [];
 }
 
 function addCandidateValue(target: Set<string>, value: unknown): void {
@@ -94,21 +89,43 @@ function readPath(root: any, path: string): unknown {
 	catch { return undefined; }
 }
 
-export const NON_DETAILS_ROUTE_PATTERN = /(?:\/routes\/library\/(?:all|collections|installed|shortcuts|nonsteam|controller|home|recent|shelves|filter)|\/routes\/(?:store|community|chat|settings|downloads|friends|media))/i;
-export const APP_DETAILS_ROUTE_PATTERN = /(?:\/routes\/library\/app\/|\/library\/app\/|\/appdetails\/|\/details\/|\/game\/|[?&#]appid=)(-?\d+)/i;
+function owningWindowInstance(doc: Document): any | null {
+	return getNativeWindowInstance(doc);
+}
+
+export const NON_DETAILS_ROUTE_PATTERN = /(?:\/(?:routes\/)?library(?:\/(?:all|collections?|installed|shortcuts|nonsteam|controller|home|recent|shelves|filter)(?=[/?#]|$)|(?=[?#]|$))|\/(?:routes\/)?(?:store|community|chat|settings|downloads|friends|media)(?=[/?#]|$))/i;
+export const APP_DETAILS_ROUTE_PATTERN = /(?:\/routes\/library\/app\/|\/library\/app\/|\/appdetails\/|\/details\/|\/game\/|[?&#]appid=)(-?\d+)(?=[/?&#]|$)/i;
+// A native AppDetails path can contain tab names such as /tab/Community.
+// Only a root details path may outrank the non-details destination guard.
+const ROOT_APP_DETAILS_ROUTE_PATTERN = /^(?:https?:\/\/[^/?#]+)?(?:\/routes)?\/library\/app\/(-?\d+)(?=[/?&#]|$)/i;
+const DETAILS_ROUTE_PREFIX_PATTERN = /(?:\/routes\/library\/app\/|\/library\/app\/|\/appdetails\/|\/details\/|\/game\/|[?&#]appid=)/i;
 
 export function collectActiveRouteValues(doc: Document): string[] {
 	const values = new Set<string>();
-	addCandidateValue(values, doc.URL);
-	addCandidateValue(values, doc.baseURI);
+	const nativeInstance = owningWindowInstance(doc);
+	if (nativeInstance) {
+		// Read live history before the pathname copied during React's effect.
+		for (const path of ['History.location.pathname', 'm_history.location.pathname', 'm_history.location.search', 'm_history.location.hash']) {
+			addCandidateValue(values, readPath(nativeInstance, path));
+		}
+		addCandidateValue(values, nativeInstance.LocationPathName);
+	}
 	const paths = [
-		'location.href', 'location.pathname', 'location.hash',
+		// Steam's Gamepad router publishes this local NavStore, independently
+		// of WindowStore and g_Router. Its live history is the route source in
+		// clients where the browser URL remains the /gamepadui shell.
+		'tempNavStore.m_history.location.pathname', 'tempNavStore.m_history.location.search', 'tempNavStore.m_history.location.hash',
+		'tempNavStore.m_locationPathname',
 		'g_Router.history.location.pathname', 'g_Router.history.location.search', 'g_Router.history.location.hash',
 		'g_Router.location.pathname', 'g_Router.m_history.location.pathname',
 		'Router.history.location.pathname', 'router.history.location.pathname',
 		'SteamUIStore.m_currentPath', 'SteamUIStore.m_strCurrentRoute',
 	];
 	for (const win of collectWindows(doc)) {
+		if (!nativeInstance) try {
+			const instance = win.uiStore?.GetActiveWindowInstance?.();
+			if (!instance?.BrowserWindow || instance.BrowserWindow === win) addCandidateValue(values, instance?.LocationPathName);
+		} catch {}
 		for (const path of paths) addCandidateValue(values, readPath(win, path));
 		for (const key of ['g_Router', 'Router', 'router']) {
 			const router = readPath(win, key);
@@ -120,10 +137,56 @@ export function collectActiveRouteValues(doc: Document): string[] {
 				} else addCandidateValue(values, value);
 			}
 		}
+		for (const path of ['location.hash', 'location.pathname', 'location.href']) addCandidateValue(values, readPath(win, path));
 	}
+	addCandidateValue(values, doc.URL);
+	// baseURI can be Steam's shell or an old document base. It does not identify
+	// the current game and cannot override the live router.
 	return Array.from(values).map(value => {
 		try { return decodeURIComponent(value); } catch { return value; }
 	});
+}
+
+/** Compact local diagnostics; never log a shell URL's query or fragment. */
+export function describeLinkedGamepadTarget(doc: Document, shortcutAppId: unknown, steamAppId: unknown): string {
+	const shortcutId = normalizeGamepadAppId(shortcutAppId);
+	const view = doc.defaultView;
+	const live = Boolean(view && !view.closed && view.document === doc && doc.body?.isConnected);
+	const verified = isMappingSnapshotVerified();
+	const mapped = shortcutId === null ? '' : String(mappings[shortcutMappingKey(shortcutId)] || '');
+	const paths = collectActiveRouteValues(doc).map(value => value.split(/[?#]/, 1)[0]
+		.replace(/^https?:\/\/[^/]+/i, '').replace(/[\r\n]/g, '').slice(0, 120));
+	return `live=${Number(live)} verified=${Number(verified)} target=${shortcutId}:${Number(steamAppId)} mapping=${mapped || 'missing'} paths=${JSON.stringify([...new Set(paths)].slice(0, 6))}`;
+}
+
+function contextFromRoute(doc: Document, shortcuts: MappedShortcut[]): ActiveGameContext | null {
+	for (const value of collectActiveRouteValues(doc)) {
+		const rootDetails = ROOT_APP_DETAILS_ROUTE_PATTERN.exec(value);
+		if (rootDetails) return contextForRawAppId(rootDetails[1], shortcuts, doc) || { type: 'none' };
+		// A Store/Home destination may carry an AppID in its query or coexist
+		// with an old history entry. Neither turns it into the details surface.
+		if (NON_DETAILS_ROUTE_PATTERN.test(value)) return { type: 'none' };
+		const match = APP_DETAILS_ROUTE_PATTERN.exec(value);
+		if (match) return contextForRawAppId(match[1], shortcuts, doc) || { type: 'none' };
+		if (DETAILS_ROUTE_PREFIX_PATTERN.test(value)) return { type: 'none' };
+	}
+	return null;
+}
+
+/** Mutation/input ownership requires a real route, never a heading or our DOM. */
+export function isCurrentLinkedGamepadTarget(doc: Document, shortcutAppId: unknown, steamAppId: unknown): boolean {
+	const view = doc.defaultView;
+	if (!view || view.closed || view.document !== doc || !doc.body?.isConnected) return false;
+	const shortcutId = normalizeGamepadAppId(shortcutAppId);
+	if (shortcutId === null || shortcutId < 2147483648) return false;
+	if (!isMappingSnapshotVerified()
+		|| String(mappings[shortcutMappingKey(shortcutId)] || '') !== String(steamAppId)) return false;
+	// This guard is also used on input ticks. The exact committed pair is
+	// already known; do not enumerate the whole Steam library on each tick.
+	const context = contextFromRoute(doc, [{ id: shortcutId, steamAppId: String(steamAppId), title: '' }]);
+	return context?.type === 'shortcut-linked'
+		&& context.identity?.shortcutAppId === shortcutId
+		&& context.identity?.steamAppId === Number(steamAppId);
 }
 
 function activeAppIdsFromStores(doc: Document): number[] {
@@ -181,22 +244,9 @@ function appIdsFromReactOwners(doc: Document): number[] {
 
 function activeContextFromIdentity(doc: Document, shortcuts: MappedShortcut[]): ActiveGameContext | null {
 	const routeValues = collectActiveRouteValues(doc);
-	const hasLibraryRoute = routeValues.some(v => NON_DETAILS_ROUTE_PATTERN.test(v));
 	const hasAppRoute = routeValues.some(v => APP_DETAILS_ROUTE_PATTERN.test(v));
-	if (hasLibraryRoute && !hasAppRoute) {
-		return { type: 'none' };
-	}
-
-	const routePattern = /(?:\/routes\/library\/app\/|\/library\/app\/|\/appdetails\/|\/details\/|\/game\/|[?&#]appid=)(-?\d+)/ig;
-	for (const value of routeValues) {
-		routePattern.lastIndex = 0;
-		let match: RegExpExecArray | null;
-		while ((match = routePattern.exec(value))) {
-			const context = contextForRawAppId(match[1], shortcuts);
-			if (context?.type === 'shortcut-linked') return context;
-			if (context?.type === 'steam') return context;
-		}
-	}
+	const routed = contextFromRoute(doc, shortcuts);
+	if (routed) return routed;
 
 	if (!hasAppRoute && doc.querySelector('[class*="AllGames"], [class*="LibraryHome"], [class*="AllCollections"]')) {
 		return { type: 'none' };
@@ -204,11 +254,10 @@ function activeContextFromIdentity(doc: Document, shortcuts: MappedShortcut[]): 
 
 	const stateIds = [...activeAppIdsFromStores(doc), ...appIdsFromReactOwners(doc)];
 	for (const id of stateIds) {
-		const context = contextForRawAppId(id, shortcuts);
-		if (context?.type === 'shortcut-linked') return context;
+		const context = contextForRawAppId(id, shortcuts, doc);
+		if (context) return context;
 	}
-	const official = stateIds.find(id => id > 0 && id < 2147483648);
-	return official ? { type: 'steam', steamAppId: official } : null;
+	return null;
 }
 
 function headingContext(doc: Document, shortcuts: MappedShortcut[]): ActiveGameContext | null {
@@ -246,7 +295,7 @@ function headingContext(doc: Document, shortcuts: MappedShortcut[]): ActiveGameC
 		const text = normalizeTitle(heading.getAttribute('alt') || heading.getAttribute('aria-label') || heading.textContent || '');
 		if (!text) continue;
 		const shortcut = byLongestTitle.find(item => normalizeTitle(item.title) === text || looseMatchTitle(item.title, text));
-		if (shortcut) return linkedContext(shortcut);
+		if (shortcut) return linkedContext(shortcut, doc);
 	}
 	return null;
 }
@@ -254,34 +303,37 @@ function headingContext(doc: Document, shortcuts: MappedShortcut[]): ActiveGameC
 export function resolveActiveGameContext(doc?: Document): ActiveGameContext {
 	const targetDoc = doc || (typeof document !== 'undefined' ? document : null);
 	if (!targetDoc) return { type: 'none' };
+	const view = targetDoc.defaultView;
+	if (!view || view.closed || view.document !== targetDoc || !targetDoc.body?.isConnected) return { type: 'none' };
 	const routeValues = collectActiveRouteValues(targetDoc);
 	const hasAppRoute = routeValues.some(v => APP_DETAILS_ROUTE_PATTERN.test(v));
 	if (!hasAppRoute && targetDoc.querySelector('[class*="AllGames"], [class*="LibraryHome"], [class*="AllCollections"]')) {
 		return { type: 'none' };
 	}
-	const shortcuts = getMappedShortcuts();
+	const shortcuts = getMappedShortcuts(targetDoc);
+	const identity = activeContextFromIdentity(targetDoc, shortcuts);
+	// Route/store identity takes precedence over all plugin DOM. In particular,
+	// keep a stale linked root from adopting a native or unlinked destination.
+	if (identity) return identity;
 	const activeMarker = targetDoc.querySelector<HTMLElement>('[data-gdl-active-shortcut-id]');
 	if (activeMarker) {
-		const marked = contextForRawAppId(activeMarker.getAttribute('data-gdl-active-shortcut-id'), shortcuts);
-		if (marked) return marked;
-		const rawAppId = Number(activeMarker.getAttribute('data-gdl-active-shortcut-id'));
-		const app = getShortcutAppById(rawAppId);
+		const rawAppId = normalizeGamepadAppId(activeMarker.getAttribute('data-gdl-active-shortcut-id'));
+		if (rawAppId === null || rawAppId < 2147483648) return { type: 'none' };
+		const marked = contextForRawAppId(rawAppId, shortcuts, targetDoc);
+		if (marked?.type === 'shortcut-linked') return marked;
+		const app = getShortcutAppById(rawAppId, targetDoc);
 		const title = String(app?.display_name || app?.m_strDisplayName || '').trim();
 		const mappingKey = shortcutMappingKey(rawAppId);
 		const mappedAppId = mappings[mappingKey] || (title ? findMappingForTitle(title) : null);
 		if (mappedAppId && /^\d+$/.test(mappedAppId)) {
-			return linkedContext({ id: rawAppId, title: title || `App ${rawAppId >>> 0}`, steamAppId: mappedAppId });
+			return linkedContext({ id: rawAppId, title: title || `App ${rawAppId}`, steamAppId: mappedAppId }, targetDoc);
 		}
-		return { type: 'shortcut-unlinked', shortcutAppId: rawAppId >>> 0, title: title || `App ${rawAppId >>> 0}` };
+		return { type: 'shortcut-unlinked', shortcutAppId: rawAppId, title: title || `App ${rawAppId}` };
 	}
-
-	const identity = activeContextFromIdentity(targetDoc, shortcuts);
-	if (identity?.type === 'shortcut-linked') return identity;
-	if (identity?.type === 'steam') return identity;
 
 	const byHeading = headingContext(targetDoc, shortcuts);
 	if (byHeading?.type === 'shortcut-linked') return byHeading;
 	if (byHeading?.type === 'steam') return byHeading;
 
-	return identity || { type: 'none' };
+	return { type: 'none' };
 }

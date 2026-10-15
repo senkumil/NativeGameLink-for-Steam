@@ -78,15 +78,9 @@ export async function buildShortcutDetectionContext(
 	let startDir = readShortcutOverviewField(app, 'strShortcutStartDir', 'm_strShortcutStartDir', 'shortcut_start_dir') || fromProperties.startDir;
 	let launchOptions = readShortcutOverviewField(app, 'strShortcutLaunchOptions', 'm_strShortcutLaunchOptions', 'shortcut_launch_options', 'strArguments') || fromProperties.launchOptions;
 	let backendTitle = '';
-	let bootstrapDetected = false;
-	let recommendedExePath = '';
-	let recommendedStartDir = '';
-	let trackingExecutableAutoApply = false;
 
-	// Tracking/launcher analysis comes from the backend filesystem/VDF resolver.
-	// Always request it: SteamClient often already supplies exe/startDir, which
-	// previously skipped this call entirely and silently removed the "use real
-	// game executable" recommendation (including RDR2's Launcher.exe rule).
+	// Read the original shortcut definition from VDF as a fallback when Steam's
+	// in-memory app details are incomplete.
 	const backendDetailsPromise = withDetectionBudget(
 		getShortcutDetailsBackend({ shortcut_app_id: String(shortcutAppId), title: title || '' }),
 		1200,
@@ -121,13 +115,7 @@ export async function buildShortcutDetectionContext(
 			startDir ||= String(details.start_dir || '');
 			launchOptions ||= String(details.launch_options || '');
 			backendTitle = String(details.title || '').trim();
-			bootstrapDetected = !!details.bootstrap_detected;
-			recommendedExePath = cleanShortcutPath(details.recommended_exe_path || '');
-			recommendedStartDir = cleanShortcutPath(details.recommended_start_dir || '');
-			trackingExecutableAutoApply = details.tracking_executable_auto_apply === true;
-			if (recommendedExePath) {
-				backendLog(`Tracking executable recommendation for ${title || backendTitle || shortcutAppId}: ${recommendedExePath}`);
-			} else if (exePath) {
+			if (exePath) {
 				backendLog(`Resolved shortcut executable from shortcuts.vdf for ${title || backendTitle || shortcutAppId}`);
 			}
 		}
@@ -156,14 +144,10 @@ export async function buildShortcutDetectionContext(
 		exePath,
 		startDir: cleanShortcutPath(startDir),
 		launchOptions: String(launchOptions || '').trim(),
-		bootstrapDetected,
-		recommendedExePath,
-		recommendedStartDir,
-		trackingExecutableAutoApply,
 	};
 }
 
-export const DETECTION_MODEL_VERSION = 'v10';
+export const DETECTION_MODEL_VERSION = 'v11';
 
 function parseDetectionCandidate(candidate: any): ShortcutDetectionCandidate {
 	return {
@@ -212,16 +196,12 @@ import { mergeCandidateLists } from './candidate-merger';
 
 export async function detectShortcutCandidatesLocal(context: ShortcutDetectionContext): Promise<ShortcutDetectionResult | null> {
 	const titleHint = detectionTitleHint(context.title);
-	const matchingExePath = context.recommendedExePath || context.exePath;
-	const matchingStartDir = context.recommendedStartDir || context.startDir;
 	try {
 		const raw = await detectGameCandidatesLocalBackend({
 			request_json: JSON.stringify({
 				title: titleHint,
 				exe_path: context.exePath,
 				start_dir: context.startDir,
-				game_exe_path: matchingExePath,
-				game_start_dir: matchingStartDir,
 				launch_options: context.launchOptions,
 				shortcut_app_id: String(context.shortcutAppId),
 				phase: 'local',
@@ -250,16 +230,12 @@ export async function enrichShortcutCandidatesRemote(
 	const language = await getSteamLanguage().catch((): string => 'english');
 	if (signal?.aborted) return null;
 	const titleHint = detectionTitleHint(context.title);
-	const matchingExePath = context.recommendedExePath || context.exePath;
-	const matchingStartDir = context.recommendedStartDir || context.startDir;
 	try {
 		const raw = await detectGameCandidatesBackend({
 			request_json: JSON.stringify({
 				title: titleHint,
 				exe_path: context.exePath,
 				start_dir: context.startDir,
-				game_exe_path: matchingExePath,
-				game_start_dir: matchingStartDir,
 				launch_options: context.launchOptions,
 				shortcut_app_id: String(context.shortcutAppId),
 				language,
@@ -284,9 +260,7 @@ export async function enrichShortcutCandidatesRemote(
 export async function detectShortcutCandidates(context: ShortcutDetectionContext): Promise<ShortcutDetectionResult | null> {
 	const language = await getSteamLanguage().catch((): string => 'english');
 	const titleHint = detectionTitleHint(context.title);
-	const matchingExePath = context.recommendedExePath || context.exePath;
-	const matchingStartDir = context.recommendedStartDir || context.startDir;
-	const cacheKey = [DETECTION_MODEL_VERSION, context.shortcutAppId, titleHint, context.exePath, context.startDir, matchingExePath, matchingStartDir, context.launchOptions, language].join('|');
+	const cacheKey = [DETECTION_MODEL_VERSION, context.shortcutAppId, titleHint, context.exePath, context.startDir, context.launchOptions, language].join('|');
 	try {
 		return await detectionCache.get(cacheKey, async (): Promise<ShortcutDetectionResult | null> => {
 			try {

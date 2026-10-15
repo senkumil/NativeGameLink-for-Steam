@@ -45,8 +45,6 @@ export interface OrchestratorLinkOptions {
 	steamAppId: string;
 	skipLauncher?: boolean;
 	existingLaunchOptions?: string;
-	trackingExecutable?: string;
-	trackingStartDir?: string;
 	shortcutExecutable?: string;
 	onStatus?: (message: string, color?: string) => void;
 	onPhase?: (phase: 'identity' | 'assets') => void;
@@ -72,7 +70,7 @@ export class LinkOrchestrator {
 		tx.phase = 'resolving_identity';
 		const title = options.title;
 		const initialId = options.shortcutAppId || 0;
-		const executableHint = options.shortcutExecutable || options.trackingExecutable || '';
+		const executableHint = options.shortcutExecutable || '';
 
 		const waits = [0, 100, 250, 500, 900, 1500, 2500];
 		await refreshShortcutRecordsFromBackend().catch((): void => {});
@@ -148,7 +146,7 @@ export class LinkOrchestrator {
 
 	/**
 	 * Step 3: Mutate shortcut identity in Steam Client.
-	 * Applies tracking executable/start dir, launcher bypass, and renames with regeneration guard.
+	 * Applies launcher bypass and renames with regeneration guard, preserving the selected executable and start directory.
 	 */
 	static async mutateShortcutIdentity(
 		tx: LinkTransaction,
@@ -159,7 +157,6 @@ export class LinkOrchestrator {
 		resolvedShortcutId: number;
 		officialName: string;
 		nameReady: boolean;
-		trackingApplied: boolean;
 		noLauncherConfigured: boolean;
 		staleIds: Set<number>;
 	}> {
@@ -170,25 +167,9 @@ export class LinkOrchestrator {
 		const officialName = String(canonicalName || data.name || options.title).trim();
 
 		const apps = (window as any).SteamClient?.Apps;
-		let trackingApplied = false;
 		let noLauncherConfigured = false;
 		let nameApplied = false;
 		let nameReady = false;
-
-		if (options.trackingExecutable && typeof apps?.SetShortcutExe === 'function') {
-			try {
-				await withTimeout(Promise.resolve(apps.SetShortcutExe(shortcutAppId, options.trackingExecutable)), 5000, 'shortcut_exe_timeout');
-				trackingApplied = true;
-			} catch (error) {
-				backendLog(`Tracking executable application failed for ${shortcutAppId}: ${error}`);
-			}
-		}
-
-		if (options.trackingStartDir && typeof apps?.SetShortcutStartDir === 'function') {
-			try {
-				await withTimeout(Promise.resolve(apps.SetShortcutStartDir(shortcutAppId, options.trackingStartDir)), 5000, 'shortcut_startdir_timeout');
-			} catch {}
-		}
 
 		const skipArg = getOptimalLauncherSkipArg(tx.targetSteamAppId);
 		if (typeof apps?.SetShortcutLaunchOptions === 'function') {
@@ -267,7 +248,6 @@ export class LinkOrchestrator {
 			resolvedShortcutId: shortcutAppId,
 			officialName,
 			nameReady,
-			trackingApplied,
 			noLauncherConfigured,
 			staleIds,
 		};
@@ -314,8 +294,8 @@ export class LinkOrchestrator {
 		rememberShortcutSteamAppId(shortcutAppId, tx.targetSteamAppId);
 
 		const shortcutObj = getShortcutAppById(shortcutAppId);
-		const shortcutExe = readShortcutOverviewField(shortcutObj, 'strShortcutExe', 'm_strShortcutExe', 'shortcut_exe', 'strExePath') || options.trackingExecutable || '';
-		const shortcutStartDir = readShortcutOverviewField(shortcutObj, 'strShortcutStartDir', 'm_strShortcutStartDir', 'shortcut_start_dir', 'strStartDir') || options.trackingStartDir || '';
+		const shortcutExe = readShortcutOverviewField(shortcutObj, 'strShortcutExe', 'm_strShortcutExe', 'shortcut_exe', 'strExePath') || options.shortcutExecutable || '';
+		const shortcutStartDir = readShortcutOverviewField(shortcutObj, 'strShortcutStartDir', 'm_strShortcutStartDir', 'shortcut_start_dir', 'strStartDir');
 
 		void neutralizeSteamAppIdFileBackend({
 			request_json: JSON.stringify({
@@ -500,7 +480,6 @@ export class LinkOrchestrator {
 			let finalMessage = !assetResult.artwork.complete || !assetResult.iconApplied
 				? gdlText('linked_resources_pending', 'Linked to “{name}”. Some images or the icon are still pending.', { name: identityResult.officialName })
 				: gdlText('linked_official', '✓ Linked to "{name}". Official name, icon and artwork updated.', { name: identityResult.officialName });
-			if (identityResult.trackingApplied) finalMessage += gdlText('tracking_executable_updated', ' Steam will now launch the long-running game executable so playtime can be tracked.');
 			if (shouldAutoApplyNoLauncher(steamAppId) && identityResult.noLauncherConfigured) finalMessage += ' -nolauncher.';
 			onStatus(finalMessage, '#5ba32b');
 

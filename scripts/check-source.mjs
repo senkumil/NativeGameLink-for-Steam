@@ -326,11 +326,17 @@ try {
 		fail(path.join(frontendRoot, 'features', 'shortcuts', 'detection.ts'),
 			'transient Store-search failures must remain retryable instead of caching an empty match list');
 	}
-	if (!achievementBackendCacheSource.includes('next(cached.by_name or {})')
-		|| !achievementBackendCacheSource.includes('if next(result) then')
-		|| !achievementGameInfoSource.includes('if (!data) return info;')) {
+	const retryableAchievementMetadata = achievementBackendCacheSource.includes('local cache_ttl = cached and cached.verified and 1800 or 15')
+		&& achievementBackendCacheSource.includes('source = "steam_public_unverified", verified = false')
+		&& achievementBackendCacheSource.includes('if not next(hinted) and disk_cached and next(disk_cached) then')
+		&& achievementBackendCacheSource.includes('if next(schema) then')
+		&& achievementBackendCacheSource.includes('type(data) ~= "table" or not next(data) then return end');
+	const failedInfoReturn = achievementGameInfoSource.indexOf('if (!data) return info;');
+	const successfulInfoCacheWrite = achievementGameInfoSource.indexOf('gameInfoCache.set(appid, info);', failedInfoReturn);
+	if (!retryableAchievementMetadata || failedInfoReturn < 0
+		|| successfulInfoCacheWrite < 0 || failedInfoReturn > successfulInfoCacheWrite) {
 		fail(path.join(frontendRoot, 'features', 'achievements', 'game-info.ts'),
-			'achievement metadata transport failures must not become long-lived empty snapshots');
+			'failed achievement game-info reads must remain uncached; backend metadata may briefly retry unverified results but persist only nonempty verified schemas');
 	}
 	if (!playtimeServiceSource.includes('playtimeRequestGeneration += 1')
 		|| !playtimeServiceSource.includes('generation === playtimeRequestGeneration')
@@ -361,15 +367,14 @@ if (historicalSidebarSource.includes('developers?.join(')
 	fail(historicalSidebarFile,
 		'legacy metadata renderers must tolerate text and numeric-keyed object fields instead of assuming JSON arrays');
 }
-if (!communityStylesSource.includes('.gdl-community-grid { display:block;position:relative;')
-	|| !communityViewSource.includes('bottoms.indexOf(Math.min(...bottoms))')
+if (!communityStylesSource.includes('.gdl-community-grid { display:grid;position:relative;')
+	|| !communityStylesSource.includes('grid-auto-flow:row dense;gap:32px 24px;align-items:stretch;')
+	|| !communityViewSource.includes("setStyle(card, '--gdl-community-card-rows'")
 	|| !communityViewSource.includes('observer?.observe(card)')
 	|| !communityViewSource.includes('orderCommunityItems(sortByLanguage(filteredItems))')
-	|| communityStylesSource.includes('-webkit-line-clamp')
-	|| communityStylesSource.includes('align-items:stretch')
-	|| communityStylesSource.includes('grid-column: span 2')
+	|| !communityStylesSource.includes('-webkit-line-clamp:6;')
 	|| !communityStylesSource.includes('#gdl-community-inner { width:100%;min-width:0;max-width:100%;overflow:hidden')) {
-	fail(communityStylesFile, 'community cards must pack by actual height, respond to late image loading and show complete text within their own main-content container');
+	fail(communityStylesFile, 'community cards must follow native aligned rows, dense placement, guide excerpts and late image sizing within their own main-content container');
 }
 if (communityStylesSource.includes('#gdl-community-content { margin-top:34px;overflow:visible;contain:inline-size;')
 	|| communityStylesSource.includes('#gdl-community-content,#gdl-community-content>*')) {
@@ -391,9 +396,9 @@ if (!rendererSource.includes("mainContentStack.id = 'gdl-main-content-stack'")
 	|| rendererSource.includes('width:100% !important;min-width:0 !important;max-width:100%')) {
 	fail(rendererFile, 'Activity and Community must share one atomic main-column stack so Steam cannot place Community after the sidebar row');
 }
-if (!activityStylesSource.includes('#gdl-main-content-stack { width:calc(67% - 32px) !important; }')
-	|| !activityStylesSource.includes('div.NarrowWindow #gdl-main-content-stack { width:calc(67% - 22px) !important; }')
-	|| !activityStylesSource.includes('div.UltraNarrowRightPanel #gdl-main-content-stack { width:100% !important; }')) {
+if (!activityStylesSource.includes('#gdl-main-content-stack, #gdl-skeleton { width:calc(67% - 32px) !important; }')
+	|| !activityStylesSource.includes('div.NarrowWindow #gdl-main-content-stack, div.NarrowWindow #gdl-skeleton { width:calc(67% - 22px) !important; }')
+	|| !activityStylesSource.includes('div.UltraNarrowRightPanel #gdl-main-content-stack, div.UltraNarrowRightPanel #gdl-skeleton { width:100% !important; }')) {
 	fail(activityStylesFile, 'the injected main stack must mirror Steam desktop\'s floated 67/33 responsive column geometry');
 }
 if (historicalSidebarSource.includes('gdl-historical-status')
@@ -533,8 +538,12 @@ try {
 	}
 	if (!notifications.includes('applyNativeAchievementToastPresentation(')
 			|| !notifications.includes('NATIVE_ACHIEVEMENT_TOAST_CARD_CLASS')
-			|| !notifications.includes('comparableImageUrl(source, doc) === expectedImage')) {
-		fail(achievementNotifications, 'native achievement notifications must be enlarged by matching their real icon, without affecting other Steam toast types');
+			|| !notifications.includes('GetCurrentToastNotification() !== active.notification')
+			|| !notifications.includes('if (comparableImageUrl(source, doc) !== expectedImage) return false;')
+			|| !notifications.includes('toastClasses.some(css => parent!.classList.contains(css))')
+			|| !notifications.includes('clearNativeAchievementToastPresentation(')
+			|| !notifications.includes('card.classList.remove(NATIVE_ACHIEVEMENT_TOAST_CARD_CLASS)')) {
+		fail(achievementNotifications, 'native toast presentation must require the exact active plugin notification, matching icon and native template ancestry, and remove its classes on retirement');
 	}
   if (!notifications.includes('localAchievementToastProcessing')
       || !notifications.includes('await showAchievementToast(next.appid, next.achievement')) {
@@ -602,7 +611,8 @@ try {
   if (!backendNews.includes('partner_events_unavailable') || backendNews.includes('Partner events parse failed')) {
     fail(newsBackend, 'retired AppIDs must be treated as cached no-content, without repeated partner-event parse warnings');
   }
-  if (!frontendNews.includes('partnerEventsUnavailable') || !frontendNews.includes('cacheSet(cacheKey, merged)')) {
+  if (!frontendNews.includes('historical ? emptyResult') || !frontendNews.includes('if (!available.hadTransportFailure)')
+      || !frontendNews.includes('cacheSet(cacheKey, merged)')) {
     fail(newsFrontend, 'retired-AppID news results must be cached as an expected empty state');
   }
 	if (!linking.includes('SetShortcutName') || !linking.includes('resolveShortcutIdAfterRename')) {
@@ -700,8 +710,8 @@ try {
 		fail(libraryArtwork, 'a legacy Store header must not prevent the SteamGridDB hero fallback from running');
 	}
 	if (!bigPictureSource.includes('fetchPlaytimeStatsBatch(shortcuts.map')
-		|| !bigPictureSource.includes("setBigPicturePlaytimeField(app, 'minutes_playtime_last_two_weeks', recent)")
-		|| !bigPictureSource.includes('playtimeOwnDescriptors')
+		|| !bigPictureSource.includes("setBigPicturePlaytimeField(doc, app, 'minutes_playtime_last_two_weeks', recent)")
+		|| !bigPictureSource.includes('restoreBigPictureOverviewState')
 		|| !bigPictureSource.includes('rerenderScheduler.request(doc, () => gdlBigPictureActive')) {
 		fail(bigPictureRuntime, 'recently-played shortcut cards must merge canonical fallback playtime, update both periods reversibly and request a native rerender');
 	}
@@ -790,13 +800,15 @@ try {
 	const activityViewSource = await fs.readFile(path.join(frontendRoot, 'features', 'library', 'activity-view.ts'), 'utf8');
 	if (!linkedSidebarSource.includes("node.dataset.gdlAchievementsPending = '1'")
 		|| linkedSidebarSource.includes('cacheLocalAchievements(cachedAchievements')
-		|| !linkedSidebarSource.includes("metadata_source: 'store_highlights_pending'")
-		|| !linkedSidebarSource.includes('Array.from({ length: missingCount }')
+		|| linkedSidebarSource.includes("metadata_source: 'store_highlights_pending'")
+		|| !linkedSidebarSource.includes('renderPendingAchievementSidebarHtml(total)')
+		|| !achievementSidebarSource.includes('data-gdl-achievement-pending="1"')
+		|| !achievementSidebarSource.includes('role="status"')
 		|| achievementSidebarStyleSource.includes('[data-gdl-achievements-pending="1"] { visibility:hidden')
 		|| !achievementSidebarSource.includes("removeAttribute('data-gdl-achievements-pending')")
 		|| !achievementChromeSource.includes('revealPendingAchievementSidebar(doc)')) {
 		fail(path.join(frontendRoot, 'features', 'library', 'sidebar-sections.ts'),
-			'metadata-only achievement highlights must remain visible as an uncached, correctly counted provisional 0/N box until local progress resolves');
+			'unknown achievement progress must use an uncached neutral loading box, without presenting Store highlights as confirmed locked 0/N progress');
 	}
 	if (activityViewSource.includes('renderActivityFeedSkeletonHtml')
 		|| !activityViewSource.includes('renderUnifiedActivityFeedSnapshot(')
@@ -866,11 +878,12 @@ try {
 
 // Native Library metadata, controls and layout belong entirely to Steam.
 try {
-	const [libraryRuntimeSource, nativeRouteSource, routeExitSource, runtimeAppSource] = await Promise.all([
+	const [libraryRuntimeSource, nativeRouteSource, routeExitSource, runtimeAppSource, legacyRepairSource] = await Promise.all([
 		fs.readFile(path.join(frontendRoot, 'features', 'library', 'runtime.ts'), 'utf8'),
 		fs.readFile(path.join(frontendRoot, 'features', 'library', 'native-route.ts'), 'utf8'),
 		fs.readFile(path.join(frontendRoot, 'features', 'library', 'route-exit.ts'), 'utf8'),
 		fs.readFile(path.join(frontendRoot, 'runtime', 'app.tsx'), 'utf8'),
+		fs.readFile(path.join(frontendRoot, 'steam', 'achievement-cache-repair.ts'), 'utf8'),
 	]);
 	if (/if \(!noticeInfo\)\s*\{\s*handleLibraryNavigation\(doc\)/.test(libraryRuntimeSource)) {
 		fail(path.join(frontendRoot, 'features', 'library', 'runtime.ts'),
@@ -899,14 +912,25 @@ try {
 	if (!nativeBoundaryBlock.includes('hasOwnedLibraryChrome(popupDoc)')
 		|| !nativeBoundaryBlock.includes('tryInjectLibraryData(popupDoc)')
 		|| runtimeAppSource.includes('reconcileNativeInfoPreference')
-		|| runtimeAppSource.includes('installLegacyAchievementCacheRepair')
+		|| nativeBoundaryBlock.includes('installLegacyAchievementCacheRepair')
 		|| nativeBoundaryBlock.includes('syncDesktopLibraryHomePlaytimeDom')
 		|| nativeBoundaryBlock.includes('captureNativeUiBlueprints')
 		|| runtimeAppSource.includes('native-info-guard')
 		|| runtimeAppSource.includes('stabilizeNativeInfoPanel')
 		|| libraryRuntimeSource.includes('findReactClassOwner')) {
 		fail(path.join(frontendRoot, 'runtime', 'app.tsx'),
-			'native Library pages may only retire owned remnants; native controls and achievement caches must never be refreshed or toggled');
+			'native route callbacks may only retire owned remnants; they must never toggle native controls or refresh achievement caches while navigating');
+	}
+	if (!runtimeAppSource.includes('mainWindowDoc = popupDoc; lifecycle.add(installLegacyAchievementCacheRepair(popupDoc));')
+		|| !legacyRepairSource.includes('LEGACY_CACHE_TIME = 2147483647')
+		|| !legacyRepairSource.includes('keys.length !== 5')
+		|| !legacyRepairSource.includes('DISCOVERY_MS = 3000')
+		|| !legacyRepairSource.includes('MAX_REPAIRS = 128')
+		|| !legacyRepairSource.includes('queue.call(cache, id)')
+		|| !legacyRepairSource.includes('view.clearTimeout(timer)')
+		|| /\bmap\.(?:set|delete|clear)\s*\(|SaveCacheFile|writeFile/.test(legacyRepairSource)) {
+		fail(path.join(frontendRoot, 'steam', 'achievement-cache-repair.ts'),
+			'legacy repair must belong to the validated desktop document, expire within three seconds and ask Steam to refresh only the exact bounded sentinel shape without writing native cache entries/files');
 	}
 	const ownedRouteCleanupBlock = libraryRuntimeSource.match(
 		/function cleanupOwnedLibraryChromeAfterRouteExit\(doc: Document\): void \{[\s\S]*?\n\}/,
@@ -948,7 +972,9 @@ try {
 	}
 	if (!hydrationSource.includes('ownedActivityFeed(session)')
 		|| !hydrationSource.includes('shortcutAppId: session.shortcutAppId')
-		|| !friendsSource.includes('section.dataset.gdlSteamAppId !== steamAppId')
+		|| !friendsSource.includes('section.dataset.gdlSteamAppId === steamAppId')
+		|| !friendsSource.includes('section.dataset.gdlShortcutAppId === order.shortcutAppId')
+		|| !friendsSource.includes('order.isCurrent()')
 		|| !friendsSource.includes('guard.isCurrent()')) {
 		fail(path.join(frontendRoot, 'features', 'library', 'hydration.ts'),
 			'news, activity and friends hydration must validate the exact route-owned DOM after every asynchronous boundary');
@@ -958,7 +984,7 @@ try {
 		|| !cacheSource.includes("/^events\\d+_/.test(key)) return protectedCoreAppIds.has(cacheAppId(key)) ? 3 : 0")
 		|| !newsSource.includes('const TRANSIENT_NEWS_RETRY_MS = 2 * 60 * 1000')
 		|| !newsSource.includes('const memory = newsRequests.peek(key)')
-		|| !newsSource.includes('hadTransportFailure ? [...deduped, ...stale] : deduped')
+		|| !newsSource.includes('available.hadTransportFailure ? [...available.items, ...retainedStale] : available.items')
 		|| newsSource.includes('transientNewsResults')) {
 		fail(path.join(frontendRoot, 'core', 'cache.ts'),
 			'persistent cache must retain compact linked feeds while partial legacy responses use stale-while-revalidate backoff');
@@ -1015,14 +1041,14 @@ try {
 
 	const sharedSnapshotReads = [
 		'getCachedGameData(shortcut.steamAppId, language)',
-		'getCachedLocalAchievementsForGame(shortcut.steamAppId, String(shortcut.id))',
+		'getCachedLocalAchievementsForShortcut(shortcut.steamAppId, String(shortcut.id))',
 		'getCachedNews(shortcut.steamAppId, language)',
 		'getCachedCommunityContent(shortcut.steamAppId, language)',
 		'getCachedOfficialCommunityItems(shortcut.steamAppId, language)',
 	].every(token => detailsSource.includes(token));
 	if (!detailsSource.includes('cachedBigPictureDetailData(') || !sharedSnapshotReads) {
 		fail(bigPictureDetails,
-			'Big Picture details must seed revisits from the shared persistent, exact-language resource snapshots');
+			'Big Picture revisits must use exact-language shared resources and the exact shortcut achievement snapshot, never another installation sharing its Steam AppID');
 	}
 	if (!detailsSource.includes('data: cachedBigPictureDetailData(shortcut, language)')
 		|| !detailsSource.includes('scheduleDetailRetry(doc)')

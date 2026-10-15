@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import ts from 'typescript';
 
@@ -9,7 +8,9 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const edge = process.env.CLOUD_BROWSER_EXECUTABLE || 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
 assert(fs.existsSync(edge), `Edge executable missing: ${edge}`);
 const sourceFiles = {
+  'class-module-cache': 'frontend/steam/class-module-cache.ts',
   css: 'frontend/steam/css.ts', 'native-dom': 'frontend/steam/native-dom.ts',
+  'class-module-cache': 'frontend/steam/class-module-cache.ts', SteamWebpackRuntime: 'frontend/steam/modules/SteamWebpackRuntime.ts',
   'library-details': 'frontend/steam/library-details.ts', 'playbar-visibility': 'frontend/steam/playbar-visibility.ts',
   'achievement-playbar-space': 'frontend/steam/achievement-playbar-space.ts',
   'native-route': 'frontend/features/library/native-route.ts', navigation: 'frontend/features/achievements/navigation.ts',
@@ -17,6 +18,7 @@ const sourceFiles = {
   lifecycle: 'frontend/features/achievements/lifecycle.ts', cache: 'frontend/features/achievements/cache.ts',
   dom: 'frontend/core/dom.ts',
   progress: 'frontend/features/achievements/progress.ts', service: 'frontend/features/achievements/service.ts',
+  'native-schema': 'frontend/features/achievements/native-schema.ts',
   'achievement-chrome': 'frontend/features/library/achievement-chrome.ts',
 };
 const sources = Object.fromEntries(Object.entries(sourceFiles).map(([name, filename]) => [name,
@@ -47,6 +49,7 @@ async function browserChecks(sources) {
   const localization = { steamLanguageSync: () => 'english', gdlText: (_key, fallback) => fallback, loc: (_key, fallback) => fallback };
   const dependencies = {
     '@steambrew/client': { findClassModule: () => null },
+    './modules/SteamWebpackRuntime': { steamWebpackRuntime: { getRuntimeIdentity: () => null, getAllModules: () => [] } },
     './localization': localization, '../../steam/localization': localization,
     '../../api/backend': { backendLog() {}, fetchLocalAchievementsBackend({ request_json }) {
       let resolve; const promise = new Promise(done => { resolve = done; });
@@ -63,7 +66,7 @@ async function browserChecks(sources) {
     '../../steam/library-sidebar': { withoutLibrarySidebarMutations: records => records },
     '../../steam/sidebar-interaction': { findLibrarySidebarDocument: () => document, runWhenLibrarySidebarIdle: (_doc, _key, task) => Promise.resolve(task()), cancelLibrarySidebarWork() {} },
     './constants': { GDL_INJECTED: 'gdl-library-injected' }, './notice': { findNonSteamNotice: () => null },
-    './modal': { openLocalAchievementsModal: async (_doc, data) => { opened.push(data); } },
+    './modal': { openLocalAchievementsModal: async (_doc, data) => { opened.push(data); }, disposeLocalAchievementsModal() {}, disposeAllLocalAchievementsModals() {} },
     './sidebar': { renderLocalAchievementSidebar: (_doc, data) => sidebar.push(data), revealPendingAchievementSidebar() {} },
     '../achievements/sidebar': { renderLocalAchievementSidebar: (_doc, data) => sidebar.push(data), revealPendingAchievementSidebar() {} },
     './styles': { ensureLocalAchievementStyles() {} }, './notifications': {}, './game-info': {}, './context': {},
@@ -212,22 +215,17 @@ const scratch = fs.mkdtempSync(path.join(scratchRoot, 'achievement-routing-'));
 const htmlPath = path.join(scratch, 'fixture.html');
 const serialize = value => JSON.stringify(value).replace(/</g, '\u003c');
 fs.writeFileSync(htmlPath, `<!doctype html><html><head><meta charset="utf-8"><style>body{background:#171d25;color:#ddd;font:14px Arial}pre{white-space:pre-wrap}#fixture{width:1050px}</style></head><body><div id="fixture"></div><script>(${browserChecks.toString()})(${serialize(sources)}).catch(error=>{const output=document.createElement('pre');output.id='achievement-routing-result';output.textContent=JSON.stringify({ok:false,results:[],error:String(error.stack||error)});document.body.append(output)});document.currentScript.remove();</script></body></html>`);
-const profile = path.join(scratch, 'edge-profile');
-const child = spawn(edge, ['--headless=new', '--disable-gpu', '--disable-background-networking', '--no-first-run', '--no-default-browser-check', '--allow-file-access-from-files', '--window-size=1280,900', '--remote-debugging-port=0', `--user-data-dir=${profile}`, pathToFileURL(htmlPath).href], { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] });
-let socket, report, browserError; child.on('error', error => { browserError = error; });
+const playwrightModule = process.env.PLAYWRIGHT_MODULE_PATH || path.join(process.env.USERPROFILE || '',
+  '.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright/index.mjs');
+const { chromium } = await import(pathToFileURL(playwrightModule).href);
+const browser = await chromium.launch({ executablePath: edge, headless: true,
+  args: ['--disable-background-networking', '--no-first-run', '--allow-file-access-from-files'] });
+let report;
 try {
-  const endpointFile = path.join(profile, 'DevToolsActivePort'), deadline = Date.now() + 10000;
-  while (!fs.existsSync(endpointFile) && Date.now() < deadline) { if (browserError) throw browserError; await new Promise(resolve => setTimeout(resolve, 50)); }
-  assert(fs.existsSync(endpointFile), 'Edge did not publish its debugging endpoint');
-  const port = fs.readFileSync(endpointFile, 'utf8').trim().split(/\r?\n/)[0];
-  const targets = await fetch(`http://127.0.0.1:${port}/json/list`).then(response => response.json());
-  socket = new WebSocket(targets.find(target => target.type === 'page').webSocketDebuggerUrl);
-  await new Promise((resolve, reject) => { socket.addEventListener('open', resolve, { once: true }); socket.addEventListener('error', reject, { once: true }); });
-  let nextId = 0; const pending = new Map();
-  socket.addEventListener('message', event => { const message = JSON.parse(event.data); const item = pending.get(message.id); if (!item) return; pending.delete(message.id); clearTimeout(item.timer); message.error ? item.reject(new Error(JSON.stringify(message.error))) : item.resolve(message.result); });
-  const call = (method, params = {}) => new Promise((resolve, reject) => { const id = ++nextId; const timer = setTimeout(() => { pending.delete(id); reject(new Error(`CDP timed out: ${method}`)); }, 15000); pending.set(id, { resolve, reject, timer }); socket.send(JSON.stringify({ id, method, params })); });
-  const evaluated = await call('Runtime.evaluate', { expression: `(async()=>{const deadline=Date.now()+10000;while(Date.now()<deadline){const out=document.getElementById('achievement-routing-result');if(out)return JSON.parse(out.textContent);await new Promise(resolve=>setTimeout(resolve,20))}return {ok:false,results:[],error:'Fixture timeout'}})()`, awaitPromise: true, returnByValue: true });
-  assert(!evaluated.exceptionDetails, JSON.stringify(evaluated.exceptionDetails)); report = evaluated.result.value;
-} finally { socket?.close(); child.kill(); }
+  const page = await browser.newPage();
+  await page.goto(pathToFileURL(htmlPath).href);
+  await page.locator('#achievement-routing-result').waitFor({ timeout: 10000 });
+  report = JSON.parse(await page.locator('#achievement-routing-result').textContent());
+} finally { await browser.close(); }
 assert(report.ok, `${report.error}\nFixture: ${htmlPath}`);
 console.log(`Achievement routing passed: ${report.checks} checks; actual DOM and route ownership, zero writes on 100 stable updates, same-SteamID races, stable migration/click state and public native-cache preservation.`);

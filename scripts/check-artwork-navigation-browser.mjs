@@ -16,7 +16,12 @@ const sources = Object.fromEntries([
   ['render-session', 'frontend/features/library/render-session.ts'],
   ['sidebar-interaction', 'frontend/steam/sidebar-interaction.ts'],
   ['library-sidebar', 'frontend/steam/library-sidebar.ts'],
+  ['class-module-cache', 'frontend/steam/class-module-cache.ts'],
   ['css', 'frontend/steam/css.ts'],
+  ['native-dom', 'frontend/steam/native-dom.ts'],
+  ['library-details', 'frontend/steam/library-details.ts'],
+  ['library-header', 'frontend/steam/library-header.ts'],
+  ['native-artwork-ready', 'frontend/features/library/native-artwork-ready.ts'],
 ].map(([name, filename]) => [name, ts.transpileModule(fs.readFileSync(path.join(root, filename), 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
 }).outputText]));
@@ -29,7 +34,8 @@ async function browserChecks(sources) {
   const ids = { a: 3000000001, b: 3000000002, sibling: 3000000003 };
   const steamIds = { a: '111', b: '222' };
   const apps = new Map([[ids.a, { display_name: 'Game A' }], [ids.b, { display_name: 'Game B' }], [ids.sibling, { display_name: 'Game A sibling' }]]);
-  const data = id => ({ name: `Game ${id === steamIds.a ? 'A' : 'B'}`, achievements: { total: 0 } });
+  const data = id => ({ name: `Game ${id === steamIds.a ? 'A' : 'B'}`, achievements: { total: 0 },
+    detailed_description: 'Already cached metadata and community description. '.repeat(12000) });
   const cached = new Map(Object.values(steamIds).map(id => [id, data(id)]));
   const deferred = new Map();
   const renders = [];
@@ -37,6 +43,7 @@ async function browserChecks(sources) {
   let scans = 0;
   let prepares = 0;
   let stages = 0;
+  let cacheReads = 0;
   const shortcutMutationAttempts = [];
   let frameTurn = 0;
   const nativeRaf = window.requestAnimationFrame.bind(window);
@@ -48,6 +55,26 @@ async function browserChecks(sources) {
   const titleId = title => Array.from(apps).find(([, app]) => app.display_name === title)?.[0] || null;
   const pendingExit = new WeakSet();
   const nativeHero = document.getElementById('native-hero');
+  const nativeLogo = document.getElementById('native-logo');
+  const nativeHeader = document.getElementById('native-header');
+  const committedRoot = { tag: 3, stateNode: {}, return: null, child: null, alternate: null };
+  committedRoot.stateNode.current = committedRoot;
+  const committedHost = { tag: 5, memoizedProps: {
+    get overview() { return { appid: document.headerId ?? document.routeId }; },
+  }, return: committedRoot, child: null, sibling: null, alternate: null };
+  committedRoot.child = committedHost;
+  nativeHeader.__reactFiber$artworkFixture = committedHost;
+  const nativeImageStates = new Map();
+  const setNativeImageReady = (image, ready) => {
+    if (!nativeImageStates.has(image)) {
+      const state = { ready };
+      nativeImageStates.set(image, state);
+      Object.defineProperties(image, {
+        complete: { configurable: true, get: () => state.ready },
+        naturalWidth: { configurable: true, get: () => state.ready ? image === nativeHero ? 800 : 160 : 0 },
+      });
+    } else nativeImageStates.get(image).ready = ready;
+  };
   const heroSrc = nativeHero.getAttribute('src');
   const heroPainted = () => {
     const rect = nativeHero.getBoundingClientRect();
@@ -57,9 +84,10 @@ async function browserChecks(sources) {
   };
   const dependencies = {
     '@steambrew/client': { findClassModule: () => null },
+    './modules/SteamWebpackRuntime': { steamWebpackRuntime: { getRuntimeIdentity: () => null, getAllModules: () => [] } },
     '../../api/backend': { backendLog: noop, neutralizeSteamAppIdFileBackend: async () => '' },
     '../../core/game-data': {
-      getCachedGameData: id => cached.has(id) ? { data: cached.get(id), fresh: true } : null,
+      getCachedGameData: id => { cacheReads++; return cached.has(id) ? { data: cached.get(id), fresh: true } : null; },
       getGameData: id => deferred.get(id)?.promise || Promise.resolve(data(id)),
       gameDataCache: {}, gameDataLanguageKey: (id, language) => `${language}:${id}`,
     },
@@ -71,8 +99,12 @@ async function browserChecks(sources) {
     },
     '../../core/perf': { perfMark: noop, perfMeasure: noop },
     '../../steam/localization': { steamLanguageSync: () => 'english' },
+    './localization': { steamLanguageSync: () => 'english', loc: (_key, fallback) => fallback, gdlText: (_key, fallback) => fallback },
     '../../steam/navigation': { installSteamNavigation: noop, disposeSteamNavigation: noop },
-    '../../steam/library-details': { paintedNativePlaybar: (doc, id) => (doc.headerId ?? doc.routeId) === id ? nativeHero : null },
+    '../../steam/library-details': {
+      paintedNativePlaybar: (doc, id) => (doc.headerId ?? doc.routeId) === id ? nativeHero : null,
+      committedHeaderAppId: element => load('library-details').committedHeaderAppId(element),
+    },
     '../../steam/shortcuts': {
       // Match the production resolver's title fallback: an old notice can still
       // resolve its previous shortcut even after the concrete route changes.
@@ -90,6 +122,8 @@ async function browserChecks(sources) {
     './social/status': { disposeStatusPostBox: noop },
     './community-view': { disposeCommunitySection: noop },
     './trading-cards': { disposeTradingCardUI: noop },
+	'./controller': { disposeControllerSidebarWatcher: noop },
+    './sidebar-order': { disposeLinkedSidebarOrder: noop },
     './shortcut-launch-options': { reconcileShortcutLaunchOptions: (...args) => shortcutMutationAttempts.push({ type: 'launch-options', args }) },
     './renderer': { renderLinkedGamePage: (doc, notice, model, id, news, friends, community, context) => {
       if (!context.isCurrent()) return false;
@@ -106,7 +140,8 @@ async function browserChecks(sources) {
       content.appendChild(links);
       return true;
     } },
-    './achievement-chrome': { finalizeLinkedAchievements: async () => undefined },
+    './achievement-chrome': { finalizeLinkedAchievements: async () => undefined, warmLocalAchievements: async () => undefined },
+    './activity-view': { disposeSharedActivityComposer: noop, parkSharedActivityComposer: noop },
     '../achievements/runtime': { hasCachedLocalAchievements: () => true, cacheLocalAchievements: noop },
     '../achievements/service': { fetchLocalAchievementData: async () => null },
     '../shortcuts/runtime': {
@@ -137,7 +172,9 @@ async function browserChecks(sources) {
       isLibraryRouteExitPending: doc => pendingExit.has(doc), removeOwnedLibraryChrome: noop,
     },
     './loading-stage': {
-      cancelLinkedShortcutLoading: noop, completeLinkedShortcutLoading: noop,
+      warmVisibleLinkedResources: noop,
+      syncEarlyLinkedFirstContent: () => null,
+      cancelLinkedShortcutLoading: noop, completeLinkedShortcutLoading: noop, cancelLinkedFirstContentPaint: noop,
       stageLinkedShortcutLoading: () => { stages++; }, LINKED_LOADING_SIDEBAR_ID: 'gdl-sidebar-skeleton',
     },
     './hydration': { hydrateLinkedRouteResources: noop },
@@ -161,6 +198,44 @@ async function browserChecks(sources) {
   let disposeSidebar;
   try {
     if (!nativeHero.complete) await new Promise(resolve => nativeHero.addEventListener('load', resolve, { once: true }));
+    if (!nativeLogo.complete) await new Promise(resolve => nativeLogo.addEventListener('load', resolve, { once: true }));
+    setNativeImageReady(nativeHero, true); setNativeImageReady(nativeLogo, true);
+    document.routeId = ids.a;
+    const artwork = load('native-artwork-ready');
+    const nativeHeaderHtml = nativeHeader.outerHTML;
+    const nativeArtworkWrites = [];
+    const nativeArtworkAudit = new MutationObserver(records => nativeArtworkWrites.push(...records));
+    nativeArtworkAudit.observe(nativeHeader, { attributes: true, characterData: true, childList: true, subtree: true });
+    const originalImage = window.Image, originalFetch = window.fetch, originalDecode = HTMLImageElement.prototype.decode;
+    let helperImageRequests = 0, helperFetchRequests = 0, helperDecodeCalls = 0;
+    window.Image = new Proxy(originalImage, { construct() { helperImageRequests++; throw new Error('Artwork readiness must not allocate another Image'); } });
+    window.fetch = () => { helperFetchRequests++; throw new Error('Artwork readiness must not fetch native assets'); };
+    HTMLImageElement.prototype.decode = () => { helperDecodeCalls++; throw new Error('Artwork readiness must not decode assets again'); };
+    try {
+      let warmReady = 0;
+      const disposeWarm = artwork.waitForNativeArtwork(document, () => warmReady++);
+      check(warmReady === 1, 'Already-loaded native hero and logo report readiness synchronously without a fixed loading delay');
+      disposeWarm();
+      setNativeImageReady(nativeHero, false); setNativeImageReady(nativeLogo, false);
+      let pendingReady = 0;
+      const disposePending = artwork.waitForNativeArtwork(document, () => pendingReady++);
+      await afterQueuedPaint();
+      check(pendingReady === 0, 'Two native RAFs alone never mark an unresolved hero/logo request ready');
+      setNativeImageReady(nativeHero, true); nativeHero.dispatchEvent(new Event('load'));
+      check(pendingReady === 0, 'A loaded hero still waits for the native logo while its image is pending');
+      setNativeImageReady(nativeLogo, true); nativeLogo.dispatchEvent(new Event('load'));
+      check(pendingReady === 1, 'Native logo load completes the readiness gate exactly once');
+      disposePending(); nativeHero.dispatchEvent(new Event('load')); nativeLogo.dispatchEvent(new Event('load'));
+      check(pendingReady === 1, 'Settled helper listeners cannot invoke readiness twice');
+      await Promise.resolve();
+      check(helperImageRequests === 0 && helperFetchRequests === 0 && helperDecodeCalls === 0,
+        'The actual readiness helper creates no Image, fetch or decode work');
+      check(nativeArtworkWrites.length === 0 && nativeHeader.outerHTML === nativeHeaderHtml,
+        'The readiness helper performs zero writes to native hero/logo markup, styles, sources or classes');
+    } finally {
+      window.Image = originalImage; window.fetch = originalFetch; HTMLImageElement.prototype.decode = originalDecode;
+      nativeArtworkAudit.disconnect();
+    }
     runtime = load('runtime');
     const sidebar = document.createElement('div');
     sidebar.className = load('css').LIBRARY_SIDEBAR_CLASSES().Container;
@@ -169,7 +244,8 @@ async function browserChecks(sources) {
     document.body.append(sidebar);
     disposeSidebar = load('sidebar-interaction').installLibrarySidebarInteraction(document);
     const immediateWheel = () => sidebar.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: 90 }));
-    const configure = () => runtime.configureLibraryRuntimeHost({ getMainWindowDoc: () => document, prepareLinkedPage: () => { prepares++; } });
+    const configure = () => runtime.configureLibraryRuntimeHost({ getMainWindowDoc: () => document,
+      prepareLinkedPage: () => { prepares++; }, waitForNativeArtwork: artwork.waitForNativeArtwork });
     configure(); document.routeId = ids.a;
     const pending = Array.from({ length: 100 }, () => runtime.tryInjectLibraryData(document));
     check(scans === 0 && renders.length === 0 && prepares === 0,
@@ -187,6 +263,56 @@ async function browserChecks(sources) {
       'Opening a mapped external game never launches shortcut identity, artwork, icon or launch-options writes');
     check(document.getElementById('native-hero') === nativeHero && nativeHero.getAttribute('src') === heroSrc && heroPainted(),
       'Cached navigation preserves the visible native hero node and source');
+
+    // Deliberately hold the existing native images unresolved for longer than
+    // the queue's RAFs. The cached payload is large, but not read or rendered.
+    document.routeId = ids.b; runtime.handleLibraryNavigation(document);
+    setNativeImageReady(nativeHero, false); setNativeImageReady(nativeLogo, false);
+    const beforeArtwork = { renders: renders.length, scans, prepares, cacheReads, stages };
+    let artworkQueueSettled = false;
+    const pendingArtwork = Array.from({ length: 100 }, () => runtime.tryInjectLibraryData(document));
+    Promise.all(pendingArtwork).then(() => { artworkQueueSettled = true; });
+    await afterQueuedPaint(); await wait(180);
+    check(!artworkQueueSettled && renders.length === beforeArtwork.renders && scans === beforeArtwork.scans
+      && prepares === beforeArtwork.prepares && cacheReads === beforeArtwork.cacheReads && stages === beforeArtwork.stages,
+    'An unresolved native hero/logo blocks all 100 heavy cached metadata signals beyond the native paint queue');
+    check(cached.get(steamIds.b).detailed_description.length > 500000,
+      'The pending-native-artwork regression uses an already-cached substantial metadata payload');
+    setNativeImageReady(nativeHero, true); nativeHero.dispatchEvent(new Event('load'));
+    await afterQueuedPaint();
+    check(renders.length === beforeArtwork.renders && cacheReads === beforeArtwork.cacheReads,
+      'The actual runtime keeps heavy cache reads and rendering deferred until the native logo also loads');
+    setNativeImageReady(nativeLogo, true); nativeLogo.dispatchEvent(new Event('load'));
+    await Promise.all(pendingArtwork);
+    check(renders.length === beforeArtwork.renders + 1 && renders.at(-1).id === steamIds.b,
+      'The native artwork load releases one coalesced cached render for the exact current route');
+
+    // Returning to the same AppID is a new navigation generation. A previous
+    // loaded image and a canceled wait must never authorize its next header.
+    document.routeId = ids.a; runtime.handleLibraryNavigation(document);
+    setNativeImageReady(nativeHero, false);
+    const beforeArtworkRoundtrip = { renders: renders.length, scans, prepares, cacheReads };
+    let canceledArtworkSettled = false;
+    const canceledArtwork = runtime.tryInjectLibraryData(document).then(() => { canceledArtworkSettled = true; });
+    await afterQueuedPaint();
+    check(!canceledArtworkSettled && renders.length === beforeArtworkRoundtrip.renders,
+      'A fresh A navigation waits for its pending native hero despite a warm metadata cache');
+    document.routeId = ids.b; runtime.handleLibraryNavigation(document);
+    await canceledArtwork;
+    check(canceledArtworkSettled && renders.length === beforeArtworkRoundtrip.renders,
+      'Navigating away settles and cancels the old pending-artwork metadata queue');
+    document.routeId = ids.a; runtime.handleLibraryNavigation(document);
+    let returningArtworkSettled = false;
+    const returningArtwork = runtime.tryInjectLibraryData(document).then(() => { returningArtworkSettled = true; });
+    await afterQueuedPaint(); await wait(80);
+    check(!returningArtworkSettled && renders.length === beforeArtworkRoundtrip.renders
+      && scans === beforeArtworkRoundtrip.scans && prepares === beforeArtworkRoundtrip.prepares
+      && cacheReads === beforeArtworkRoundtrip.cacheReads,
+    'A-to-B-to-A starts a fresh generation-scoped artwork wait rather than reusing readiness for the same AppID');
+    setNativeImageReady(nativeHero, true); nativeHero.dispatchEvent(new Event('load'));
+    await returningArtwork;
+    check(renders.length === beforeArtworkRoundtrip.renders + 1 && renders.at(-1).id === steamIds.a,
+      'Only the returning current A generation renders after its hero load; the canceled A wait stays retired');
 
     document.routeId = ids.b; runtime.handleLibraryNavigation(document);
     const beforeImmediateScroll = { renders: renders.length, scans, prepares };
@@ -314,6 +440,25 @@ async function browserChecks(sources) {
     check(scans > beforeUnmapped.scans && renders.length === beforeUnmapped.renders && shortcutMutationAttempts.length === 0,
       'Opening an unmapped external game discovers its notice without reprioritizing linking jobs or mutating shortcuts');
     mappingOverrides.delete(ids.b);
+
+    cached.delete(steamIds.b);
+    let resolveLateMetadata;
+    deferred.set(steamIds.b, { promise: new Promise(resolve => { resolveLateMetadata = resolve; }) });
+    const beforeLateMetadata = { renders: renders.length, stages };
+    const lateMetadata = runtime.tryInjectLibraryData(document);
+    await afterQueuedPaint();
+    check(stages > beforeLateMetadata.stages && renders.length === beforeLateMetadata.renders,
+      'A cold request begins after the native images are initially ready');
+    setNativeImageReady(nativeHero, false);
+    resolveLateMetadata(data(steamIds.b));
+    await afterQueuedPaint(); await wait(60);
+    check(renders.length === beforeLateMetadata.renders,
+      'A later metadata response rechecks native artwork readiness before its heavy render');
+    setNativeImageReady(nativeHero, true); nativeHero.dispatchEvent(new Event('load'));
+    await lateMetadata;
+    check(renders.length === beforeLateMetadata.renders + 1 && renders.at(-1).id === steamIds.b,
+      'The deferred metadata response renders once after the current native hero finishes loading');
+    deferred.delete(steamIds.b); cached.set(steamIds.b, data(steamIds.b));
     check(shortcutMutationAttempts.length === 0,
       'Cached, cold, repeated, sibling and native navigation stay read-only over Steam shortcut identity and artwork');
     runtime.disposeLibraryRuntime();
@@ -338,7 +483,7 @@ const serialize = value => JSON.stringify(value).replace(/</g, '\\u003c');
 fs.writeFileSync(htmlPath, `<!doctype html><html><head><meta charset="utf-8"><style>
 body{margin:24px;background:#171d25;color:#dcdedf;font-family:Arial}#native-hero{display:block;width:800px;height:220px;object-fit:cover}#metadata{min-height:32px}pre{font-size:12px;white-space:pre-wrap;max-width:1150px}
 </style></head><body><h2>Native artwork before metadata · actual Library runtime</h2>
-<img id="native-hero" alt="Native artwork remains visible" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='800' height='220'%3E%3Crect width='800' height='220' fill='%231b5a86'/%3E%3Ctext x='28' y='120' font-size='38' fill='white'%3ENative Steam artwork%3C/text%3E%3C/svg%3E">
+<header id="native-header" class="_2gZXhRmKUk68pA28-5ZmGQ tXlLvuTxOVL1w3aVPX4bm"><div class="_1IX7FPSY9Jb82KhBVBSkZa"><div class="QlR9EFwTdUNm_J5vx54_Z"><img id="native-hero" alt="Native artwork remains visible" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='800' height='220'%3E%3Crect width='800' height='220' fill='%231b5a86'/%3E%3Ctext x='28' y='120' font-size='38' fill='white'%3ENative Steam artwork%3C/text%3E%3C/svg%3E"></div></div><img id="native-logo" class="_3NBxSLAZLbbbnul8KfDFjw" width="160" height="40" alt="Native logo" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='40'%3E%3Crect width='160' height='40' fill='%231b5a86'/%3E%3Ctext x='8' y='28' font-size='22' fill='white'%3ENative logo%3C/text%3E%3C/svg%3E"></header>
 <div id="native-notice">Native shortcut notice</div><div id="metadata"></div>
 <script>(${browserChecks.toString()})(${serialize(sources)});document.currentScript.remove();</script></body></html>`);
 const profile = path.join(scratch, 'edge-profile');
@@ -396,5 +541,5 @@ try {
   socket?.close(); child.kill();
 }
 assert.ok(report.ok, `${report.error}\nPassed before failure: ${report.results.join('; ')}\nFixture: ${htmlPath}`);
-console.log(`Artwork navigation browser passed: ${report.checks} assertions; actual runtime deferral, 100-signal coalescing, native hero preservation, navigation cancellation, cold-request route guards and disposal.`);
+console.log(`Artwork navigation browser passed: ${report.checks} assertions; actual native artwork readiness, zero helper Image/fetch/decode or DOM writes, cached and late-result render gates, generation-scoped cancellation and native hero preservation.`);
 console.log(`Screenshot: ${screenshot}`);

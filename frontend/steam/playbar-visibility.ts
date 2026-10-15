@@ -33,7 +33,7 @@ function forceFlexDisplay(doc: Document, element: HTMLElement): void {
 /** Keep the linked Cloud and playtime copy visible. Achievement visibility is
  * controlled entirely by Steam's responsive rules and available row space. */
 export function preserveLinkedPlaybarVisibility(doc: Document): void {
-	const classes = PLAYBAR_CLASSES();
+	const classes = PLAYBAR_CLASSES(doc);
 	const sections = elementsWithCssModuleClass(doc, classes.GameStatsSection)
 		.filter(section => section.isConnected);
 	for (const section of sections) {

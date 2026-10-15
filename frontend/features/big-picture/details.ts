@@ -6,11 +6,15 @@ import {
 	APP_DETAILS_ROUTE_PATTERN,
 	NON_DETAILS_ROUTE_PATTERN,
 	collectActiveRouteValues,
+	describeLinkedGamepadTarget,
 	gamepadRuntime,
+	isCurrentLinkedGamepadTarget,
 	resolveActiveGameContext,
 } from '../../steam/gamepad';
 import { steamWebpackRuntime } from '../../steam/modules/SteamWebpackRuntime';
-import { getCachedLocalAchievementsForGame } from '../achievements/cache';
+import { steamUIModeService } from '../../steam/ui/SteamUIModeService';
+import { cacheLocalAchievements, getCachedLocalAchievementsForShortcut } from '../achievements/cache';
+import { restoreBigPictureAchievementProjections } from './NativeBigPictureAchievements';
 import { fetchLocalAchievementData, subscribeLocalAchievementData } from '../achievements/service';
 import { ACHIEVEMENT_REFRESH_STORAGE_KEY } from '../achievements/lifecycle';
 import { getCachedOfficialCommunityItems, getOfficialCommunityItems } from '../library/community-items';
@@ -18,14 +22,13 @@ import { getCachedCommunityContent, getCachedNews, getCommunityContent, getNews 
 import { getCachedFriendData, getFriendData } from '../library/social/friends';
 import { cachePersona, hasCachedPersona } from '../library/social/personas';
 import { detectConnectedController, detectGameControllerSupport, subscribeControllerChanges } from '../library/controller';
-import { defaultBigPictureModeEnabled } from '../../core/preferences';
 import {
 	mountNativeBigPictureDetails,
+	isNativeBigPictureDetailsRuntimeCurrent,
 	unmountNativeBigPictureDetails,
 } from './NativeBigPictureDetails';
 import {
 	commitNativePanelRoot,
-	ensureCloudDivider,
 	ensureNativePanelRoot,
 	ensurePlaybarControllerStat,
 	hideBigPictureNonSteamNotices,
@@ -33,6 +36,7 @@ import {
 	removeCloudDivider,
 	removePlaybarControllerStat,
 	restoreBigPictureNonSteamNotices,
+	restoreAllNativePanelChildren,
 	restoreNativePanelChildren,
 } from './panel-mount';
 import { activeTabFromNative, findBigPictureTabStrip } from './tabs';
@@ -40,6 +44,8 @@ import { ensureBigPictureDetailStyles } from './details-styles';
 import { activateNativeGameInfoBridge, deactivateNativeGameInfoBridge } from './native-info-bridge';
 import type { BigPictureDetailData, BigPictureTab, MappedShortcut } from './types';
 import { getBigPictureMappedShortcuts } from './mapped-shortcuts-cache';
+import { disposeBigPictureModals } from './owned-modals';
+import { syncBigPicturePlaybarMetadata, disposeBigPicturePlaybarMetadata } from './playbar-metadata';
 
 interface BigPictureDetailState {
 	shortcut: MappedShortcut;
@@ -50,11 +56,12 @@ interface BigPictureDetailState {
 	data: BigPictureDetailData;
 	generation: number;
 	hydrationStarted: boolean;
+	pendingResources: number;
 }
 
 const detailStates = new WeakMap<Document, BigPictureDetailState>();
 const detailGenerations = new WeakMap<Document, number>();
-const detailTabObservers = new WeakMap<Document, { strip: HTMLElement; observer: MutationObserver }>();
+const detailTabObservers = new WeakMap<Document, { strip: HTMLElement; controls: Map<BigPictureTab, HTMLElement>; observer: MutationObserver; dispose: () => void }>();
 const detailRetryTimers = new WeakMap<Document, ReturnType<typeof setTimeout>>();
 const detailRetryCounts = new WeakMap<Document, number>();
 const detailTabSyncTimers = new WeakMap<Document, ReturnType<typeof setTimeout>>();
@@ -62,40 +69,35 @@ const preferredDetailTabs = new WeakMap<Document, { tab: BigPictureTab; until: n
 const detailContextGapSince = new WeakMap<Document, number>();
 const detailPatchTimers = new WeakMap<BigPictureDetailState, ReturnType<typeof setTimeout>>();
 const detailPendingPatches = new WeakMap<BigPictureDetailState, Partial<BigPictureDetailData>>();
-const defaultModeDetailShortcuts = new WeakMap<Document, { shortcutId: number; steamAppId: string }>();
-const activeDetailDocs = new Set<Document>();
-let achievementSyncInstalled = false;
-
-function ensureAchievementSync(): void {
-	if (achievementSyncInstalled) return;
-	achievementSyncInstalled = true;
-
-	subscribeLocalAchievementData(update => {
-		for (const doc of Array.from(activeDetailDocs)) {
-			const state = detailStates.get(doc);
-			if (!state || !isLiveDetailState(doc, state)) continue;
-			if (update.steamAppId !== state.shortcut.steamAppId) continue;
-			const shortcutIdStr = String(state.shortcut.id);
-			if (update.stateAppId && update.stateAppId !== shortcutIdStr) continue;
-			applyDetailPatch(doc, state, 'achievements', update.data);
-		}
-	});
-
-	if (typeof window !== 'undefined') {
-		window.addEventListener('storage', event => {
-			if (event.key !== ACHIEVEMENT_REFRESH_STORAGE_KEY) return;
-			for (const doc of Array.from(activeDetailDocs)) {
-				const state = detailStates.get(doc);
-				if (!state || !isLiveDetailState(doc, state)) continue;
-				void fetchLocalAchievementData(state.shortcut.steamAppId, {
-					stateAppId: String(state.shortcut.id),
-					maxAgeMs: 0,
-				}).then(data => {
-					applyDetailPatch(doc, state, 'achievements', data);
-				});
-			}
-		});
-	}
+const achievementSyncCleanups = new WeakMap<Document, () => void>();
+const detailMountReports = new WeakMap<Document, string>();
+function reportDetailMount(doc: Document, stage: string): void {
+	if (detailMountReports.get(doc) === stage) return;
+	detailMountReports.set(doc, stage);
+	backendLog(`[NGL][Gamepad][Mount] ${stage}`);
+}
+function ensureAchievementSync(doc: Document): void {
+ if (achievementSyncCleanups.has(doc)) return;
+ const unsubscribe = subscribeLocalAchievementData(update => {
+  const state = detailStates.get(doc);
+  if (!state || !isLiveDetailState(doc, state) || update.steamAppId !== state.shortcut.steamAppId
+   || update.stateAppId !== String(state.shortcut.id)) return;
+  if (update.data && String(update.data.metadata_appid || update.data.appid) !== state.shortcut.steamAppId) return;
+  if (update.data) cacheLocalAchievements(update.data, state.shortcut.steamAppId, String(state.shortcut.id));
+  applyDetailPatch(doc, state, 'achievements', update.data);
+ });
+ const storage = (event: StorageEvent) => {
+  if (event.key !== ACHIEVEMENT_REFRESH_STORAGE_KEY) return;
+  const state = detailStates.get(doc);
+  if (!state || !isLiveDetailState(doc, state)) return;
+  void fetchLocalAchievementData(state.shortcut.steamAppId, { stateAppId: String(state.shortcut.id), maxAgeMs: 0 })
+   .then(data => applyDetailPatch(doc, state, 'achievements', data)).catch(() => {});
+ };
+ doc.defaultView?.addEventListener('storage', storage);
+ achievementSyncCleanups.set(doc, () => {
+  unsubscribe(); doc.defaultView?.removeEventListener('storage', storage);
+  achievementSyncCleanups.delete(doc);
+ });
 }
 
 const docControllerCleanups = new WeakMap<Document, () => void>();
@@ -104,7 +106,7 @@ const activeControllerDocs = new Set<Document>();
 
 function ensureControllerSync(doc?: Document): void {
 	if (!doc) return;
-	const shortcut = detectCurrentMappedShortcut(doc) || detailStates.get(doc)?.shortcut || null;
+	const shortcut = detectCurrentMappedShortcut(doc);
 	if (!shortcut) {
 		activeControllerDocs.delete(doc);
 		const timer = docControllerRetryTimers.get(doc);
@@ -128,7 +130,7 @@ function ensureControllerSync(doc?: Document): void {
 			const retryTimer = setTimeout(() => {
 				docControllerRetryTimers.delete(doc);
 				if (!doc.body?.isConnected) return;
-				const currentSc = detectCurrentMappedShortcut(doc) || detailStates.get(doc)?.shortcut || null;
+				const currentSc = detectCurrentMappedShortcut(doc);
 				if (!currentSc) return;
 				const currentConn = detectConnectedController(doc);
 				if (currentConn.connected) {
@@ -143,7 +145,7 @@ function ensureControllerSync(doc?: Document): void {
 	if (!docControllerCleanups.has(doc)) {
 		const cleanup = subscribeControllerChanges(doc, (connectedInfo) => {
 			if (!doc.body || !doc.body.isConnected) return;
-			const sc = detectCurrentMappedShortcut(doc) || detailStates.get(doc)?.shortcut || null;
+			const sc = detectCurrentMappedShortcut(doc);
 			if (!sc) {
 				activeControllerDocs.delete(doc);
 				removePlaybarControllerStat(doc);
@@ -164,11 +166,13 @@ function detectCurrentMappedShortcut(doc: Document): MappedShortcut | null {
 	if (!doc.body) return null;
 	const context = resolveActiveGameContext(doc);
 	if (context.type !== 'shortcut-linked' || !context.identity) return null;
+	if (!isCurrentLinkedGamepadTarget(doc, context.identity.shortcutAppId, context.identity.steamAppId)) return null;
 	const mapped = getBigPictureMappedShortcuts(doc).find(shortcut => {
 		const raw = Number(shortcut.id);
 		const unsigned = raw >>> 0;
 		const signed = toSignedShortcutAppId(unsigned);
-		return [raw, unsigned, signed].includes(context.identity!.shortcutAppId);
+		return [raw, unsigned, signed].includes(context.identity!.shortcutAppId)
+			&& Number(shortcut.steamAppId) === context.identity!.steamAppId;
 	});
 	return mapped || {
 		id: context.identity.shortcutAppId,
@@ -187,6 +191,8 @@ function isLiveDetailState(doc: Document, state: BigPictureDetailState): boolean
 	const live = detailStates.get(doc);
 	if (!live || live !== state || !state.root.isConnected || !state.panel.isConnected) return false;
 	return live === state
+		&& steamUIModeService.isGamepadUI(doc)
+		&& isCurrentLinkedGamepadTarget(doc, state.shortcut.id, state.shortcut.steamAppId)
 		&& live.generation === state.generation
 		&& live.shortcut.id === state.shortcut.id
 		&& live.shortcut.steamAppId === state.shortcut.steamAppId
@@ -198,7 +204,7 @@ function isLiveDetailState(doc: Document, state: BigPictureDetailState): boolean
 function cachedBigPictureDetailData(shortcut: MappedShortcut, language: string): BigPictureDetailData {
 	return {
 		game: getCachedGameData(shortcut.steamAppId, language)?.data || null,
-		achievements: getCachedLocalAchievementsForGame(shortcut.steamAppId, String(shortcut.id)),
+		achievements: getCachedLocalAchievementsForShortcut(shortcut.steamAppId, String(shortcut.id)),
 		news: getCachedNews(shortcut.steamAppId, language)?.data || [],
 		community: getCachedCommunityContent(shortcut.steamAppId, language)?.data || [],
 		cards: getCachedOfficialCommunityItems(shortcut.steamAppId, language)?.data || null,
@@ -213,43 +219,46 @@ function renderNativeRoot(doc: Document, state: BigPictureDetailState): void {
 		gamepadRuntime.initialize(doc);
 	} catch {}
 	ensureBigPictureDetailStyles(doc);
-	const tabs = findBigPictureTabStrip(doc);
-	if (tabs) ensureCloudDivider(doc, tabs.strip);
+	// Linked metadata does not create a Steam Cloud synchronization backend.
+	// Preserve Steam's real row and retire the old unconditional "updated" row.
+	removeCloudDivider(doc);
 	ensurePlaybarControllerStat(doc, detectGameControllerSupport(state.shortcut.steamAppId, doc));
 	ensureControllerSync(doc);
+	syncBigPicturePlaybarMetadata(doc, state.shortcut);
 
-	// Steam already renders the real GamepadUI Game Information surface for a
-	// linked shortcut once the AppOverview classification shim is active. Do not
-	// replace it with a look-alike React tree: that loses native DLC links,
-	// collections, exact spacing and Steam's own spatial-navigation behavior.
-	// Keep our root connected only as the detail identity anchor, but make it
-	// layout-inert while Steam owns this tab.
-	activateNativeGameInfoBridge(doc, state.shortcut, state.data.game);
-	if (state.activeTab === 'info') {
-		unmountNativeBigPictureDetails(state.root);
-		state.root.hidden = true;
-		state.root.style.setProperty('display', 'none', 'important');
-		restoreNativePanelChildren(state.panel);
-		restoreBigPictureNonSteamNotices(doc);
-		return;
-	}
-
+ if (state.activeTab === 'info') activateNativeGameInfoBridge(doc, state.shortcut, state.data.game);
+ else deactivateNativeGameInfoBridge(doc);
 	state.root.hidden = false;
 	state.root.style.removeProperty('display');
+	const expectedTab = state.activeTab, expectedPanel = state.panel;
 	const mounted = mountNativeBigPictureDetails(state.root, {
 		tab: state.activeTab,
 		shortcut: state.shortcut,
 		data: state.data,
-		hydrating: state.hydrationStarted,
+		hydrating: state.pendingResources > 0,
 		document: doc,
+		generation: state.generation,
+		panel: state.panel,
+		onRuntimeInvalidated: () => {
+			if (!isLiveDetailState(doc, state)) return;
+			disposeBigPictureModals(doc);
+			restoreNativePanelChildren(state.panel, state.root);
+			restoreBigPictureNonSteamNotices(doc);
+			state.root.hidden = true;
+			scheduleDetailRetry(doc);
+		},
+		onCommitted: () => {
+			if (!isLiveDetailState(doc, state) || state.activeTab !== expectedTab || state.panel !== expectedPanel) return;
+			commitNativePanelRoot(expectedPanel, state.root);
+			hideBigPictureNonSteamNotices(doc);
+			reportDetailMount(doc, `committed shortcut=${state.shortcut.id} metadata=${state.shortcut.steamAppId} tab=${expectedTab}`);
+		},
 	});
-	if (mounted) {
-		commitNativePanelRoot(state.panel, state.root);
-		hideBigPictureNonSteamNotices(doc);
-	} else {
+	if (!mounted) {
+		state.root.hidden = true;
 		restoreNativePanelChildren(state.panel);
 		restoreBigPictureNonSteamNotices(doc);
-		backendLog('[NGL][Gamepad] ReactDOM is not ready for the native Big Picture panel; preserving Steam panel and retrying');
+		reportDetailMount(doc, 'React/renderer unavailable; preserving Steam panel and retrying');
 		scheduleDetailRetry(doc);
 	}
 }
@@ -281,10 +290,15 @@ function applyDetailPatch<K extends keyof BigPictureDetailData>(
 function startDetailHydration(doc: Document, state: BigPictureDetailState): void {
 	if (state.hydrationStarted) return;
 	state.hydrationStarted = true;
+	state.pendingResources = 6;
 	renderNativeRoot(doc, state);
 	const applyResource = <K extends keyof BigPictureDetailData>(key: K, request: Promise<BigPictureDetailData[K]>): void => {
 		void request.then(value => applyDetailPatch(doc, state, key, value)).catch(error => {
 			backendLog(`[NGL][Gamepad] ${String(key)} hydration failed: ${String(error)}`);
+		}).finally(() => {
+			if (!isLiveDetailState(doc, state)) return;
+			state.pendingResources = Math.max(0, state.pendingResources - 1);
+			if (state.pendingResources === 0) renderNativeRoot(doc, state);
 		});
 	};
 
@@ -295,6 +309,10 @@ function startDetailHydration(doc: Document, state: BigPictureDetailState): void
 	applyResource('achievements', fetchLocalAchievementData(state.shortcut.steamAppId, {
 		stateAppId: String(state.shortcut.id),
 		maxAgeMs: 1250,
+	}).then(data => {
+		if (!isLiveDetailState(doc, state) || !data || String(data.metadata_appid || data.appid) !== state.shortcut.steamAppId) return null;
+		cacheLocalAchievements(data, state.shortcut.steamAppId, String(state.shortcut.id));
+		return data;
 	}));
 	applyResource('news', getNews(state.shortcut.steamAppId, state.language));
 	applyResource('community', getCommunityContent(state.shortcut.steamAppId, state.language));
@@ -350,18 +368,20 @@ function scheduleTabSync(doc: Document, preferredTab?: BigPictureTab): void {
 }
 
 function bindTabs(doc: Document, strip: HTMLElement, controls: Map<BigPictureTab, HTMLElement>): void {
-	for (const [tab, control] of controls) {
-		control.dataset.gdlBpTab = tab;
-		if (control.dataset.gdlBpBound === '1') continue;
-		control.dataset.gdlBpBound = '1';
-		control.addEventListener('click', () => scheduleTabSync(doc, tab));
-		control.addEventListener('keydown', event => {
-			if (event.key === 'Enter' || event.key === ' ') scheduleTabSync(doc, tab);
-		});
-	}
 	const current = detailTabObservers.get(doc);
-	if (current?.strip === strip) return;
-	current?.observer.disconnect();
+	if (current?.strip === strip && current.controls.size === controls.size
+		&& [...controls].every(([tab, control]) => current.controls.get(tab) === control)) return;
+	current?.dispose();
+	const prior = new Map<HTMLElement, string | undefined>();
+	for (const [tab, control] of controls) { prior.set(control, control.dataset.gdlBpTab); control.dataset.gdlBpTab = tab; }
+	const input = (event: Event) => {
+		if (event.type === 'keydown' && !['Enter', ' '].includes((event as KeyboardEvent).key)) return;
+		for (const [tab, control] of controls) if (event.target === control || control.contains(event.target as Node)) {
+			scheduleTabSync(doc, tab); return;
+		}
+	};
+	strip.addEventListener('click', input);
+	strip.addEventListener('keydown', input);
 	const observer = new MutationObserver(mutations => {
 		for (const m of mutations) {
 			if (m.attributeName === 'aria-selected') {
@@ -381,7 +401,15 @@ function bindTabs(doc: Document, strip: HTMLElement, controls: Map<BigPictureTab
 		subtree: true,
 		attributeFilter: ['aria-selected', 'aria-current'],
 	});
-	detailTabObservers.set(doc, { strip, observer });
+	const dispose = () => {
+		observer.disconnect(); strip.removeEventListener('click', input); strip.removeEventListener('keydown', input);
+		for (const [tab, control] of controls) if (control.dataset.gdlBpTab === tab) {
+			const original = prior.get(control);
+			if (original === undefined) delete control.dataset.gdlBpTab; else control.dataset.gdlBpTab = original;
+		}
+		if (detailTabObservers.get(doc)?.dispose === dispose) detailTabObservers.delete(doc);
+	};
+	detailTabObservers.set(doc, { strip, controls: new Map(controls), observer, dispose });
 }
 
 function retireLegacyDetailShell(doc: Document): void {
@@ -389,24 +417,25 @@ function retireLegacyDetailShell(doc: Document): void {
 }
 
 function removeBigPictureDetailsNodes(doc: Document, keepControllerStat = false): void {
-	if (!keepControllerStat) defaultModeDetailShortcuts.delete(doc);
+	disposeBigPicturePlaybarMetadata(doc);
+	disposeBigPictureModals(doc);
+	achievementSyncCleanups.get(doc)?.();
+	detailTabObservers.get(doc)?.dispose();
 	deactivateNativeGameInfoBridge(doc);
-	if (!keepControllerStat) activeDetailDocs.delete(doc);
-	const state = detailStates.get(doc);
+		const state = detailStates.get(doc);
 	if (state) {
+		detailStates.delete(doc);
+		nextDetailGeneration(doc);
 		restoreNativePanelChildren(state.panel);
 		const patchTimer = detailPatchTimers.get(state);
 		if (patchTimer) clearTimeout(patchTimer);
 		detailPatchTimers.delete(state);
 		detailPendingPatches.delete(state);
 		unmountNativeBigPictureDetails(state.root);
+		restoreBigPictureAchievementProjections(state.shortcut.id, doc);
 		detailStates.delete(doc);
 	}
-	for (const hidden of Array.from(doc.querySelectorAll<HTMLElement>('[data-gdl-bp-panel-sibling-hidden="1"]'))) {
-		hidden.hidden = false;
-		hidden.style.removeProperty('display');
-		delete hidden.dataset.gdlBpPanelSiblingHidden;
-	}
+	restoreAllNativePanelChildren(doc);
 	nextDetailGeneration(doc);
 	for (const element of Array.from(doc.querySelectorAll('#gdl-bp-detail-root, #gdl-bp-detail-shell, #gdl-bp-native-strip-placeholder, #gdl-bp-focus-ring-root, #gdl-bp-focus-ring, #gdl-playbar-achievements, [data-gdl-playbar-achievements="1"]'))) element.remove();
 	removeBigPictureFallbackPanel(doc);
@@ -416,7 +445,7 @@ function removeBigPictureDetailsNodes(doc: Document, keepControllerStat = false)
 }
 
 function isLibraryOrNonDetailsView(doc: Document): boolean {
-	if (doc.title?.includes('SP Desktop') || doc.body.classList.contains('DesktopUI') || doc.querySelector('.DesktopUI')) {
+	if (!steamUIModeService.isGamepadUI(doc) && (doc.title?.includes('SP Desktop') || doc.body.classList.contains('DesktopUI') || doc.querySelector('.DesktopUI'))) {
 		return true;
 	}
 	if (findBigPictureTabStrip(doc)) {
@@ -447,18 +476,22 @@ function isLibraryOrNonDetailsView(doc: Document): boolean {
 export async function refreshBigPictureShortcutDetails(doc: Document): Promise<void> {
 	if (!doc.body) return;
 	if (isLibraryOrNonDetailsView(doc)) {
+		detailMountReports.delete(doc);
 		removeBigPictureDetailsNodes(doc);
 		return;
 	}
 	const context = resolveActiveGameContext(doc);
 	if (context.type === 'steam') {
+		detailMountReports.delete(doc);
 		detailContextGapSince.delete(doc);
 		const retryTimer = detailRetryTimers.get(doc);
 		if (retryTimer) { clearTimeout(retryTimer); detailRetryTimers.delete(doc); }
 		removeBigPictureDetailsNodes(doc);
 		return;
 	}
-	if (context.type !== 'shortcut-linked') {
+	if (context.type !== 'shortcut-linked' || !context.identity
+		|| !isCurrentLinkedGamepadTarget(doc, context.identity.shortcutAppId, context.identity.steamAppId)) {
+		reportDetailMount(doc, `waiting for exact linked route; context=${context.type}; ${describeLinkedGamepadTarget(doc, context.identity?.shortcutAppId, context.identity?.steamAppId)}`);
 		const liveState = detailStates.get(doc);
 		const canBeTransientGap = Boolean(
 			liveState?.root.isConnected
@@ -496,26 +529,9 @@ export async function refreshBigPictureShortcutDetails(doc: Document): Promise<v
 		removeBigPictureDetailsNodes(doc);
 		state = undefined;
 	}
-	if (defaultBigPictureModeEnabled()) {
-		const currentDefault = defaultModeDetailShortcuts.get(doc);
-		const playbarStat = doc.getElementById('gdl-bp-playbar-controller');
-		const connected = detectConnectedController(doc);
-		const isControllerInSync = (!connected.connected && !playbarStat) || (connected.connected && Boolean(playbarStat));
-		if (currentDefault && currentDefault.shortcutId === shortcut.id && currentDefault.steamAppId === shortcut.steamAppId && isControllerInSync) {
-			return;
-		}
-		defaultModeDetailShortcuts.set(doc, { shortcutId: shortcut.id, steamAppId: shortcut.steamAppId });
-		activeDetailDocs.add(doc);
-		detailTabObservers.get(doc)?.observer.disconnect();
-		detailTabObservers.delete(doc);
-		removeBigPictureDetailsNodes(doc, true);
-		ensureControllerSync(doc);
-		return;
-	}
-	defaultModeDetailShortcuts.delete(doc);
 	const tabs = findBigPictureTabStrip(doc);
 	if (!tabs) {
-		backendLog('Big Picture details: native tab strip not ready, scheduling retry');
+		reportDetailMount(doc, 'native tab strip not ready; retrying');
 		if (isLibraryOrNonDetailsView(doc)) {
 			removeBigPictureDetailsNodes(doc);
 		} else {
@@ -530,15 +546,15 @@ export async function refreshBigPictureShortcutDetails(doc: Document): Promise<v
 	const nativeTab = preferredTab || detectedTab || state?.activeTab || 'activity';
 	const nodes = ensureNativePanelRoot(doc, tabs, nativeTab);
 	if (!nodes) {
-		backendLog('Big Picture details: native content panel not ready, scheduling retry');
+		reportDetailMount(doc, 'native content panel not ready; retrying');
 		scheduleDetailRetry(doc);
 		return;
 	}
 	detailRetryCounts.delete(doc);
 	nodes.root.dataset.gdlSteamAppId = shortcut.steamAppId;
 	nodes.root.dataset.gdlShortcutAppId = String(shortcut.id);
-	activeDetailDocs.add(doc);
-	ensureAchievementSync();
+
+	ensureAchievementSync(doc);
 	ensureControllerSync(doc);
 
 	if (!state || changedShortcut || state.root !== nodes.root) {
@@ -551,12 +567,14 @@ export async function refreshBigPictureShortcutDetails(doc: Document): Promise<v
 			data: cachedBigPictureDetailData(shortcut, language),
 			generation: nextDetailGeneration(doc),
 			hydrationStarted: false,
+			pendingResources: 0,
 		};
 		detailStates.set(doc, state);
+		state.root.dataset.gdlBpGeneration = String(state.generation);
 		renderNativeRoot(doc, state);
 		startDetailHydration(doc, state);
 	} else {
-		let needsRender = false;
+		let needsRender = !isNativeBigPictureDetailsRuntimeCurrent(state.root);
 		if (state.panel !== nodes.panel) {
 			state.panel = nodes.panel;
 			needsRender = true;
@@ -570,14 +588,17 @@ export async function refreshBigPictureShortcutDetails(doc: Document): Promise<v
 		}
 	}
 	bindTabs(doc, tabs.strip, tabs.controls);
+	syncBigPicturePlaybarMetadata(doc, shortcut);
 }
 
 export function disposeBigPictureShortcutDetails(doc: Document | null): void {
 	if (!doc) return;
+	const controllerRetry = docControllerRetryTimers.get(doc);
+	if (controllerRetry) clearTimeout(controllerRetry);
+	docControllerRetryTimers.delete(doc);
 	docControllerCleanups.get(doc)?.();
 	docControllerCleanups.delete(doc);
-	defaultModeDetailShortcuts.delete(doc);
-	activeDetailDocs.delete(doc);
+
 	activeControllerDocs.delete(doc);
 	const retryTimer = detailRetryTimers.get(doc);
 	if (retryTimer) clearTimeout(retryTimer);
@@ -588,7 +609,6 @@ export function disposeBigPictureShortcutDetails(doc: Document | null): void {
 	detailRetryCounts.delete(doc);
 	preferredDetailTabs.delete(doc);
 	detailContextGapSince.delete(doc);
-	detailTabObservers.get(doc)?.observer.disconnect();
-	detailTabObservers.delete(doc);
+	detailTabObservers.get(doc)?.dispose();
 	removeBigPictureDetailsNodes(doc);
 }

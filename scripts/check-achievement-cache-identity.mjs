@@ -50,9 +50,11 @@ const cache = loadCache();
 const a = snapshot();
 const contaminatedStorage = new Map([['gdl_local_achievement_snapshots_v2', JSON.stringify({ version: 1,
   entries: [{ updatedAt: now, aliases: [steam, shortcutB], data: a }] })]]);
+contaminatedStorage.set('gdl_local_achievement_snapshots_v3', JSON.stringify({ version: 1,
+  entries: [{ updatedAt: now, aliases: [steam, shortcutB], data: a }] }));
 equal(loadCache(contaminatedStorage).getCachedLocalAchievementsForShortcut(steam, shortcutB), null,
   'previous renderer snapshots potentially aliased during navigation are never restored');
-equal(contaminatedStorage.size, 1, 'discarding a renderer snapshot does not delete any achievement progress');
+equal(contaminatedStorage.size, 2, 'discarding a renderer snapshot does not delete any achievement progress');
 const b = snapshot({ state_appid: shortcutB, path: 'D:\\Install B\\achievements.json', root: 'D:\\Install B', unlocked: 0 });
 cache.cacheLocalAchievements(a, shortcutA);
 now++;
@@ -121,6 +123,20 @@ const oldShortcutProvenance = snapshot({ state_appid: '2999999999', path: 'E:\\L
 legacy.cacheLocalAchievements(oldShortcutProvenance, shortcutC);
 equal(legacy.getCachedLocalAchievementsForShortcut(steam, shortcutC), oldShortcutProvenance,
   'an old shortcut provenance is valid under a verified explicit current alias');
+equal(legacy.getCachedLocalAchievementsForShortcut(steam, '2999999999'), null,
+  'backend state_appid never creates another shortcut alias implicitly');
+
+const percentageStorage = new Map();
+const percentageCache = loadCache(percentageStorage);
+const oldPercentage = snapshot({ achievements: a.achievements.map(item => ({ ...item, global_percent: 100, hidden: false })) });
+percentageCache.cacheLocalAchievements(oldPercentage, shortcutA);
+const freshPercentage = { ...oldPercentage, achievements: oldPercentage.achievements.map(item => ({ ...item, global_percent: 3.5, hidden: true })) };
+percentageCache.cacheLocalAchievements(freshPercentage, shortcutA);
+equal(percentageCache.localAchievementDataSignature(oldPercentage) === percentageCache.localAchievementDataSignature(freshPercentage), false,
+  'global percentage and hidden status invalidate render and persistence signatures');
+const freshCold = loadCache(percentageStorage).getCachedLocalAchievementsForShortcut(steam, shortcutA);
+equal(freshCold.achievements[0].global_percent, 3.5, 'a percentage-only change persists across renderers');
+equal(freshCold.achievements[0].hidden, true, 'hidden status changes also persist');
 
 const metadataStorage = new Map();
 const metadata = loadCache(metadataStorage);

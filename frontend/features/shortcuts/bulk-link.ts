@@ -74,8 +74,6 @@ function enqueueBulkRetry(
 		steamAppId: item.candidate.appid,
 		skipLauncher: false,
 		existingLaunchOptions: item.context.launchOptions || '',
-		trackingExecutable: item.context.trackingExecutableAutoApply && item.context.recommendedExePath ? item.context.recommendedExePath : '',
-		trackingStartDir: item.context.trackingExecutableAutoApply && item.context.recommendedStartDir ? item.context.recommendedStartDir : '',
 		shortcutExecutable: item.context.exePath || '',
 		repairResources,
 	});
@@ -301,8 +299,6 @@ export async function linkAllShortcutsExperimental(
 				steamAppId: item.candidate.appid,
 				skipLauncher: false,
 				existingLaunchOptions: item.context.launchOptions || '',
-				trackingExecutable: item.context.trackingExecutableAutoApply && item.context.recommendedExePath ? item.context.recommendedExePath : '',
-				trackingStartDir: item.context.trackingExecutableAutoApply && item.context.recommendedStartDir ? item.context.recommendedStartDir : '',
 				shortcutExecutable: item.context.exePath || '',
 				repairResources: false,
 			});
@@ -323,8 +319,6 @@ export async function linkAllShortcutsExperimental(
 					shortcutAppId: item.record.id,
 					steamAppId: item.candidate.appid,
 					shortcutExecutable: item.context.exePath,
-					trackingExecutable: item.context.trackingExecutableAutoApply && item.context.recommendedExePath ? item.context.recommendedExePath : '',
-					trackingStartDir: item.context.trackingExecutableAutoApply && item.context.recommendedStartDir ? item.context.recommendedStartDir : '',
 					refreshLibrary: false,
 					assetTimeoutMs: 30_000,
 					deferAssetSync: true,

@@ -25,6 +25,7 @@ class Element {
       getPropertyValue: key => values.get(key) || '',
       getPropertyPriority: key => priorities.get(key) || '',
       setProperty: (key, value, priority) => { this.writes++; values.set(key, value); priorities.set(key, priority); },
+      removeProperty: key => { this.writes++; values.delete(key); priorities.delete(key); },
     };
   }
   get isConnected() { return this === this.ownerDocument.body || Boolean(this.parentElement?.isConnected); }
@@ -45,6 +46,11 @@ function createDocument() {
   const timers = new Map();
   let next = 0;
   const doc = { walkers: [], visits: 0 };
+  const listeners = new Map();
+  doc.addEventListener = (type, callback) => { if (!listeners.has(type)) listeners.set(type, new Set()); listeners.get(type).add(callback); };
+  doc.removeEventListener = (type, callback) => listeners.get(type)?.delete(callback);
+  doc.fire = type => { for (const callback of listeners.get(type) || []) callback(); };
+  doc.listenerCount = () => [...listeners.values()].reduce((sum, callbacks) => sum + callbacks.size, 0);
   doc.body = new Element(doc, 'body');
   doc.defaultView = {
     closed: false, performance: { now: () => 0 },
@@ -120,7 +126,7 @@ const tooltip = doc.body.appendChild(new Element(doc));
 tooltip.attributes.set('role', 'tooltip');
 tooltip.appendChild(leaf(doc, 'Copied!'));
 schedule(doc, [tooltip]);
-assert.equal(tooltip.writes, 0, 'tooltip hiding also waits until after paint');
+assert.equal(tooltip.style.getPropertyValue('display'), 'none', 'a small added tooltip is hidden before its first paint');
 doc.flush();
 assert.equal(tooltip.style.getPropertyValue('display'), 'none', 'an exact copied tooltip is hidden');
 assert.equal(tooltip.style.getPropertyValue('pointer-events'), 'none');
@@ -141,9 +147,14 @@ schedule(doc, [button, longer]); doc.flush();
 assert.equal(button.writes + buttonText.writes + longer.writes, 0, 'interactive labels and ordinary longer text remain untouched');
 
 const cancelled = doc.body.appendChild(leaf(doc, 'Copied!'));
-schedule(doc, [cancelled]);
+const delayedRoot = doc.body.appendChild(new Element(doc));
+let nested = delayedRoot;
+for (let depth = 0; depth < 5; depth++) nested = nested.appendChild(new Element(doc));
+cancelled.remove(); nested.appendChild(cancelled);
+schedule(doc, [delayedRoot]);
 dispose(doc); dispose(doc);
 doc.flush();
 assert.equal(cancelled.writes, 0, 'disposal cancels queued work idempotently');
 assert.equal(doc.pending(), 0);
-console.log('Copied feedback runtime passed: 12,000-node deferred/bounded discovery, zero image-root walks, exact localized tooltip labels, scoped mutations, 100 idempotent updates and disposal.');
+assert.equal(doc.listenerCount(), 0, 'disposal removes copy listeners');
+console.log('Copied feedback runtime passed: 12,000-node bounded discovery, zero image-root walks, exact localized labels, small portals hidden before paint, 100 idempotent updates and disposal.');

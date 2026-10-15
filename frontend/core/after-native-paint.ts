@@ -5,16 +5,19 @@ interface PendingNativePaint {
 	reject: (error: unknown) => void;
 	cancelFrame?: () => void;
 	cancelTimer?: () => void;
+	cancelReady?: () => void;
 }
 
-/** Coalesce heavy document work until Steam has had a native paint opportunity.
+export type NativePaintReadiness = (doc: Document, ready: () => void) => () => void;
+
+/** Coalesce heavy document work until native content is ready and can paint.
  * Only scheduled callbacks are shared: a running network request must not block
  * a later layout retry for the same destination. */
 export class NativePaintQueue {
 	private readonly pending = new Map<Document, PendingNativePaint>();
 	private disposed = false;
 
-	run(doc: Document, key: string, task: () => Promise<void> | void): Promise<void> {
+	run(doc: Document, key: string, task: () => Promise<void> | void, waitUntilReady?: NativePaintReadiness): Promise<void> {
 		if (this.disposed || doc.hidden || doc.defaultView?.closed) {
 			this.cancel(doc);
 			return Promise.resolve();
@@ -47,24 +50,47 @@ export class NativePaintQueue {
 			try { Promise.resolve(task()).then(entry.resolve, entry.reject); }
 			catch (error) { entry.reject(error); }
 		};
-		if (view?.requestAnimationFrame) {
-			const firstFrame = view.requestAnimationFrame(() => {
-				entry.cancelFrame = undefined;
-				if (!isPending()) return;
-				if (doc.hidden || view.closed) { this.cancel(doc); return; }
-				const secondFrame = view.requestAnimationFrame(() => {
+		let ready = false;
+		const schedulePaint = (): void => {
+			if (ready || !isPending()) return;
+			ready = true;
+			entry.cancelReady?.();
+			entry.cancelReady = undefined;
+			if (this.disposed || doc.hidden || view?.closed) { this.cancel(doc); return; }
+			if (view?.requestAnimationFrame) {
+				const firstFrame = view.requestAnimationFrame(() => {
 					entry.cancelFrame = undefined;
 					if (!isPending()) return;
-					// The first frame can finish painting before this callback. Heavy
-					// work starts in a later task, never in either RAF or its microtasks.
-					entry.cancelTimer = scheduleTimer(startTask, 0);
+					if (doc.hidden || view.closed) { this.cancel(doc); return; }
+					const secondFrame = view.requestAnimationFrame(() => {
+						entry.cancelFrame = undefined;
+						if (!isPending()) return;
+						// Let the native artwork paint before the heavy callback.
+						entry.cancelTimer = scheduleTimer(startTask, 0);
+					});
+					entry.cancelFrame = () => view.cancelAnimationFrame?.(secondFrame);
 				});
-				entry.cancelFrame = () => view.cancelAnimationFrame?.(secondFrame);
-			});
-			entry.cancelFrame = () => view.cancelAnimationFrame?.(firstFrame);
-		} else {
-			entry.cancelTimer = scheduleTimer(startTask, 16);
-		}
+				entry.cancelFrame = () => view.cancelAnimationFrame?.(firstFrame);
+			} else {
+				entry.cancelTimer = scheduleTimer(startTask, 16);
+			}
+		};
+		if (waitUntilReady) {
+			try {
+				const cancelReady = waitUntilReady(doc, schedulePaint);
+				// A cached native image can be ready synchronously. Dispose the
+				// returned handle as well as handles installed before its callback.
+				if (ready || !isPending()) cancelReady();
+				else entry.cancelReady = cancelReady;
+			} catch (error) {
+				if (isPending()) {
+					this.pending.delete(doc);
+					entry.cancelFrame?.();
+					entry.cancelTimer?.();
+					entry.reject(error);
+				}
+			}
+		} else schedulePaint();
 		return promise;
 	}
 
@@ -76,6 +102,7 @@ export class NativePaintQueue {
 			this.pending.delete(target);
 			entry.cancelFrame?.();
 			entry.cancelTimer?.();
+			entry.cancelReady?.();
 			entry.resolve();
 		}
 	}

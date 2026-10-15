@@ -1,0 +1,36 @@
+{
+  "response": {
+    "achievements": [
+      {
+        "internal_name": "ACH_0001",
+        "localized_name": "Un sorbo de la victoria",
+        "localized_desc": "Ganaste 10 batallas.",
+        "icon": "b63afab3cc5fa7bbebb8eb4bb2b5e92760982e1c.jpg",
+        "icon_gray": "6603a10f23d3e8401c4653edda31aeb4e3cb01bb.jpg",
+        "hidden": false,
+        "player_percent_unlocked": "79.4",
+        "internal_key": 1024,
+        "min_progress_int": 0,
+        "max_progress_int": 10,
+        "groupid": 0,
+        "archived": false,
+        "progress_type": 1
+      },
+      {
+        "internal_name": "ACH_0039",
+        "localized_name": "Guerrero novato",
+        "localized_desc": "Subiste al nivel de jugador 5.",
+        "icon": "2595e93b52233c9497aed077dbfa29d29892df61.jpg",
+        "icon_gray": "18614f449741f7e544fba68a28c0fb4481b084c6.jpg",
+        "hidden": false,
+        "player_percent_unlocked": "80.1",
+        "internal_key": 13574,
+        "min_progress_int": 0,
+        "max_progress_int": 5,
+        "groupid": 0,
+        "archived": false,
+        "progress_type": 1
+      }
+    ]
+  }
+}

@@ -1,8 +1,10 @@
 import { loc } from '../../steam/localization';
 import { PLAYBAR_CLASSES } from '../../steam/css';
-import { resolveActiveGameContext } from '../../steam/gamepad/GamepadContext';
+import { resolveActiveGameContext, isCurrentLinkedGamepadTarget } from '../../steam/gamepad/GamepadContext';
+import { steamUIModeService } from '../../steam/ui/SteamUIModeService';
+import { NativeVisibilityLeases } from './visibility-lease';
 import { detectConnectedController, detectGameControllerSupport, type GameControllerSupport } from '../library/controller';
-import { mountPlaybarControllerIcons } from './PlaybarControllerIcons';
+import { disposePlaybarControllerIcons, mountPlaybarControllerIcons } from './PlaybarControllerIcons';
 import { ensureBigPictureDetailStyles } from './details-styles';
 
 export type BigPicturePanelTab = 'activity' | 'stuff' | 'community' | 'info';
@@ -21,7 +23,7 @@ const playbarControllerStates = new WeakMap<Document, PlaybarControllerMountStat
 const playbarControllerObservers = new WeakMap<Document, MutationObserver>();
 const playbarControllerObserverTargets = new WeakMap<Document, HTMLElement>();
 const playbarControllerRepairTimers = new WeakMap<Document, ReturnType<typeof setTimeout>>();
-const playbarControllerContextGapSince = new WeakMap<Document, number>();
+const playbarControllerIconCleanups = new WeakMap<Document, { container: HTMLElement; cleanup: () => void }>();
 
 interface CloudDividerScrollState {
 	strip: HTMLElement;
@@ -137,25 +139,120 @@ function isRenderedElement(doc: Document, element: HTMLElement | null): element 
 	return rect.width > 0 && rect.height > 0;
 }
 
-export function restoreNativePanelChildren(panel: HTMLElement | null): void {
-	if (!panel) return;
-	for (const child of Array.from(panel.children)) {
-		const element = child as HTMLElement;
-		if (element.dataset.gdlBpPanelSiblingHidden !== '1') continue;
-		element.hidden = false;
-		element.style.removeProperty('display');
-		delete element.dataset.gdlBpPanelSiblingHidden;
+interface PanelChildVisibility {
+	panel: HTMLElement;
+	owner: HTMLElement;
+	hidden: boolean;
+	hiddenAttribute: string | null;
+	installedHiddenAttribute: string | null;
+	display: string;
+	displayPriority: string;
+	ariaHidden: string | null;
+	marker: string | null;
+}
+
+const PANEL_SIBLING_MARKER = 'data-gdl-bp-panel-sibling-hidden';
+const panelVisibilitySnapshots = new WeakMap<HTMLElement, Map<HTMLElement, PanelChildVisibility>>();
+const childVisibilityOwners = new WeakMap<HTMLElement, PanelChildVisibility>();
+const ownedPanelsByDocument = new WeakMap<Document, Set<HTMLElement>>();
+
+function restoreAttribute(element: HTMLElement, name: string, value: string | null): void {
+	if (value === null) element.removeAttribute(name);
+	else element.setAttribute(name, value);
+}
+
+function forgetEmptyPanel(panel: HTMLElement): void {
+	if (panelVisibilitySnapshots.get(panel)?.size) return;
+	panelVisibilitySnapshots.delete(panel);
+	const panels = ownedPanelsByDocument.get(panel.ownerDocument);
+	panels?.delete(panel);
+	if (panels?.size === 0) ownedPanelsByDocument.delete(panel.ownerDocument);
+}
+
+function restorePanelChild(element: HTMLElement, snapshot: PanelChildVisibility): void {
+	// Restore each property only while it still contains our installed value.
+	// A later Steam update owns any property it has replaced in the meantime.
+	if (element.hidden === true && element.getAttribute('hidden') === snapshot.installedHiddenAttribute) {
+		element.hidden = snapshot.hidden;
+		restoreAttribute(element, 'hidden', snapshot.hiddenAttribute);
 	}
+	if (element.style.getPropertyValue('display') === 'none' && element.style.getPropertyPriority('display') === 'important') {
+		if (snapshot.display) element.style.setProperty('display', snapshot.display, snapshot.displayPriority);
+		else element.style.removeProperty('display');
+	}
+	if (element.getAttribute('aria-hidden') === 'true') restoreAttribute(element, 'aria-hidden', snapshot.ariaHidden);
+	if (element.getAttribute(PANEL_SIBLING_MARKER) === '1') restoreAttribute(element, PANEL_SIBLING_MARKER, snapshot.marker);
+}
+
+export function restoreNativePanelChildren(panel: HTMLElement | null, owner?: HTMLElement): void {
+	if (!panel) return;
+	const snapshots = panelVisibilitySnapshots.get(panel);
+	if (!snapshots) return;
+	for (const [element, snapshot] of snapshots) {
+		if (owner && snapshot.owner !== owner) continue;
+		restorePanelChild(element, snapshot);
+		snapshots.delete(element);
+		if (childVisibilityOwners.get(element) === snapshot) childVisibilityOwners.delete(element);
+	}
+	forgetEmptyPanel(panel);
+}
+
+/** Retire only snapshots created by this runtime, including detached panels.
+ * An existing marker alone is never evidence that we own a native node. */
+export function restoreAllNativePanelChildren(doc: Document): void {
+	for (const panel of [...(ownedPanelsByDocument.get(doc) || [])]) restoreNativePanelChildren(panel);
 }
 
 export function commitNativePanelRoot(panel: HTMLElement, root: HTMLElement): void {
+	let snapshots = panelVisibilitySnapshots.get(panel);
+	if (!snapshots) panelVisibilitySnapshots.set(panel, snapshots = new Map());
+	let panels = ownedPanelsByDocument.get(panel.ownerDocument);
+	if (!panels) ownedPanelsByDocument.set(panel.ownerDocument, panels = new Set());
+	panels.add(panel);
+	for (const [element, snapshot] of snapshots) {
+		if (element.parentElement === panel) continue;
+		restorePanelChild(element, snapshot);
+		snapshots.delete(element);
+		if (childVisibilityOwners.get(element) === snapshot) childVisibilityOwners.delete(element);
+	}
 	for (const child of Array.from(panel.children)) {
 		if (child === root || child.id === 'gdl-bp-detail-root') continue;
 		const element = child as HTMLElement;
+		let snapshot = childVisibilityOwners.get(element);
+		if (snapshot) {
+			// A replacement linked root can adopt the same native child. Transfer
+			// the original snapshot so an old owner cannot later reveal it.
+			if (snapshot.panel !== panel) {
+				panelVisibilitySnapshots.get(snapshot.panel)?.delete(element);
+				forgetEmptyPanel(snapshot.panel);
+				snapshot.panel = panel;
+			}
+			if (element.hidden !== true || element.getAttribute('hidden') !== snapshot.installedHiddenAttribute) {
+				snapshot.hidden = element.hidden;
+				snapshot.hiddenAttribute = element.getAttribute('hidden');
+			}
+			if (element.style.getPropertyValue('display') !== 'none' || element.style.getPropertyPriority('display') !== 'important') {
+				snapshot.display = element.style.getPropertyValue('display');
+				snapshot.displayPriority = element.style.getPropertyPriority('display');
+			}
+			if (element.getAttribute('aria-hidden') !== 'true') snapshot.ariaHidden = element.getAttribute('aria-hidden');
+			if (element.getAttribute(PANEL_SIBLING_MARKER) !== '1') snapshot.marker = element.getAttribute(PANEL_SIBLING_MARKER);
+			snapshot.owner = root;
+		} else {
+			snapshot = { panel, owner: root, hidden: element.hidden, hiddenAttribute: element.getAttribute('hidden'),
+				installedHiddenAttribute: null, display: element.style.getPropertyValue('display'),
+				displayPriority: element.style.getPropertyPriority('display'), ariaHidden: element.getAttribute('aria-hidden'),
+				marker: element.getAttribute(PANEL_SIBLING_MARKER) };
+			childVisibilityOwners.set(element, snapshot);
+		}
+		snapshots.set(element, snapshot);
 		element.hidden = true;
+		snapshot.installedHiddenAttribute = element.getAttribute('hidden');
 		element.style.setProperty('display', 'none', 'important');
-		element.dataset.gdlBpPanelSiblingHidden = '1';
+		element.setAttribute('aria-hidden', 'true');
+		element.setAttribute(PANEL_SIBLING_MARKER, '1');
 	}
+	forgetEmptyPanel(panel);
 }
 
 function panelFromControl(doc: Document, control: HTMLElement): HTMLElement | null {
@@ -326,54 +423,45 @@ export function removeBigPictureFallbackPanel(doc: Document): void {
 	doc.getElementById('gdl-bp-detail-fallback-panel')?.remove();
 }
 
-export function hideBigPictureNonSteamNotices(doc: Document): void {
-	if (!doc.body) return;
-	const anchors = [
-		'no es un juego de steam', 'no es un juego o mod', 'no está disponible porque no es un juego',
-		'non-steam game', 'nicht von steam', "n'est pas un jeu steam", 'não é um juego steam',
-		'não é um juego steam', 'не из steam', 'steam controla el inicio', 'steam controls the start',
-		'se encuentra en estas colecciones', 'in these collections', 'dans ces collections',
-	];
-	const root = doc.getElementById('gdl-bp-detail-root');
-	for (const el of Array.from(doc.querySelectorAll<HTMLElement>('div, p, section, [class*="Notice"], [class*="Description"]'))) {
-		if (el.closest('#gdl-bp-detail-root, #gdl-bp-cloud-divider, [class*="AllGames"], [class*="LibraryHome"], [class*="Shelf"], [class*="Grid"]')) continue;
-		const text = (el.textContent || '').trim().toLowerCase();
-		if (text && anchors.some(anchor => text.includes(anchor))) {
-			const container = (el.closest('[class*="Section"], [class*="Container"], [class*="Panel"]') as HTMLElement) || el;
-			if (container.closest('#gdl-bp-detail-root, [class*="AllGames"], [class*="LibraryHome"], [class*="Shelf"], [class*="Grid"]')) continue;
-			// Never hide an ancestor that contains our mounted React root. Steam's
-			// Info notice often shares its outer panel with the injected content.
-			let target: HTMLElement | null = container;
-			if (root && target.contains(root)) {
-				target = el !== root && !el.contains(root) ? el : null;
-			}
-			if (!target || target === root || (root && target.contains(root))) continue;
-			target.hidden = true;
-			target.style.setProperty('display', 'none', 'important');
-			target.dataset.gdlBpHiddenNotice = '1';
-			target.setAttribute('aria-hidden', 'true');
-		}
-	}
-	for (const el of Array.from(doc.querySelectorAll<HTMLElement>('[class*="NonSteamGameNotice"], [class*="GameInfoCollections"], [class*="gameInfoCollections"], [class*="nonSteam"], [class*="nonSteamGameNotice"]'))) {
-		if (el.closest('#gdl-bp-detail-root, [class*="AllGames"], [class*="LibraryHome"], [class*="Shelf"], [class*="Grid"]')) continue;
-		const target = root && el.contains(root) ? (el.firstElementChild as HTMLElement || el) : el;
-		if (target !== root) {
-			target.hidden = true;
-			target.style.setProperty('display', 'none', 'important');
-			target.dataset.gdlBpHiddenNotice = '1';
-			target.setAttribute('aria-hidden', 'true');
-		}
-	}
+const noticeVisibility = new NativeVisibilityLeases();
+const controllerVisibility = new NativeVisibilityLeases();
+const FOREIGN_NATIVE_SURFACE = '[role="dialog"], [aria-modal="true"], .ModalDialogPopup, [class*="ModalPosition"], [class*="QuickAccess"], [class*="MainMenu"], [class*="Settings"], [class*="settings"]';
+function linkedDetailOwner(doc: Document): HTMLElement | null {
+ const root = doc.getElementById('gdl-bp-detail-root');
+ return root?.isConnected && !root.closest(FOREIGN_NATIVE_SURFACE) && steamUIModeService.isGamepadUI(doc)
+  && isCurrentLinkedGamepadTarget(doc, root.dataset.gdlShortcutAppId, root.dataset.gdlSteamAppId) ? root : null;
+}
+function ownedNativeElement(doc: Document, root: HTMLElement, scope: HTMLElement, element: HTMLElement): boolean {
+ if (element.ownerDocument !== doc || !element.isConnected || !scope.contains(element) || element === root || element.contains(root)
+  || element.closest(FOREIGN_NATIVE_SURFACE) || element.querySelector(FOREIGN_NATIVE_SURFACE)
+  || element.closest('#gdl-bp-detail-root, [class*="AllGames"], [class*="LibraryHome"], [class*="Shelf"], [class*="Grid"]')) return false;
+ const identity = element.closest('[data-appid], [data-app-id], [data-app-id-value]');
+ const rawId = identity?.getAttribute('data-appid') || identity?.getAttribute('data-app-id') || identity?.getAttribute('data-app-id-value');
+ return !rawId || (Number(rawId) >>> 0) === (Number(root.dataset.gdlShortcutAppId) >>> 0);
 }
 
-export function restoreBigPictureNonSteamNotices(doc: Document): void {
-	for (const element of Array.from(doc.querySelectorAll<HTMLElement>('[data-gdl-bp-hidden-notice="1"]'))) {
-		element.hidden = false;
-		element.style.removeProperty('display');
-		delete element.dataset.gdlBpHiddenNotice;
-		element.removeAttribute('aria-hidden');
-	}
+export function hideBigPictureNonSteamNotices(doc: Document): void {
+ const root = linkedDetailOwner(doc), scope = root?.parentElement;
+ if (!root || !scope || scope === doc.body || scope === doc.documentElement) { noticeVisibility.restore(doc); return; }
+ const anchors = ['no es un juego de steam', 'no es un juego o mod', 'no está disponible porque no es un juego',
+  'non-steam game', 'nicht von steam', "n'est pas un jeu steam", 'não é um jogo steam', 'не из steam',
+  'steam controla el inicio', 'steam controls the start', 'se encuentra en estas colecciones', 'in these collections', 'dans ces collections'];
+ const semantic = '[class*="NonSteamGameNotice"], [class*="GameInfoCollections"], [class*="gameInfoCollections"], [class*="nonSteam"], [class*="nonSteamGameNotice"]';
+ const candidates = new Set<HTMLElement>();
+ const hasNoticeText = (element: Element) => anchors.some(anchor => (element.textContent || '').trim().toLowerCase().includes(anchor));
+ for (const element of Array.from(scope.querySelectorAll<HTMLElement>(semantic))) if (ownedNativeElement(doc, root, scope, element)) candidates.add(element);
+ const textSelector = 'div, p, section, [class*="Notice"], [class*="Description"]';
+ for (const element of Array.from(scope.querySelectorAll<HTMLElement>(textSelector))) {
+  if (!ownedNativeElement(doc, root, scope, element) || !hasNoticeText(element)) continue;
+  if (Array.from(element.children).some(child => child.matches(textSelector) && hasNoticeText(child))) continue;
+  const target = element.closest<HTMLElement>(semantic) || element;
+  if (ownedNativeElement(doc, root, scope, target)) candidates.add(target);
+ }
+ noticeVisibility.retain(doc, root, candidates);
+ for (const element of candidates) noticeVisibility.hide(element, root, { 'data-gdl-bp-hidden-notice': '1' });
 }
+
+export function restoreBigPictureNonSteamNotices(doc: Document): void { noticeVisibility.restore(doc); }
 
 export function ensureCloudDivider(doc: Document, strip: HTMLElement): HTMLElement | null {
 	const context = resolveActiveGameContext(doc);
@@ -463,63 +551,39 @@ export function removeCloudDivider(doc: Document): void {
 }
 
 export function ensurePlaybarControllerStat(doc: Document, supportOverride?: GameControllerSupport): HTMLElement | null {
+	const owner = linkedDetailOwner(doc);
+	if (!owner) { removePlaybarControllerStat(doc, true); return null; }
 	const controllerInfo = detectConnectedController(doc);
 	if (!controllerInfo.connected) {
 		removePlaybarControllerStat(doc);
 		return null;
 	}
-	const context = resolveActiveGameContext(doc);
-	const linkedDetailRoot = doc.getElementById('gdl-bp-detail-root')?.dataset.gdlSteamAppId;
 	const playbar = PLAYBAR_CLASSES();
-	const statsSection = doc.querySelector<HTMLElement>(
-		`[class*="${playbar.GameStatsSection || 'GameStatsSection'}"], [class*="GameStatsSection"], [class*="gameStatsSection"]`
-	);
+	const statsSelector = `[class*="${playbar.GameStatsSection || 'GameStatsSection'}"], [class*="GameStatsSection"], [class*="gameStatsSection"]`;
+ let statsSection: HTMLElement | null = null;
+ for (let scope = owner.parentElement, depth = 0; scope && scope !== doc.body && scope !== doc.documentElement && depth < 8; scope = scope.parentElement, depth++) {
+  statsSection = Array.from(scope.querySelectorAll<HTMLElement>(statsSelector)).find(element => ownedNativeElement(doc, owner, scope!, element)) || null;
+  if (statsSection) break;
+ }
 	const previousState = playbarControllerStates.get(doc);
-	const explicitSteamAppId = context.type === 'shortcut-linked'
-		? String(context.identity?.steamAppId || context.steamAppId || '')
-		: String(linkedDetailRoot || previousState?.steamAppId || '');
-
-	if (context.type === 'steam' || context.type === 'shortcut-unlinked') {
-		removePlaybarControllerStat(doc);
-		return null;
-	}
-	if (context.type !== 'shortcut-linked' && !supportOverride && !linkedDetailRoot) {
-		// GamepadUI briefly reports `none` while replacing the details header.
-		// Preserve a known linked controller row during that bounded gap; a real
-		// library/non-details transition removes the GameStatsSection altogether.
-		if (!previousState || !statsSection) {
-			removePlaybarControllerStat(doc);
-			return null;
-		}
-		const gapStarted = playbarControllerContextGapSince.get(doc) || Date.now();
-		playbarControllerContextGapSince.set(doc, gapStarted);
-		if (Date.now() - gapStarted > 1200) {
-			removePlaybarControllerStat(doc);
-			return null;
-		}
-		supportOverride = previousState.support;
-	} else {
-		playbarControllerContextGapSince.delete(doc);
-	}
-	if (!statsSection) return null;
+	const explicitSteamAppId = String(owner.dataset.gdlSteamAppId || '');
+	if (!statsSection) { removePlaybarControllerStat(doc, true); return null; }
 
 	doc.getElementById('gdl-bp-playbar-controller-styles')?.remove();
 	ensureBigPictureDetailStyles(doc);
 
 	const nativeControllerClass = playbar.ControllerSupportInfo || '';
-	for (const child of Array.from(statsSection.children)) {
-		const element = child as HTMLElement;
-		if (element.id === 'gdl-bp-playbar-controller') continue;
-		if (!nativeControllerClass || !element.classList.contains(nativeControllerClass)) continue;
-		// A linked shortcut can inherit Steam's stale/generic controller row. Keep
-		// it intact but suppress it while our AppID-backed row owns this playbar.
-		if (element.dataset.gdlBpNativeControllerHidden !== '1') {
-			element.dataset.gdlBpNativeControllerHidden = '1';
-			element.dataset.gdlBpNativeControllerDisplay = element.style.display || '';
-		}
-		element.hidden = true;
-		element.style.setProperty('display', 'none', 'important');
-	}
+ const nativeRows = new Set<HTMLElement>();
+ for (const child of Array.from(statsSection.children)) {
+  const element = child as HTMLElement;
+  if (element.id !== 'gdl-bp-playbar-controller' && nativeControllerClass && element.classList.contains(nativeControllerClass)
+   && ownedNativeElement(doc, owner, statsSection, element)) nativeRows.add(element);
+ }
+ controllerVisibility.retain(doc, owner, nativeRows);
+ for (const element of nativeRows) controllerVisibility.hide(element, owner, {
+  'data-gdl-bp-native-controller-hidden': '1',
+  'data-gdl-bp-native-controller-display': element.getAttribute('data-gdl-bp-native-controller-display') || element.style.getPropertyValue('display'),
+ });
 
 	let stat = doc.getElementById('gdl-bp-playbar-controller');
 	if (!stat) {
@@ -558,16 +622,21 @@ export function ensurePlaybarControllerStat(doc: Document, supportOverride?: Gam
 			support = detectGameControllerSupport(steamAppId, doc);
 		}
 	}
-	if (!support) support = previousState?.support || { xbox: true, ps4: false, ps5: false };
+	if (!support) support = previousState?.support || { xbox: false, ps4: false, ps5: false };
 	playbarControllerStates.set(doc, { steamAppId: explicitSteamAppId, support });
 	stat.dataset.gdlSteamAppId = explicitSteamAppId;
 	bindPlaybarControllerRepair(doc, statsSection);
 
-	mountPlaybarControllerIcons(row, doc, support);
+	const previousIcons = playbarControllerIconCleanups.get(doc);
+	if (previousIcons && previousIcons.container !== row) previousIcons.cleanup();
+	playbarControllerIconCleanups.set(doc, { container: row, cleanup: mountPlaybarControllerIcons(row, doc, support) });
 	return stat;
 }
 
-export function removePlaybarControllerStat(doc: Document, restoreNative = false): void {
+export function removePlaybarControllerStat(doc: Document, restoreNative = true): void {
+	playbarControllerIconCleanups.get(doc)?.cleanup();
+	playbarControllerIconCleanups.delete(doc);
+	disposePlaybarControllerIcons(doc);
 	playbarControllerObservers.get(doc)?.disconnect();
 	playbarControllerObservers.delete(doc);
 	playbarControllerObserverTargets.delete(doc);
@@ -575,7 +644,6 @@ export function removePlaybarControllerStat(doc: Document, restoreNative = false
 	if (repairTimer) clearTimeout(repairTimer);
 	playbarControllerRepairTimers.delete(doc);
 	playbarControllerStates.delete(doc);
-	playbarControllerContextGapSince.delete(doc);
 	doc.getElementById('gdl-bp-playbar-controller-styles')?.remove();
 	const stat = doc.getElementById('gdl-bp-playbar-controller');
 	stat?.remove();
@@ -584,13 +652,4 @@ export function removePlaybarControllerStat(doc: Document, restoreNative = false
 	}
 }
 
-export function restoreNativePlaybarController(doc: Document): void {
-	for (const native of Array.from(doc.querySelectorAll<HTMLElement>('[data-gdl-bp-native-controller-hidden="1"]'))) {
-		native.hidden = false;
-		const previous = native.dataset.gdlBpNativeControllerDisplay || '';
-		if (previous) native.style.setProperty('display', previous);
-		else native.style.removeProperty('display');
-		delete native.dataset.gdlBpNativeControllerHidden;
-		delete native.dataset.gdlBpNativeControllerDisplay;
-	}
-}
+export function restoreNativePlaybarController(doc: Document): void { controllerVisibility.restore(doc); }

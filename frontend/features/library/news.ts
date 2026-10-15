@@ -26,6 +26,102 @@ const newsRequests = new RetryingRequestCache<NewsItem[]>({
 	isCacheable: (value): value is NewsItem[] => Array.isArray(value),
 });
 
+export type NewsProgressCallback = (items: NewsItem[]) => void;
+type NewsSourceResult = { raw: string; ok: boolean };
+type NewsProgress = { listeners: Set<NewsProgressCallback>; latest: NewsItem[] | null; signature: string };
+// These are subscribers to current requests, never another persistent cache.
+const pendingNewsProgress = new Map<string, NewsProgress>();
+const MAX_PROGRESS_REQUESTS = 128;
+const MAX_PROGRESS_LISTENERS = 32;
+
+function notifyNewsListener(listener: NewsProgressCallback, items: NewsItem[]): void {
+	try { listener(items); } catch {}
+}
+
+function newsProgressFor(key: string): NewsProgress {
+	let state = pendingNewsProgress.get(key);
+	if (!state) {
+		state = { listeners: new Set(), latest: null, signature: '' };
+		pendingNewsProgress.set(key, state);
+		while (pendingNewsProgress.size > MAX_PROGRESS_REQUESTS) {
+			const oldest = pendingNewsProgress.keys().next().value!;
+			pendingNewsProgress.get(oldest)?.listeners.clear();
+			pendingNewsProgress.delete(oldest);
+		}
+	}
+	return state;
+}
+
+function publishNewsProgress(key: string, state: NewsProgress, items: NewsItem[]): void {
+	if (pendingNewsProgress.get(key) !== state || items.length === 0) return;
+	const signature = JSON.stringify(items);
+	if (state.signature === signature) return;
+	state.latest = items; state.signature = signature;
+	for (const listener of Array.from(state.listeners)) notifyNewsListener(listener, items);
+}
+
+function isMetadataNewsFallback(item: NewsItem): boolean {
+	return /^gdl-steam-(?:release|metadata)-/.test(String(item.gid || '')) && item.feedname === 'steam_store_release_metadata';
+}
+
+/** Merge completed sources in language/source order rather than arrival order.
+ * Pending or failed siblings keep the last known posts in a partial snapshot. */
+function availableNewsSources(steamAppId: string, preferredLanguage: string, results: (NewsSourceResult | undefined)[]):
+	{ items: NewsItem[]; hadTransportFailure: boolean } {
+	const parsed = results.map(result => {
+		try { return result ? JSON.parse(result.raw) : { items: [], transient_error: true }; }
+		catch { return { items: [], transient_error: true }; }
+	});
+	const [preferred, english, announcements, englishAnnouncements] = parsed;
+	const hadTransportFailure = results.some(result => !result?.ok)
+		|| parsed.some(value => value?.transient_error === true || Boolean(value?.error));
+	const partnerItems = [
+		...(Array.isArray(preferred?.items) ? preferred.items : []),
+		...(Array.isArray(english?.items) ? english.items : []),
+	];
+	const officialAnnouncements = [
+		...(Array.isArray(announcements?.items) ? announcements.items : []),
+		...(Array.isArray(englishAnnouncements?.items) ? englishAnnouncements.items : []),
+	].filter(item => {
+		const feedname = String(item?.feedname || '').toLowerCase();
+		if (feedname && !['steam_community_announcements', 'steam_store_release_metadata', 'steam_release'].includes(feedname)) return false;
+		try {
+			const url = new URL(String(item?.url || ''));
+			return /^https?:$/.test(url.protocol) && ['steampowered.com', 'steamcommunity.com']
+				.some(host => url.hostname === host || url.hostname.endsWith('.' + host));
+		} catch { return false; }
+	});
+	const items: NewsItem[] = [
+		...partnerItems.map((item: any) => ({
+			gid: String(item.gid || ''), title: item.title || '',
+			url: `https://store.steampowered.com/news/app/${steamAppId}/view/${item.gid || ''}`,
+			contents: item.contents || '', date: item.date || 0,
+			event_type: item.event_type || 0, image: item.image || '',
+		})),
+		...officialAnnouncements.map((item: any) => {
+			const feedLabel = String(item.feedlabel || ''), feedName = String(item.feedname || '').toLowerCase();
+			const historicalCommunity = Boolean(item.historical_community) || /^Steam Community(?:\s|·|$)/i.test(feedLabel);
+			const isReleaseFeed = feedName === 'steam_release' || feedName === 'steam_store_release_metadata';
+			return { ...item, gid: String(item.gid || ''), title: item.title || '', contents: item.contents || '', date: Number(item.date || 0),
+				event_type: historicalCommunity ? 0 : (isReleaseFeed ? 10 : (Number(item.event_type || 0) || inferAnnouncementEventType(item.title || '', item.contents || ''))),
+				image: item.image || newsImageFromContents(item.contents || ''),
+			};
+		}),
+	];
+	const seenIds = new Set<string>(), seenTitles = new Set<string>();
+	return {
+		items: items.filter(item => {
+			const id = String(item.gid || '').toLowerCase();
+			const title = stripTags(String(item.title || '')).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+			if (!title || !isNewsItemLanguageCompatible(item, preferredLanguage) || (id && seenIds.has(id)) || seenTitles.has(title)) return false;
+			if (id) seenIds.add(id);
+			seenTitles.add(title);
+			return true;
+		}),
+		hadTransportFailure,
+	};
+}
+
 
 function historicalNewsModeSync(steamAppId: string, language: string, metadata?: SteamGameData | null): boolean {
 	return (metadata || getSynchronousGameData(steamAppId, language))?.is_delisted === true;
@@ -226,149 +322,73 @@ export async function getCommunityContent(steamAppId: string, requestedLanguage?
 	return loaded ?? stale;
 }
 
-export async function getNews(steamAppId: string, requestedLanguage?: string, metadata?: SteamGameData | null): Promise<NewsItem[]> {
-	// Ask Steam for the client language first, then use English only for events
-	// that have no localized version. Keeping the language in the cache key is
-	// important when the user changes Steam's language between sessions.
+export async function getNews(steamAppId: string, requestedLanguage?: string, metadata?: SteamGameData | null,
+	onProgress?: NewsProgressCallback): Promise<NewsItem[]> {
 	const preferredLanguage = requestedLanguage || await getSteamLanguage().catch(() => steamLanguageSync() || 'english');
 	const historical = await historicalNewsMode(steamAppId, preferredLanguage, metadata);
 	const cacheKey = newsCacheKey(steamAppId, preferredLanguage, historical);
 	const snapshot = getCachedNews(steamAppId, preferredLanguage, metadata);
-	if (snapshot?.fresh) return snapshot.data;
-	const stale = (snapshot?.data || [])
-		.filter(item => isNewsItemLanguageCompatible(item, preferredLanguage));
-
-	// Combine Steam partner events with the official community-announcements
-	// feed. Partner events provide native event types/images; announcements
-	// fill older pages so the Load More control has a real chronology.
-	const loaded = await newsRequests.get(cacheKey, async () => { try {
-		const settled = async (request: Promise<string>, timeoutMs = 30_000): Promise<{ raw: string; ok: boolean }> => {
-			const safeRequest = request
-				.then(raw => ({ raw, ok: true }))
-				.catch(() => ({ raw: '{"items":[]}', ok: false }));
-			let timer: ReturnType<typeof setTimeout> | undefined;
-			try { return await Promise.race([
-				safeRequest,
-				new Promise<{ raw: string; ok: boolean }>(resolve => { timer = setTimeout(
-					() => resolve({ raw: '{"items":[]}', ok: false }), timeoutMs,
-				); }),
-			]); } finally { clearTimeout(timer); }
-		};
-		const emptyResult = Promise.resolve({ raw: '{"items":[]}', ok: true });
-		// Removed games commonly have no News Hub/Partner Events payload. Their
-		// public ISteamNews response is enough (and still contains Product Release
-		// posts), so do not hold the feed behind two slow HTML-page requests.
-		const [preferredResult, englishResult, announcementsResult, englishAnnouncementsResult] = await Promise.all([
-			historical ? emptyResult : settled(fetchPartnerEventsBackend({ steam_app_id: steamAppId, language: preferredLanguage })),
-			historical || preferredLanguage === 'english'
-				? emptyResult
-				: settled(fetchPartnerEventsBackend({ steam_app_id: steamAppId, language: 'english' })),
-			settled(fetchNewsBackend({ steam_app_id: steamAppId, language: preferredLanguage })),
-			preferredLanguage === 'english'
-				? Promise.resolve({ raw: '{"items":[]}', ok: true })
-				: settled(fetchNewsBackend({ steam_app_id: steamAppId, language: 'english' })),
-		]);
-		const preferred = JSON.parse(preferredResult.raw);
-		const english = JSON.parse(englishResult.raw);
-		const announcements = JSON.parse(announcementsResult.raw);
-		const englishAnnouncements = JSON.parse(englishAnnouncementsResult.raw);
-		const hadTransportFailure = !preferredResult.ok || !englishResult.ok
-			|| !announcementsResult.ok || !englishAnnouncementsResult.ok
-			|| preferred?.transient_error === true || english?.transient_error === true
-			|| announcements?.transient_error === true || englishAnnouncements?.transient_error === true
-			|| Boolean(announcements?.error) || Boolean(englishAnnouncements?.error);
-		const partnerItems = [
-			...(Array.isArray(preferred.items) ? preferred.items : []),
-			...(Array.isArray(english.items) ? english.items : []),
-		];
-		const officialAnnouncements = [
-			...(Array.isArray(announcements.items) ? announcements.items : []),
-			...(Array.isArray(englishAnnouncements.items) ? englishAnnouncements.items : []),
-		].filter(item => {
-			const feedname = String(item?.feedname || '').toLowerCase();
-			if (feedname && feedname !== 'steam_community_announcements' && feedname !== 'steam_store_release_metadata' && feedname !== 'steam_release') {
-				return false;
-			}
-			try {
-				const url = new URL(String(item?.url || ''));
-				return /^https?:$/.test(url.protocol) && ['steampowered.com', 'steamcommunity.com']
-					.some(host => url.hostname === host || url.hostname.endsWith('.' + host));
-			} catch { return false; }
-		});
-		const partnerEventsUnavailable = preferred?.unavailable === true
-			&& (preferredLanguage === 'english' || english?.unavailable === true);
-		if (partnerItems.length > 0 || officialAnnouncements.length > 0) {
-			const items: NewsItem[] = [
-				...partnerItems.map((e: any) => ({
-				gid: String(e.gid || ''),
-				title: e.title || '',
-				url: `https://store.steampowered.com/news/app/${steamAppId}/view/${e.gid || ''}`,
-				contents: e.contents || '',
-				date: e.date || 0,
-				event_type: e.event_type || 0,
-				image: e.image || '',
-				})),
-				...officialAnnouncements.map((item: any) => {
-					const feedLabel = String(item.feedlabel || '');
-					const feedName = String(item.feedname || '').toLowerCase();
-					const historicalCommunity = Boolean(item.historical_community) || /^Steam Community(?:\s|·|$)/i.test(feedLabel);
-					const isReleaseFeed = feedName === 'steam_release' || feedName === 'steam_store_release_metadata';
-					return {
-						...item,
-						gid: String(item.gid || ''),
-						title: item.title || '',
-						contents: item.contents || '',
-						date: Number(item.date || 0),
-						event_type: historicalCommunity
-							? 0
-							: (isReleaseFeed ? 10 : (Number(item.event_type || 0) || inferAnnouncementEventType(item.title || '', item.contents || ''))),
-						image: item.image || newsImageFromContents(item.contents || ''),
-					};
-				}),
-			];
-			const seenIds = new Set<string>();
-			const seenTitles = new Set<string>();
-			const deduped = items.filter((item: NewsItem) => {
-				const id = String(item.gid || '').toLowerCase();
-				const title = stripTags(String(item.title || '')).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
-				if (!title) return false;
-				if (!isNewsItemLanguageCompatible(item, preferredLanguage)) return false;
-				if ((id && seenIds.has(id)) || seenTitles.has(title)) return false;
-				if (id) seenIds.add(id);
-				seenTitles.add(title);
-				return true;
-			});
-			if (deduped.length === 0 && stale.length > 0) return stale;
-			const merged = ensureNewsFeed(steamAppId, preferredLanguage, compactNewsItems(mergeSupplementalPatchNotes(
-				steamAppId,
-				hadTransportFailure ? [...deduped, ...stale] : deduped,
-			)), metadata);
-			// At least one official source produced usable data. Persist that valid
-			// feed even if a sibling endpoint failed; legacy AppIDs commonly expose
-			// announcements but no Partner Events endpoint.
-			cacheSet(cacheKey, merged);
-			return merged;
-		}
-		// A retired AppID may no longer have a Store News Hub. Cache that expected
-		// empty state so returning to the game does not call the dead endpoint again.
-		if (partnerEventsUnavailable && !hadTransportFailure) {
-			const merged = ensureNewsFeed(steamAppId, preferredLanguage, compactNewsItems(mergeSupplementalPatchNotes(steamAppId, [])), metadata);
-			cacheSet(cacheKey, merged);
-			return merged;
-		}
-		if (!hadTransportFailure) {
-			const merged = ensureNewsFeed(steamAppId, preferredLanguage, compactNewsItems(mergeSupplementalPatchNotes(steamAppId, [])), metadata);
-			cacheSet(cacheKey, merged);
-			return merged;
-		}
-	} catch (e) {
-		backendLog('Official Steam activity fetch error: ' + e);
+	if (snapshot?.fresh) {
+		if (onProgress) notifyNewsListener(onProgress, snapshot.data);
+		return snapshot.data;
 	}
-	// Keep the last known feed visible and suppress an immediate retry storm.
-	// RetryingRequestCache retains this fallback only for the short transient TTL.
-	return stale.length > 0 ? stale : ensureNewsFeed(steamAppId, preferredLanguage, compactNewsItems(mergeSupplementalPatchNotes(steamAppId, [])), metadata);
-	});
-	return loaded ?? (stale.length > 0 ? stale : ensureNewsFeed(steamAppId, preferredLanguage, compactNewsItems(mergeSupplementalPatchNotes(steamAppId, [])), metadata));
+	const stale = (snapshot?.data || []).filter(item => isNewsItemLanguageCompatible(item, preferredLanguage));
+	const retainedStale = stale.filter(item => !isMetadataNewsFallback(item));
+	const progress = newsProgressFor(cacheKey);
+	if (onProgress) {
+		progress.listeners.add(onProgress);
+		while (progress.listeners.size > MAX_PROGRESS_LISTENERS) progress.listeners.delete(progress.listeners.values().next().value!);
+		if (progress.latest) notifyNewsListener(onProgress, progress.latest);
+	}
+	try {
+		const loaded = await newsRequests.get(cacheKey, async () => { try {
+			const settled = async (request: Promise<string>, timeoutMs = 30_000): Promise<NewsSourceResult> => {
+				const safeRequest = request.then(raw => ({ raw, ok: true })).catch(() => ({ raw: '{"items":[]}', ok: false }));
+				let timer: ReturnType<typeof setTimeout> | undefined;
+				try { return await Promise.race([safeRequest, new Promise<NewsSourceResult>(resolve => {
+					timer = setTimeout(() => resolve({ raw: '{"items":[]}', ok: false }), timeoutMs);
+				})]); } finally { clearTimeout(timer); }
+			};
+			const emptyResult = Promise.resolve({ raw: '{"items":[]}', ok: true });
+			const results: (NewsSourceResult | undefined)[] = Array.from({ length: 4 });
+			const requests = [
+				historical ? emptyResult : settled(fetchPartnerEventsBackend({ steam_app_id: steamAppId, language: preferredLanguage })),
+				historical || preferredLanguage === 'english' ? emptyResult : settled(fetchPartnerEventsBackend({ steam_app_id: steamAppId, language: 'english' })),
+				settled(fetchNewsBackend({ steam_app_id: steamAppId, language: preferredLanguage })),
+				preferredLanguage === 'english' ? emptyResult : settled(fetchNewsBackend({ steam_app_id: steamAppId, language: 'english' })),
+			];
+			await Promise.all(requests.map(async (request, index) => {
+				results[index] = await request;
+				const available = availableNewsSources(steamAppId, preferredLanguage, results);
+				if (available.items.length > 0) {
+					// Keep the useful chronology while siblings enrich/localize it;
+					// incomplete results never become a fresh persistent snapshot.
+					const partial = compactNewsItems(mergeSupplementalPatchNotes(steamAppId, [...available.items, ...retainedStale]));
+					publishNewsProgress(cacheKey, progress, partial);
+				}
+			}));
+			const available = availableNewsSources(steamAppId, preferredLanguage, results);
+			if (available.items.length > 0) {
+				const merged = ensureNewsFeed(steamAppId, preferredLanguage, compactNewsItems(mergeSupplementalPatchNotes(steamAppId,
+					available.hadTransportFailure ? [...available.items, ...retainedStale] : available.items)), metadata);
+				if (pendingNewsProgress.get(cacheKey) === progress) cacheSet(cacheKey, merged);
+				publishNewsProgress(cacheKey, progress, merged);
+				return merged;
+			}
+			if (!available.hadTransportFailure) {
+				const merged = ensureNewsFeed(steamAppId, preferredLanguage, compactNewsItems(mergeSupplementalPatchNotes(steamAppId, [])), metadata);
+				if (pendingNewsProgress.get(cacheKey) === progress) cacheSet(cacheKey, merged);
+				return merged;
+			}
+		} catch (error) { backendLog('Official Steam activity fetch error: ' + error); }
+		return stale.length > 0 ? stale : ensureNewsFeed(steamAppId, preferredLanguage, compactNewsItems(mergeSupplementalPatchNotes(steamAppId, [])), metadata);
+		});
+		return loaded ?? (stale.length > 0 ? stale : ensureNewsFeed(steamAppId, preferredLanguage, compactNewsItems(mergeSupplementalPatchNotes(steamAppId, [])), metadata));
+	} finally {
+		if (onProgress) progress.listeners.delete(onProgress);
+		// Joined callers have the terminal result; retain no progress callback.
+		if (pendingNewsProgress.get(cacheKey) === progress) pendingNewsProgress.delete(cacheKey);
+	}
 }
 
 export function invalidateLibraryContentCaches(appIds: Iterable<string | number>): void {
@@ -377,6 +397,10 @@ export function invalidateLibraryContentCaches(appIds: Iterable<string | number>
 	const matches = (key: string): boolean => ids.has(key.match(/_(\d+)$/)?.[1] || '');
 	communityRequests.invalidateMatching(matches);
 	newsRequests.invalidateMatching(matches);
+	for (const [key, progress] of pendingNewsProgress) {
+		if (!matches(key)) continue;
+		progress.listeners.clear(); pendingNewsProgress.delete(key);
+	}
 	cacheDeleteMatching(key => /^(?:events\d+|community\d+)_/.test(key) && matches(key));
 }
 

@@ -63,6 +63,21 @@ const fixtureData = {
     };
   }),
 };
+Object.assign(fixtureData.achievements.at(-1), { display_name: 'Unknown rarity fixture', global_percent: 99, global_percent_known: false, hidden: false });
+Object.assign(fixtureData.achievements.at(-2), { display_name: 'Known zero rarity fixture', global_percent: 0, global_percent_known: true, hidden: false });
+Object.assign(fixtureData.achievements[0], { global_percent: 89.7, global_percent_known: true });
+Object.assign(fixtureData.achievements[1], { global_percent: 87.3, global_percent_known: true });
+Object.assign(fixtureData.achievements[2], { global_percent: 85.3, global_percent_known: true });
+Object.assign(fixtureData.achievements[41], {
+  display_name: 'Locked global fixture', description: 'World progress must not reveal my personal progress',
+  global_percent: 82.5, global_percent_known: true, earned: false, earned_time: 0,
+  icon: iconSvg(41), icon_gray: iconSvg(42), progress: 3, max_progress: 10, hidden: false,
+});
+Object.assign(fixtureData.achievements[42], {
+  display_name: 'Hidden world fixture', description: 'Secret world achievement description',
+  global_percent: 45.6, global_percent_known: true, earned: false, earned_time: 0,
+  icon: iconSvg(43), icon_gray: iconSvg(44), progress: 0, max_progress: 0, hidden: true,
+});
 const localUrl = filename => fs.existsSync(filename) ? pathToFileURL(filename).href : iconSvg(0);
 const assets = {
   icon: localUrl(`${steam}/appcache/librarycache/1030300/b4a999c1302e3ac123c041fd41bb8a34528c6ab5.jpg`),
@@ -79,17 +94,24 @@ async function browserChecks(sources, fixtureData, assets) {
   let comparisonMode = 'success';
   let resolveComparison;
   let comparisonRequests = 0;
+  let currentUserRequests = 0;
   const comparisonSteamid = '76561198000000001';
   const localization = {
     steamIntlLocale: () => 'es-419',
     loc: (key, fallback) => ({
       Achievements_HeaderStats_Earned_Label: '%1$s de %2$s logros conseguidos',
+      AppDetails_PlayerUnlockedPercentAll: '¡Has desbloqueado todos los logros! %1$s/%2$s',
       Achievements_Tab_MyAchievements: 'Mis logros',
       Achievements_Tab_GlobalAchievements: 'Logros mundiales',
       Achievements_ComparisonLabel_NotComparing: 'Comparar con...',
       Achievements_ComparisonLabel_Comparing: 'Comparado con %1$s',
       Achievements_ComparisonLabel_Clear: 'Borrar la comparación',
       Achievements_Filter_Default: 'Buscar',
+      Achievements_GlobalAchievement_PercentUnlockedLabel: '% de todos los jugadores',
+      Achievements_HiddenAchievementItem_Individual_Title: 'Logro oculto',
+      Achievements_HiddenAchievementItem_Description: 'Sigue jugando para descubrir este logro.',
+      Achievements_HiddenAchievementItem_Individual_Reveal: 'Hacer clic para mostrar "spoiler"',
+      Achievements_HiddenAchievementItem_Individual_Reveal_Desktop: 'Hacer clic para mostrar "spoiler"',
       Achievements_ListItem_UnlockDateTime: 'Se desbloqueó el %1$s',
     }[key] || fallback),
     gdlText: (key, fallback, values = {}) => ({
@@ -104,7 +126,12 @@ async function browserChecks(sources, fixtureData, assets) {
     '../../core/text': { escapeHtml: value => String(value).replace(/[&<>"']/g, token => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[token]) },
     '../../steam/localization': localization,
     './cache': { pickCachedLocalAchievementSnapshot: data => data },
+    './navigation': { linkedAchievementTarget: () => ({ steamAppId: fixtureData.appid, shortcutAppId: fixtureData.state_appid }), isCurrentAchievementTarget: () => true },
     './game-info': { getLocalAchievementGameInfo: async () => ({ name: 'Hollow Knight: Silksong', headerImage: assets.icon, iconImage: assets.icon, heroImage: assets.hero }) },
+    '../library/social/feed': { getCurrentSteamUser: () => {
+      currentUserRequests++;
+      return { steamid: '76561198000000000', name: 'Senkumil', avatar: assets.icon };
+    } },
     './steam-rare': { getSteamRareAchievementClasses: () => ({ wrapper: 'fixture-rare-frame', icon: 'fixture-rare-icon', iconGlow: 'fixture-rare-glow' }), renderSteamRareGlowHtml: () => '' },
     './comparison': {
       getAchievementComparisonFriends: async () => [{ steamid: comparisonSteamid, name: 'Amiga real', avatar: assets.icon }],
@@ -137,9 +164,9 @@ async function browserChecks(sources, fixtureData, assets) {
     return Object.fromEntries(['x', 'y', 'width', 'height', 'right', 'bottom'].map(key => [key, box[key] * 1.25]));
   };
   try {
-    const { openLocalAchievementsModal } = load('modal');
-    const open = async () => {
-      await openLocalAchievementsModal(document, fixtureData);
+    const { openLocalAchievementsModal, disposeLocalAchievementsModal } = load('modal');
+    const open = async (modalData = fixtureData) => {
+      await openLocalAchievementsModal(document, modalData);
       await Promise.race([
         Promise.all(Array.from(document.querySelectorAll('.gdl-lam-row-icon')).slice(0, 5)
           .map(image => image.decode().catch(() => {}))),
@@ -181,12 +208,110 @@ async function browserChecks(sources, fixtureData, assets) {
       && document.querySelector('.gdl-lam-compare').options[0].textContent === 'Comparar con...',
     'Header, global tab and comparison control preserve exact native LATAM wording');
     check(Array.from(document.querySelectorAll('.gdl-lam-row-title')).slice(0, 4).map(element => element.textContent).join('|') === 'Consumed|Regenerated|Woven|Extended', 'Mine tab preserves the native reference ordering');
+    const namedRow = name => Array.from(document.querySelectorAll('.gdl-lam-row')).find(row => row.querySelector('.gdl-lam-row-title').textContent === name);
+    check(namedRow('Unknown rarity fixture').querySelector('.gdl-lam-row-global').textContent === ''
+      && namedRow('Known zero rarity fixture').querySelector('.gdl-lam-row-global').textContent.includes('0.0%'),
+    'Mine rows preserve a confirmed zero percentage and omit unknown global rarity without fabricating zero');
     const search = document.querySelector('.gdl-lam-search'); search.value = 'Woven'; search.dispatchEvent(new Event('input', { bubbles: true }));
     check(document.querySelectorAll('.gdl-lam-row').length === 1 && document.querySelector('.gdl-lam-row-title').textContent === 'Woven', 'Search filters achievement rows');
     search.value = ''; search.dispatchEvent(new Event('input', { bubbles: true }));
     document.querySelector('[data-tab="global"]').click();
-    check(document.querySelector('[data-tab="global"]').classList.contains('active') && document.querySelector('.gdl-lam-row-right').textContent.includes('%'), 'Global tab activates and shows percentage values');
+    check(document.querySelector('[data-tab="global"]').classList.contains('active')
+      && document.querySelector('[data-tab="global"]').getAttribute('aria-selected') === 'true'
+      && document.querySelector('[data-tab="mine"]').getAttribute('aria-selected') === 'false'
+      && document.querySelector('.gdl-lam-row-right').textContent.includes('%'), 'Global tab activates with native tab semantics and shows percentage values');
+    geometry.global = Object.fromEntries(Object.entries({
+      toolbar: '.gdl-lam-global-toolbar', avatar: '.gdl-lam-user-avatar', label: '.gdl-lam-global-label',
+      search: '.gdl-lam-search', firstRow: '.gdl-lam-row', secondRow: '.gdl-lam-row:nth-child(2)',
+      check: '.gdl-lam-global-check', content: '.gdl-lam-global-content', bar: '.gdl-lam-global-bar', icon: '.gdl-lam-row-icon-frame',
+    }).map(([key, selector]) => [key, rect(selector)]));
+    check(Object.values(geometry.global).every(Boolean), 'World achievements render the native toolbar, player column and background bars');
+    near(geometry.global.toolbar.height, 62.5, 'Global toolbar height');
+    near(geometry.global.avatar.width, 40, 'Global player avatar width'); near(geometry.global.avatar.height, 40, 'Global player avatar height');
+    near(geometry.global.search.width, 275, 'Global search width'); near(geometry.global.search.height, 52.5, 'Global search height');
+    near(geometry.global.firstRow.y - geometry.header.bottom, 72.5, 'Global header-to-first-row distance');
+    near(geometry.global.firstRow.height, 85, 'Global row height');
+    near(geometry.global.secondRow.y - geometry.global.firstRow.bottom, 10, 'Global row gap');
+    near(geometry.global.check.width, 50, 'Global achievement check column width');
+    near(geometry.global.icon.width, 60, 'Global achievement icon width'); near(geometry.global.icon.height, 60, 'Global achievement icon height');
+    near(geometry.global.check.x, geometry.global.firstRow.x, 'Global check column begins at the row left');
+    near(geometry.global.content.x, geometry.global.check.right, 'Global content starts after the player column');
+    near(geometry.global.bar.x, geometry.global.content.x, 'Global percentage bar excludes the player column');
+    near(geometry.global.bar.height, geometry.global.firstRow.height, 'Global percentage background spans the row height');
+    check(geometry.global.search.right < geometry.global.label.x && geometry.global.label.right <= geometry.global.firstRow.right + 2,
+      'World search sits before the all-players heading on the right');
+    check(geometry.global.avatar.right < geometry.global.search.x
+      && document.querySelector('.gdl-lam-user-avatar').getAttribute('src') === assets.icon
+      && document.querySelector('.gdl-lam-global-label').textContent.toLocaleLowerCase() === '% de todos los jugadores',
+      'World toolbar shows the current Steam avatar and exact native all-players label');
+    check(getComputedStyle(document.querySelector('.gdl-lam-compare-control')).display === 'none', 'World toolbar hides the friend comparison control');
+    const globalRows = Array.from(document.querySelectorAll('.gdl-lam-row'));
+    const globalExpected = fixtureData.achievements.slice().sort((a, b) =>
+      (b.global_percent_known !== false && Number.isFinite(b.global_percent) ? b.global_percent : -1)
+      - (a.global_percent_known !== false && Number.isFinite(a.global_percent) ? a.global_percent : -1));
+    check(globalRows.map(row => row.querySelector('.gdl-lam-row-title').textContent).join('|')
+      === globalExpected.map(item => item.hidden && !item.earned ? 'Logro oculto' : item.display_name || item.name).join('|'),
+    'World achievements sort by confirmed global percentage descending and put unknown rarity last');
+    check(globalRows.every(row => !row.querySelector('.gdl-lam-row-global, .gdl-lam-unlock-date, .gdl-lam-row-track, .gdl-lam-row-progress-count, .gdl-lam-comparison-friend')),
+      'World rows contain no redundant percentage sentence, personal unlock date, progress, or friend result');
+    const earnedGlobal = namedRow('Consumed');
+    const lockedGlobal = namedRow('Locked global fixture');
+    check(Boolean(earnedGlobal.querySelector('.gdl-lam-global-check svg'))
+      && !lockedGlobal.querySelector('.gdl-lam-global-check svg'), 'World player column marks only locally earned achievements');
+    check(lockedGlobal.querySelector('.gdl-lam-row-icon').getAttribute('src') === fixtureData.achievements[41].icon,
+      'Locked world achievements retain the native color icon');
+    for (const [title, percentage] of [['Consumed', 89.7], ['Locked global fixture', 82.5], ['Known zero rarity fixture', 0], ['Unknown rarity fixture', 0]]) {
+      const row = namedRow(title);
+      const content = row.querySelector('.gdl-lam-global-content').getBoundingClientRect();
+      const bar = row.querySelector('.gdl-lam-global-bar').getBoundingClientRect();
+      near(bar.width * 1.25, content.width * 1.25 * percentage / 100, `${title} bar follows its confirmed world percentage`);
+    }
+    check(namedRow('Unknown rarity fixture').querySelector('.gdl-lam-global-percent').textContent === '—'
+      && namedRow('Known zero rarity fixture').querySelector('.gdl-lam-global-percent').textContent === '0.0%'
+      && namedRow('Consumed').querySelector('.gdl-lam-global-percent').textContent === '89.7%',
+    'Global rows distinguish unavailable percentages from Steam-confirmed zero');
+    let hiddenGlobal = document.querySelector(`.gdl-lam-row[data-achievement="${fixtureData.achievements[42].name}"]`);
+    check(hiddenGlobal?.classList.contains('is-hidden-global')
+      && Boolean(hiddenGlobal.querySelector('.gdl-lam-hidden-icon'))
+      && hiddenGlobal.querySelector('.gdl-lam-row-title').textContent === 'Logro oculto'
+      && !hiddenGlobal.textContent.includes('Secret world achievement description'),
+      'Locked hidden world achievements mask their real icon, title, and description');
+    hiddenGlobal.focus();
+    check(Boolean(hiddenGlobal.querySelector('.gdl-lam-hidden-reveal'))
+      && hiddenGlobal.querySelector('.gdl-lam-hidden-reveal').textContent.includes('Hacer clic'),
+      'Hidden world achievements offer the native spoiler reveal control');
+    hiddenGlobal.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    hiddenGlobal = document.querySelector(`.gdl-lam-row[data-achievement="${fixtureData.achievements[42].name}"]`);
+    check(!hiddenGlobal.classList.contains('is-hidden-global')
+      && hiddenGlobal.querySelector('.gdl-lam-row-title').textContent === 'Hidden world fixture'
+      && hiddenGlobal.querySelector('.gdl-lam-row-icon').getAttribute('src') === fixtureData.achievements[42].icon,
+      'Keyboard reveal exposes only the selected hidden world achievement');
+    search.value = 'World progress'; search.dispatchEvent(new Event('input', { bubbles: true }));
+    check(document.querySelectorAll('.gdl-lam-row').length === 1
+      && document.querySelector('.gdl-lam-row-title').textContent === 'Locked global fixture', 'World search matches achievement descriptions');
+    search.value = fixtureData.achievements[0].name; search.dispatchEvent(new Event('input', { bubbles: true }));
+    check(document.querySelectorAll('.gdl-lam-row').length === 1
+      && document.querySelector('.gdl-lam-row-title').textContent === 'Consumed', 'World search matches exact Steam achievement identifiers');
+    search.value = 'fixture-with-no-matches'; search.dispatchEvent(new Event('input', { bubbles: true }));
+    check(document.querySelectorAll('.gdl-lam-row').length === 0 && Boolean(document.querySelector('.gdl-lam-empty')), 'World search displays the empty state');
+    search.value = ''; search.dispatchEvent(new Event('input', { bubbles: true }));
+    check(namedRow('Hidden world fixture')?.querySelector('.gdl-lam-row-desc').textContent === 'Secret world achievement description',
+      'Hidden achievement reveal persists through global search changes');
+    document.querySelector('.gdl-lam-scroll').scrollTop = 160;
     document.querySelector('[data-tab="mine"]').click();
+    check(document.querySelector('.gdl-lam-scroll').scrollTop === 0
+      && !document.querySelector('.gdl-lam-row.is-global, .gdl-lam-global-bar, .gdl-lam-global-check')
+      && getComputedStyle(document.querySelector('.gdl-lam-global-user')).display === 'none'
+      && getComputedStyle(document.querySelector('.gdl-lam-global-label')).display === 'none'
+      && getComputedStyle(document.querySelector('.gdl-lam-compare-control')).display !== 'none',
+      'Returning to Mine resets scroll and restores the personal toolbar and rows');
+    check(namedRow('Locked global fixture').querySelector('.gdl-lam-row-icon').getAttribute('src') === fixtureData.achievements[41].icon_gray
+      && namedRow('Locked global fixture').querySelector('.gdl-lam-row-progress-count').textContent === '3/10',
+      'Returning to Mine restores the locked icon and personal progress');
+    document.querySelector('[data-tab="global"]').click();
+    check(Boolean(namedRow('Hidden world fixture')), 'A world spoiler reveal persists when switching away and back');
+    document.querySelector('[data-tab="mine"]').click();
+    check(currentUserRequests === 1, 'Changing world search and tabs reuses the current Steam user snapshot');
     const comparison = document.querySelector('.gdl-lam-compare');
     const selectFriend = value => { comparison.value = value; comparison.dispatchEvent(new Event('change', { bubbles: true })); };
     check(comparison.options.length === 2 && comparison.options[1].textContent === 'Amiga real', 'Compare options use the friend provider response');
@@ -212,7 +337,33 @@ async function browserChecks(sources, fixtureData, assets) {
     check(!document.getElementById('gdl-local-achievement-modal'), 'Escape closes the sheet');
     await open(); document.querySelector('.gdl-lam-close').click();
     check(!document.getElementById('gdl-local-achievement-modal'), 'Close control removes the sheet');
+    await open({ ...fixtureData, unlocked: fixtureData.total, achievements: fixtureData.achievements.map(item => ({ ...item, earned: true })) });
+    document.querySelector('[data-tab="global"]').click();
+    check(document.querySelector('.gdl-lam-progressline').textContent.includes('¡Has desbloqueado todos los logros! 52/52')
+      && Boolean(document.querySelector('.gdl-lam-completion-badge svg'))
+      && document.querySelector('.gdl-lam-fill').style.width === '100%'
+      && document.querySelectorAll('.gdl-lam-global-check svg').length === fixtureData.total,
+      'A completed game shows the native completion header, ribbon, full progress and every earned check');
+    document.querySelector('.gdl-lam-close').click();
+    await open(); document.querySelector('[data-tab="global"]').click();
+    check(document.querySelector(`.gdl-lam-row[data-achievement="${fixtureData.achievements[42].name}"]`)?.classList.contains('is-hidden-global'),
+      'Closing and reopening the sheet resets hidden world achievement reveals');
+    const retiredSearch = document.querySelector('.gdl-lam-search');
+    const retiredList = document.querySelector('.gdl-lam-list');
+    const retiredRows = retiredList.innerHTML;
+    disposeLocalAchievementsModal(document);
+    retiredSearch.value = 'Consumed'; retiredSearch.dispatchEvent(new Event('input', { bubbles: true }));
+    window.dispatchEvent(new Event('resize')); await wait(30);
+    check(!document.getElementById('gdl-local-achievement-modal') && retiredList.innerHTML === retiredRows,
+      'Disposing a world sheet removes its search and viewport event handlers without reviving or rerendering retired rows');
     await open();
+    window.__achievementModalGlobal = async () => {
+      document.querySelector('[data-tab="global"]').click();
+      const avatar = document.querySelector('.gdl-lam-user-avatar');
+      if (avatar) await avatar.decode().catch(() => {});
+      await wait(220);
+      return { rowCount: document.querySelectorAll('.gdl-lam-row.is-global').length };
+    };
     window.__achievementModalResize = async () => {
       const pane = document.getElementById('gdl-library-injected');
       Object.assign(pane.style, { left: '360px', top: '60px', width: '840px', height: '640px' });
@@ -237,6 +388,7 @@ const scratchRoot = path.join(root, 'scratch'); fs.mkdirSync(scratchRoot, { recu
 const scratch = fs.mkdtempSync(path.join(scratchRoot, 'achievement-modal-'));
 const htmlPath = path.join(scratch, 'fixture.html');
 const screenshot = path.join(scratch, 'achievement-modal.png');
+const globalScreenshot = path.join(scratch, 'achievement-modal-global.png');
 const profile = path.join(scratch, 'edge-profile');
 const serialize = value => JSON.stringify(value).replace(/</g, '\\u003c');
 const html = `<!doctype html><html><head><meta charset="utf-8"><style>
@@ -270,6 +422,11 @@ try {
   const capture = await call('Page.captureScreenshot', { format: 'png', clip: { x: 0, y: 0, width: 1533.6, height: 816, scale: 1 } });
   fs.writeFileSync(screenshot, Buffer.from(capture.data, 'base64'));
   if (report.ok) {
+    const world = await call('Runtime.evaluate', { expression: 'window.__achievementModalGlobal()', awaitPromise: true, returnByValue: true });
+    assert.equal(world.result.value?.rowCount, fixtureData.total, 'World screenshot retains every achievement');
+    const globalCapture = await call('Page.captureScreenshot', { format: 'png', clip: { x: 0, y: 0, width: 1533.6, height: 816, scale: 1 } });
+    fs.writeFileSync(globalScreenshot, Buffer.from(globalCapture.data, 'base64'));
+    report.globalScreenshot = globalScreenshot;
     await call('Emulation.setDeviceMetricsOverride', { width: 1200, height: 700, deviceScaleFactor: 1.25, mobile: false });
     const resized = await call('Runtime.evaluate', { expression: 'window.__achievementModalResize()', awaitPromise: true, returnByValue: true });
     report.resized = resized.result.value;
@@ -282,3 +439,4 @@ assert.ok(report.ok, `${report.error}\nGeometry: ${JSON.stringify(report.geometr
 console.log(`Achievement modal browser passed: ${report.checks} geometry and interaction assertions at 1917×1020 physical pixels / Steam 125% scale.`);
 console.log(`Motiva Sans medium loaded: ${report.mediumFontLoaded}`);
 console.log(`Screenshot: ${screenshot}`);
+console.log(`World achievements screenshot: ${globalScreenshot}`);

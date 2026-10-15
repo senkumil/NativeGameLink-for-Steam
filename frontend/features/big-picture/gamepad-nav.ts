@@ -1,13 +1,12 @@
 import type { BigPictureTab as BigPicturePanelTab } from './types';
 import { resolveNativeAppDetailsClasses, FALLBACK_FOCUS_RING_CLASSES } from '../../steam/gamepad/components/AppDetailsNativeClasses';
-import { EXIT_TEXT_EDITOR_EVENT, isEditableTextTarget } from './editable-target';
-import { collectFocusableLayout, chooseSpatialTarget, firstSpatialTarget } from './spatial-navigation';
+import { isEditableTextTarget } from './editable-target';
+import { collectFocusableLayout, chooseSpatialTarget, firstSpatialTarget, isGamepadFocusableElement } from './spatial-navigation';
+import { activeNavInstances, currentNavInstance, ownedModal, foreignModalVisible, isNonSteamActive, returnBigPictureFocusToTabs, performBigPictureSemanticAction, switchBigPictureOwnedModalTab, type NavInstance, type BigPictureNavigationOptions } from './navigation-session';
+import { closeRegisteredBigPictureModal } from './modal-actions';
+import { getMountedBigPictureNavNode } from './native-focus';
+export { isNonSteamActive, getBigPictureNavigationAuthority, returnBigPictureFocusToTabs, performBigPictureSemanticAction, switchBigPictureOwnedModalTab, switchBigPictureNativeTab, captureBigPictureReturnFocus, type BigPictureNavigationAuthority, type BigPictureNavigationOptions } from './navigation-session';
 
-export function isNonSteamActive(doc: Document | null): boolean {
-	if (!doc) return false;
-	const root = doc.getElementById('gdl-bp-detail-root');
-	return Boolean(root && root.isConnected);
-}
 
 export function getFocusableElements(root: HTMLElement): HTMLElement[] {
 	return collectFocusableLayout(root).map(candidate => candidate.element);
@@ -33,24 +32,13 @@ function getDocNavState(doc: Document): DocNavState {
 
 const TAB_ORDER: BigPicturePanelTab[] = ['activity', 'stuff', 'community', 'info'];
 
-function playSteamNavSound(soundId: number): void {
+function playSteamNavSound(doc: Document, soundId: number): void {
 	try {
-		const sc = (typeof window !== 'undefined' ? (window as any) : null)?.SteamClient?.Sounds;
+		const sc = (doc.defaultView as any)?.SteamClient?.Sounds;
 		if (typeof sc?.PlaySoundEffect === 'function') sc.PlaySoundEffect(soundId);
 		else if (typeof sc?.PlaySound === 'function') sc.PlaySound(soundId);
 	} catch {}
 }
-
-interface NavInstance {
-	doc: Document;
-	root: HTMLElement;
-	strip: HTMLElement;
-	controls: Map<BigPicturePanelTab, HTMLElement>;
-	hideRing: () => void;
-	cleanup: () => void;
-}
-
-const activeNavInstances = new WeakMap<Document, NavInstance>();
 
 export function dismissBigPictureFocusRing(doc: Document | null): void {
 	if (!doc) return;
@@ -79,12 +67,26 @@ export function installBigPictureGamepadNavigation(
 	root: HTMLElement,
 	strip: HTMLElement,
 	controls: Map<BigPicturePanelTab, HTMLElement>,
-): void {
+	options: BigPictureNavigationOptions = {},
+): () => void {
+	const requested = options.authority || 'fallback';
+	const nativeNode = requested === 'native' ? getMountedBigPictureNavNode(doc, root, options.nativeNavNode, options.nativeNavHandle) : null;
+	const authority = requested === 'native' && !nativeNode ? 'none' : requested;
+	const generation = options.generation || 0, panel = options.panel || root.parentElement;
+	if (!isNonSteamActive(doc) || doc.getElementById('gdl-bp-detail-root') !== root || root.ownerDocument !== doc
+		|| strip.ownerDocument !== doc || !strip.isConnected || panel?.ownerDocument !== doc || !panel?.isConnected || !panel.contains(root)) {
+		disposeBigPictureGamepadNavigation(doc);
+		return () => {};
+	}
+	const identity = `${root.dataset.gdlShortcutAppId}:${root.dataset.gdlSteamAppId}`;
 	const existing = activeNavInstances.get(doc);
-	if (existing && existing.root === root) {
-		existing.strip = strip;
-		existing.controls = controls;
-		return;
+	if (existing && existing.root === root && existing.strip === strip && existing.identity === identity
+		&& existing.authority === authority && existing.generation === generation && existing.panel === panel
+		&& existing.nativeNavNode === options.nativeNavNode && existing.nativeNavHandle === options.nativeNavHandle
+		&& (authority === 'native' || existing.isPolling())
+		&& existing.controls.size === controls.size
+		&& Array.from(controls).every(([tab, control]) => existing.controls.get(tab) === control)) {
+		return () => { if (activeNavInstances.get(doc) === existing) disposeBigPictureGamepadNavigation(doc); };
 	}
 
 	if (existing) {
@@ -93,19 +95,56 @@ export function installBigPictureGamepadNavigation(
 	}
 
 	const win = doc.defaultView || window;
+	root.dataset.gdlBpNavigationAuthority = authority;
+	if (authority === 'none') return () => { if (root.dataset.gdlBpNavigationAuthority === 'none') delete root.dataset.gdlBpNavigationAuthority; };
+	const focusFrames = new Set<number>();
+	if (authority === 'native') {
+		// Steam owns directional input. Only bridge the native tabs into the
+		// registered content node; never run a second controller polling loop.
+		const enterContent = (event: Event): void => {
+			const input = event as CustomEvent;
+			if (currentNavInstance(doc) !== instance || event.defaultPrevented
+				|| input.detail?.is_repeat || foreignModalVisible(doc) || ownedModal(doc)
+				|| isEditableTextTarget(doc.activeElement) || !strip.contains(event.target as Node)) return;
+			const button = input.detail?.button;
+			if ((event.type === 'vgp_ondirection' && button !== 10) || (event.type === 'vgp_onok' && button !== 1)) return;
+			const selected = Array.from(controls.values()).find(control => control.getAttribute('aria-selected') === 'true');
+			if (!selected?.contains(event.target as Node)) return;
+			const node = getMountedBigPictureNavNode(doc, root, options.nativeNavNode, options.nativeNavHandle);
+			if (!node || node.Tree.BIsEnabled?.() === false) return;
+			if (node.BTakeFocus(0, 10) === true) { event.preventDefault(); event.stopPropagation(); }
+		};
+		const instance: NavInstance = { doc, root, strip, controls, identity, authority, generation, panel,
+			nativeNavNode: options.nativeNavNode, nativeNavHandle: options.nativeNavHandle,
+			focusFrames, isPolling: () => false, hideRing: () => {},
+			cleanup: () => { for (const frame of focusFrames) win.cancelAnimationFrame(frame); focusFrames.clear();
+				strip.removeEventListener('vgp_ondirection', enterContent, true);
+				strip.removeEventListener('vgp_onok', enterContent, true);
+				if (root.dataset.gdlBpNavigationAuthority === 'native') delete root.dataset.gdlBpNavigationAuthority; } };
+		activeNavInstances.set(doc, instance);
+		strip.addEventListener('vgp_ondirection', enterContent, true);
+		strip.addEventListener('vgp_onok', enterContent, true);
+		return () => { if (activeNavInstances.get(doc) === instance) disposeBigPictureGamepadNavigation(doc); };
+	}
+	let disposed = false;
+	const isActive = (): boolean => !disposed && isNonSteamActive(doc)
+		&& doc.getElementById('gdl-bp-detail-root') === root
+		&& `${root.dataset.gdlShortcutAppId}:${root.dataset.gdlSteamAppId}` === identity
+		&& strip.isConnected && panel?.isConnected && panel.contains(root)
+		&& (root.dataset.gdlBpGeneration === undefined || root.dataset.gdlBpGeneration === String(generation));
 
 	let activeFocusRingEl: HTMLElement | null = null;
 	let activeFocusRingRoot: HTMLElement | null = null;
 	let currentRingTarget: HTMLElement | null = null;
 
-	const getActiveModal = (): HTMLElement | null => {
-		const modal = doc.getElementById('gdl-bp-achievements-screen')
-			|| doc.getElementById('gdl-bp-card-modal')
-			|| doc.getElementById('gdl-bp-news-modal')
-			|| doc.getElementById('gdl-bp-community-modal')
-			|| doc.querySelector<HTMLElement>('[role="dialog"], [class*="ModalPosition"], [class*="ModalOverlay"], [class*="DialogModal"], .ModalPosition_Content');
-		if (!modal || !modal.isConnected || modal.style.display === 'none' || modal.getAttribute('aria-hidden') === 'true') return null;
-		return modal;
+	const getActiveModal = (): HTMLElement | null => ownedModal(doc);
+	const hasForeignModal = (): boolean => foreignModalVisible(doc);
+	const closeOwnedModal = (modal: HTMLElement): boolean => {
+		if (closeRegisteredBigPictureModal(modal)) return true;
+		const button = modal.querySelector<HTMLElement>('.gdl-bp-news-modal-close, .gdl-bp-news-modal-close-btn, .gdl-bp-ach-close-trigger, .gdl-bp-fullscreen-card-close-btn');
+		if (!button) return false;
+		button.click();
+		return true;
 	};
 
 	const hideFocusRing = (): void => {
@@ -153,7 +192,7 @@ export function installBigPictureGamepadNavigation(
 	};
 
 	const showFocusRing = (target: HTMLElement): void => {
-		if (!target || !target.isConnected || target.dataset.gdlSuppressFocusRing === '1' || !isNonSteamActive(doc) || getActiveModal() || isEditableTextTarget(target)) {
+		if (!target || !target.isConnected || target.dataset.gdlSuppressFocusRing === '1' || !isActive() || getActiveModal() || hasForeignModal() || isEditableTextTarget(target)) {
 			hideFocusRing();
 			return;
 		}
@@ -183,10 +222,9 @@ export function installBigPictureGamepadNavigation(
 
 	const getActiveTab = (): HTMLElement | null => {
 		const selected = strip.querySelector<HTMLElement>('[aria-selected="true"], [class*="Selected"], [class*="active"]')
-			|| strip.querySelector<HTMLElement>('[tabindex="0"]')
-			|| Array.from(controls.values())[0]
-			|| null;
-		return selected;
+			|| strip.querySelector<HTMLElement>('[tabindex="0"]');
+		return isGamepadFocusableElement(selected, strip) ? selected
+			: Array.from(controls.values()).find(control => isGamepadFocusableElement(control, strip)) || null;
 	};
 
 	const getCurrentTabKey = (): BigPicturePanelTab => {
@@ -203,7 +241,8 @@ export function installBigPictureGamepadNavigation(
 	const TAB_SWITCH_COOLDOWN_MS = 350;
 
 	const switchTabByOffset = (offset: number): boolean => {
-		if (!isNonSteamActive(doc)) return false;
+		if (!isActive() || hasForeignModal()) return false;
+		if (getActiveModal()) return switchBigPictureOwnedModalTab(doc, offset);
 		const now = Date.now();
 		const navState = getDocNavState(doc);
 		if (now - navState.lastTabSwitchTime < TAB_SWITCH_COOLDOWN_MS) {
@@ -211,9 +250,10 @@ export function installBigPictureGamepadNavigation(
 		}
 
 		const currentKey = getCurrentTabKey();
-		const currentIdx = TAB_ORDER.indexOf(currentKey);
+		const available = TAB_ORDER.filter(tab => isGamepadFocusableElement(controls.get(tab) || null, strip));
+		const currentIdx = available.indexOf(currentKey);
 		const startIdx = currentIdx === -1 ? 0 : currentIdx;
-		const nextIdx = Math.max(0, Math.min(TAB_ORDER.length - 1, startIdx + offset));
+		const nextIdx = Math.max(0, Math.min(available.length - 1, startIdx + offset));
 		if (nextIdx === startIdx) {
 			return false;
 		}
@@ -223,7 +263,7 @@ export function installBigPictureGamepadNavigation(
 		navState.lastFocusedElement = null;
 		hideFocusRing();
 
-		const nextKey = TAB_ORDER[nextIdx];
+		const nextKey = available[nextIdx];
 		const targetControl = controls.get(nextKey);
 		if (targetControl && targetControl.isConnected) {
 			for (const c of controls.values()) {
@@ -281,10 +321,10 @@ export function installBigPictureGamepadNavigation(
 	};
 
 	const setFocusedElement = (target: HTMLElement | null, scope: HTMLElement = root): void => {
-		if (!target || !target.isConnected || !isNonSteamActive(doc)) return;
+		if (!isGamepadFocusableElement(target, scope) || !isActive() || hasForeignModal()) return;
 		if (scope === root) getDocNavState(doc).lastFocusedElement = target;
 		try {
-			playSteamNavSound(1);
+			playSteamNavSound(doc, 1);
 			scope.querySelectorAll<HTMLElement>('.gpfocus').forEach(el => {
 				if (el !== target) {
 					el.classList.remove('gpfocus');
@@ -319,21 +359,9 @@ export function installBigPictureGamepadNavigation(
 	};
 
 	const handleNavDirection = (direction: 'down' | 'up' | 'left' | 'right' | 'select' | 'back'): boolean => {
-		if (!isNonSteamActive(doc)) return false;
+		if (!isActive() || hasForeignModal()) return false;
 
 		const modal = getActiveModal();
-		if (modal && !modal.id?.startsWith('gdl-bp-')) {
-			hideFocusRing();
-			if (direction === 'back') {
-				playSteamNavSound(4);
-				const closeBtn = modal.querySelector<HTMLElement>('button[class*="Close"], button[class*="DialogButton"], [role="button"], [aria-label="Close"]');
-				if (closeBtn) {
-					closeBtn.click();
-					return true;
-				}
-			}
-			return false;
-		}
 
 		const currentScope = modal || root;
 		if (!currentScope.isConnected) return false;
@@ -356,11 +384,8 @@ export function installBigPictureGamepadNavigation(
 		const focusables = layout.map(candidate => candidate.element);
 		if (!focusables.length) {
 			if (direction === 'back' && modal) {
-				playSteamNavSound(4);
-				const closeBtn = modal.querySelector<HTMLElement>('.gdl-bp-news-modal-close, .gdl-bp-ach-close-trigger, .gdl-bp-fullscreen-card-close-btn');
-				if (closeBtn) closeBtn.click();
-				else modal.remove();
-				return true;
+				playSteamNavSound(doc, 4);
+				return closeOwnedModal(modal);
 			}
 			return false;
 		}
@@ -384,12 +409,12 @@ export function installBigPictureGamepadNavigation(
 		}
 
 		if (direction === 'select') {
-			if (current) {
+			if (isGamepadFocusableElement(current, currentScope)) {
 				if (isEditableTextTarget(current)) {
 					current.focus();
 					return true;
 				}
-				playSteamNavSound(3);
+				playSteamNavSound(doc, 3);
 				current.click();
 				return true;
 			}
@@ -397,13 +422,10 @@ export function installBigPictureGamepadNavigation(
 		}
 
 		if (direction === 'back') {
-			playSteamNavSound(4);
+			playSteamNavSound(doc, 4);
 			hideFocusRing();
 			if (modal) {
-				const closeBtn = modal.querySelector<HTMLElement>('.gdl-bp-news-modal-close, .gdl-bp-news-modal-close-btn, .gdl-bp-ach-close-trigger, .gdl-bp-fullscreen-card-close-btn');
-				if (closeBtn) closeBtn.click();
-				else modal.remove();
-				return true;
+				return closeOwnedModal(modal);
 			}
 
 			if (current || isInsidePanel()) {
@@ -465,7 +487,7 @@ export function installBigPictureGamepadNavigation(
 				getDocNavState(doc).lastFocusedElement = null;
 				const tab = getActiveTab();
 				if (tab) {
-					playSteamNavSound(1); clearStripFocus(); tab.classList.add('gpfocus'); tab.dataset.focus = 'true'; tab.focus();
+					playSteamNavSound(doc, 1); clearStripFocus(); tab.classList.add('gpfocus'); tab.dataset.focus = 'true'; tab.focus();
 					tab.scrollIntoView({ behavior: 'auto', block: 'nearest' });
 					return true;
 				}
@@ -486,12 +508,20 @@ export function installBigPictureGamepadNavigation(
 	let pollNavigationSuppressedUntil = 0;
 
 	const onGlobalKeyDown = (event: KeyboardEvent) => {
-		if (!isNonSteamActive(doc)) return;
+		if (!isActive() || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
+		if (hasForeignModal()) { hideFocusRing(); return; }
 
 		const key = event.key;
+		if (isEditableTextTarget(doc.activeElement)) {
+			if (key === 'Escape') { returnBigPictureFocusToTabs(doc); event.preventDefault(); event.stopPropagation(); }
+			return;
+		}
+		if ((key === 'x' || key === 'X' || key === 'y' || key === 'Y') && performBigPictureSemanticAction(doc, key.toLowerCase() as 'x' | 'y')) {
+			event.preventDefault(); event.stopPropagation(); return;
+		}
 		if (getActiveModal()) {
 			if (key === 'PageUp' || key === 'PageDown' || key === 'q' || key === 'Q' || key === 'e' || key === 'E') {
-				// Modal is open; protect modal context from background tab switching
+				switchBigPictureOwnedModalTab(doc, key === 'q' || key === 'Q' || key === 'PageUp' ? -1 : 1);
 				event.preventDefault();
 				event.stopPropagation();
 				return;
@@ -572,7 +602,8 @@ export function installBigPictureGamepadNavigation(
 	};
 
 	const onFocusIn = (event: FocusEvent) => {
-		if (!isNonSteamActive(doc)) return;
+		if (!isActive()) return;
+		if (hasForeignModal()) { hideFocusRing(); return; }
 		const target = event.target as HTMLElement | null;
 		const modal = getActiveModal();
 		if (modal && !modal.id?.startsWith('gdl-bp-')) {
@@ -599,13 +630,14 @@ export function installBigPictureGamepadNavigation(
 	};
 
 	const onFocusOut = (event: FocusEvent) => {
-		if (!isNonSteamActive(doc)) { hideFocusRing(); return; }
+		if (!isActive() || hasForeignModal()) { hideFocusRing(); return; }
 		const related = event.relatedTarget as HTMLElement | null;
 		const modal = getActiveModal();
 		if (related && (root.contains(related) || (modal && modal.contains(related)))) return;
 
-		requestAnimationFrame(() => {
-			if (!isNonSteamActive(doc)) { hideFocusRing(); return; }
+		const frame = win.requestAnimationFrame(() => {
+			focusFrames.delete(frame);
+			if (!isActive() || hasForeignModal()) { hideFocusRing(); return; }
 			const active = doc.activeElement as HTMLElement | null;
 			const currentModal = getActiveModal();
 			const activeInScope = active && (root.contains(active) || (currentModal && currentModal.contains(active)));
@@ -614,20 +646,33 @@ export function installBigPictureGamepadNavigation(
 				if (!marked) hideFocusRing();
 			}
 		});
+		focusFrames.add(frame);
 	};
 
-	let gamepadPollTimer: ReturnType<typeof setTimeout> | null = null;
+	let gamepadPollTimer: number | null = null;
 	const prevBtn = new Map<number, boolean>();
 	const lastDirTime = new Map<string, number>();
 	const dirHoldTime = new Map<string, number>();
 
 	const pollGamepads = () => {
-		if (!root.isConnected || !doc.body?.isConnected || !isNonSteamActive(doc)) {
-			if (gamepadPollTimer != null) { clearTimeout(gamepadPollTimer); gamepadPollTimer = null; }
+		if (!root.isConnected || !doc.body?.isConnected || !isActive()) {
+			if (gamepadPollTimer != null) { win.clearTimeout(gamepadPollTimer); gamepadPollTimer = null; }
+			return;
+		}
+		if (hasForeignModal()) {
+			hideFocusRing();
+			// Steam owns this modal. Observe button state without acting, so a
+			// held A/B/bumper cannot become a delayed action after it closes.
+			const nav = win.navigator || window.navigator;
+			const pads = typeof nav?.getGamepads === 'function' ? nav.getGamepads() : [];
+			const pad = Array.from(pads).find(candidate => candidate && candidate.connected);
+			for (const index of [0, 1, 2, 3, 4, 5]) prevBtn.set(index, Boolean(pad?.buttons[index]?.pressed));
+			dirHoldTime.clear(); lastDirTime.clear();
+			gamepadPollTimer = win.setTimeout(pollGamepads, 250);
 			return;
 		}
 		if (doc.hidden) {
-			gamepadPollTimer = setTimeout(pollGamepads, 250);
+			gamepadPollTimer = win.setTimeout(pollGamepads, 250);
 			return;
 		}
 		if (isEditableTextTarget(doc.activeElement)) {
@@ -636,10 +681,10 @@ export function installBigPictureGamepadNavigation(
 			const activePad = Array.from(pads).find(g => g && g.connected);
 			const backPressed = Boolean(activePad?.buttons[1]?.pressed);
 			if (backPressed && !prevBtn.get(1)) {
-				doc.dispatchEvent(new CustomEvent(EXIT_TEXT_EDITOR_EVENT));
+				returnBigPictureFocusToTabs(doc);
 			}
 			prevBtn.set(1, backPressed);
-			gamepadPollTimer = setTimeout(pollGamepads, 100);
+			gamepadPollTimer = win.setTimeout(pollGamepads, 100);
 			return;
 		}
 		const nav = win.navigator || window.navigator;
@@ -685,13 +730,18 @@ export function installBigPictureGamepadNavigation(
 				handleNavDirection('back');
 			}
 			prevBtn.set(1, btnB);
+			for (const [index, action] of [[2, 'x'], [3, 'y']] as const) {
+				const pressed = Boolean(gp.buttons[index]?.pressed);
+				if (!keyboardOwnsNavigation && pressed && !prevBtn.get(index)) performBigPictureSemanticAction(doc, action);
+				prevBtn.set(index, pressed);
+			}
 
 			const btnLB = Boolean(gp.buttons[4]?.pressed);
-			if (!keyboardOwnsNavigation && btnLB && !prevBtn.get(4) && !getActiveModal()) switchTabByOffset(-1);
+			if (!keyboardOwnsNavigation && btnLB && !prevBtn.get(4)) switchTabByOffset(-1);
 			prevBtn.set(4, btnLB);
 
 			const btnRB = Boolean(gp.buttons[5]?.pressed);
-			if (!keyboardOwnsNavigation && btnRB && !prevBtn.get(5) && !getActiveModal()) switchTabByOffset(1);
+			if (!keyboardOwnsNavigation && btnRB && !prevBtn.get(5)) switchTabByOffset(1);
 			prevBtn.set(5, btnRB);
 
 			const rY = gp.axes[3];
@@ -702,11 +752,11 @@ export function installBigPictureGamepadNavigation(
 			}
 		}
 
-		gamepadPollTimer = setTimeout(pollGamepads, 50);
+		gamepadPollTimer = win.setTimeout(pollGamepads, 50);
 	};
 
 	const onScrollOrResize = () => {
-		if (!isNonSteamActive(doc)) return;
+		if (!isActive() || hasForeignModal()) return;
 		if (activeFocusRingEl && activeFocusRingRoot && currentRingTarget && currentRingTarget.isConnected) {
 			updateFocusRingPosition(currentRingTarget, activeFocusRingEl, activeFocusRingRoot);
 		}
@@ -716,19 +766,30 @@ export function installBigPictureGamepadNavigation(
 		t.addEventListener(e, c as any, true);
 	}
 
-	gamepadPollTimer = setTimeout(pollGamepads, 50);
+	gamepadPollTimer = win.setTimeout(pollGamepads, 50);
 
 	activeNavInstances.set(doc, {
 		doc,
 		root,
 		strip,
 		controls,
+		identity,
+		authority,
+		generation,
+		panel,
+		focusFrames,
+		isPolling: () => gamepadPollTimer !== null,
 		hideRing: hideFocusRing,
 		cleanup: () => {
+			if (disposed) return;
+			disposed = true;
 			if (gamepadPollTimer != null) {
-				clearTimeout(gamepadPollTimer);
+				win.clearTimeout(gamepadPollTimer);
 				gamepadPollTimer = null;
 			}
+			for (const frame of focusFrames) win.cancelAnimationFrame(frame);
+			focusFrames.clear();
+			if (root.dataset.gdlBpNavigationAuthority === 'fallback') delete root.dataset.gdlBpNavigationAuthority;
 			hideFocusRing();
 			if (activeFocusRingRoot) {
 				activeFocusRingRoot.remove();
@@ -740,5 +801,7 @@ export function installBigPictureGamepadNavigation(
 			getDocNavState(doc).lastFocusedElement = null;
 		},
 	});
+	const instance = activeNavInstances.get(doc);
+	return () => { if (activeNavInstances.get(doc) === instance) disposeBigPictureGamepadNavigation(doc); };
 }
 

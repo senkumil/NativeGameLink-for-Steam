@@ -2,8 +2,8 @@ import { gdlText } from '../../steam/localization';
 import { steamGameMainPageUrl } from '../../core/steam-links';
 import { escapeHtml } from '../../core/text';
 import { PLAYBAR_CLASSES } from '../../steam/css';
-import { closestWithCssModuleClass, elementsWithCssModuleClass, isRenderedElement } from '../../steam/native-dom';
-import { paintedNativePlaybar } from '../../steam/library-details';
+import { closestWithCssModuleClass, elementsWithCssModuleClass, hasCssModuleClass, isRenderedElement } from '../../steam/native-dom';
+import { committedHeaderAppId, isPaintedLibraryElement, paintedNativePlaybar } from '../../steam/library-details';
 import { findNativeLibraryHeader } from '../../steam/library-header';
 import { getCommittedShortcutSteamAppId } from '../shortcuts/registry';
 import { isShortcutDismissed } from '../shortcuts/dismissed';
@@ -104,6 +104,9 @@ export function createPrimaryLinksBar(doc: Document, _layout: NativeLibraryLayou
 		bar.dataset.gdlLinksSettled = '0';
 	}
 	for (const duplicate of doc.querySelectorAll<HTMLElement>('#gdl-link-bar, .gdl-link-bar-inner')) if (duplicate !== bar) disposeBar(duplicate);
+	if (bar.dataset.gdlSteamAppId !== options.steamAppId || bar.dataset.gdlShortcutAppId !== String(shortcutId)) {
+		bar.style.removeProperty('--gdl-native-links-bottom-gap');
+	}
 	if (bar.dataset.gdlSteamAppId !== options.steamAppId) bar.dataset.gdlSteamAppId = options.steamAppId;
 	if (bar.dataset.gdlShortcutAppId !== String(shortcutId)) bar.dataset.gdlShortcutAppId = String(shortcutId);
 	const links = linkedGameDestinations(options);
@@ -138,9 +141,37 @@ export function findNativePlaybar(doc: Document): HTMLElement | null {
 		|| elementsWithCssModuleClass(doc, classes.Container).find(element => !element.closest('[id^="gdl-"]') && isRenderedElement(doc, element)) || null;
 }
 
+/** Links belong to the scrolling page. Moving them below the sticky copy
+ * changes the scroll viewport's height and shifts Steam's parallax origin. */
+function findPrimaryLinksPlaybar(doc: Document, shortcutId: number): HTMLElement | null {
+	const classes = PLAYBAR_CLASSES();
+	return elementsWithCssModuleClass(doc, classes.Container).find(element =>
+		hasCssModuleClass(element, classes.InPage) && !element.closest('[id^="gdl-"]')
+		&& committedHeaderAppId(element) === shortcutId && isPaintedLibraryElement(doc, element)) || null;
+}
+
+function syncNativeLinksBottomGap(bar: HTMLElement, layout?: NativeLibraryLayout | null): void {
+	const region = layout?.anchorRegion;
+	const view = bar.ownerDocument.defaultView;
+	if (!region?.isConnected || region.ownerDocument !== bar.ownerDocument || !view) return;
+	const body = Array.from(region.children).find(child => child.tagName === 'DIV');
+	if (!body) return;
+	const bodyMargin = parseFloat(view.getComputedStyle(body).marginBottom);
+	const sectionMargin = parseFloat(view.getComputedStyle(region).marginBottom);
+	if (!Number.isFinite(bodyMargin) || !Number.isFinite(sectionMargin)) return;
+	// Our bar is the visible surface. Steam's visible LinksSectionContainer is
+	// followed by both the body's gutter and its enclosing section's margin.
+	// Installed CSS computes 10 + 26px; ColumnContainer then adds its live 10px
+	// above BOTH columns. Keep that native padding and its responsive behavior.
+	const gap = `${bodyMargin + sectionMargin}px`;
+	if (bar.style.getPropertyValue('--gdl-native-links-bottom-gap') !== gap) {
+		bar.style.setProperty('--gdl-native-links-bottom-gap', gap);
+	}
+}
+
 export function isBarProperlyPositionedBelowPlaybar(doc: Document, bar: HTMLElement): boolean {
 	const id = currentShortcut(doc, bar.dataset.gdlSteamAppId || '', bar.dataset.gdlShortcutAppId);
-	const playbar = id ? paintedNativePlaybar(doc, id) : null;
+	const playbar = id ? findPrimaryLinksPlaybar(doc, id) : null;
 	if (!playbar || !bar.isConnected || playbar.contains(bar)
 		|| (bar.compareDocumentPosition(playbar) & Node.DOCUMENT_POSITION_FOLLOWING)) return false;
 	const barRect = bar.getBoundingClientRect(), playbarRect = playbar.getBoundingClientRect();
@@ -151,7 +182,7 @@ export function isBarProperlyPositionedBelowPlaybar(doc: Document, bar: HTMLElem
 export function insertPrimaryLinksBar(bar: HTMLElement, layout?: NativeLibraryLayout | null, _activityWrapper?: HTMLElement): void {
 	const doc = bar.ownerDocument;
 	const id = currentShortcut(doc, bar.dataset.gdlSteamAppId || '', bar.dataset.gdlShortcutAppId);
-	const playbar = id ? paintedNativePlaybar(doc, id) : null;
+	const playbar = id ? findPrimaryLinksPlaybar(doc, id) : null;
 	if (!playbar || bar.id !== 'gdl-link-bar') return;
 	let anchor = playbar;
 	const header = findNativeLibraryHeader(doc);
@@ -170,6 +201,7 @@ export function insertPrimaryLinksBar(bar: HTMLElement, layout?: NativeLibraryLa
 		&& (anchor.compareDocumentPosition(info) & Node.DOCUMENT_POSITION_FOLLOWING)) anchor = info;
 	parent = anchor.parentElement!;
 	if (anchor.nextElementSibling !== bar) parent.insertBefore(bar, anchor.nextSibling);
+	syncNativeLinksBottomGap(bar, layout);
 	responsiveLayouts.get(bar)?.update();
 	if (!isBarProperlyPositionedBelowPlaybar(doc, bar)) return;
 	if (bar.dataset.gdlLinksSettled !== '1') bar.dataset.gdlLinksSettled = '1';

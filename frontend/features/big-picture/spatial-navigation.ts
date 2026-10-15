@@ -27,12 +27,27 @@ function isLeafFocusable(element: HTMLElement): boolean {
 	) || element.getAttribute('focusable') === 'true' || element.getAttribute('data-focusable') === 'true';
 }
 
+/** A native or fallback action must never focus hidden/inert/disabled content. */
+export function isGamepadFocusableElement(element: HTMLElement | null, scope?: HTMLElement | null): element is HTMLElement {
+	if (!element?.isConnected || (scope && !scope.contains(element))) return false;
+	const view = element.ownerDocument.defaultView;
+	for (let current: HTMLElement | null = element; current; current = current.parentElement) {
+		if (current.hidden || current.hasAttribute('inert') || current.getAttribute('aria-hidden') === 'true'
+			|| current.getAttribute('aria-disabled') === 'true' || current.hasAttribute('disabled')) return false;
+		const style = view?.getComputedStyle(current);
+		if (style?.display === 'none' || style?.visibility === 'hidden' || style?.visibility === 'collapse') return false;
+		if (current === scope) break;
+	}
+	const rect = element.getBoundingClientRect();
+	return rect.width > 0 && rect.height > 0;
+}
+
 export function collectFocusableLayout(root: HTMLElement): SpatialTarget[] {
 	if (!root?.isConnected) return [];
 	const view = root.ownerDocument.defaultView;
 	const candidates: SpatialTarget[] = [];
 	for (const element of Array.from(root.querySelectorAll<HTMLElement>(BIG_PICTURE_FOCUSABLE_SELECTOR))) {
-		if (element.hidden || element.getAttribute('aria-hidden') === 'true') continue;
+		if (!isGamepadFocusableElement(element, root)) continue;
 		if (element.getAttribute('focusable') === 'false' || element.getAttribute('data-focusable') === 'false') continue;
 		if (element.id === 'gdl-bp-detail-root' || element.id === 'gdl-bp-detail-shell' || element.id === 'gdl-bp-focus-ring-root' || element.id === 'gdl-bp-focus-ring') continue;
 		if (element.hasAttribute('flow-children') && element.querySelector(BIG_PICTURE_FOCUSABLE_SELECTOR)) continue;

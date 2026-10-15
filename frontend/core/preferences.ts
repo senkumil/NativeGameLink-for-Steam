@@ -5,7 +5,6 @@ export interface GdlPreferences {
 	trackNonSteamPlaytime: boolean;
 	autoCommunityArtwork: boolean;
 	steamGridDbApiKey: string;
-	defaultBigPictureMode: boolean;
 }
 
 const STORAGE_KEY = 'gdl_preferences_v1';
@@ -35,7 +34,6 @@ export const DEFAULT_PREFERENCES: GdlPreferences = {
 	trackNonSteamPlaytime: true,
 	autoCommunityArtwork: true,
 	steamGridDbApiKey: DEFAULT_STEAMGRIDDB_API_KEY,
-	defaultBigPictureMode: true,
 };
 
 function sanitizePreferences(value: unknown): GdlPreferences {
@@ -51,7 +49,6 @@ function sanitizePreferences(value: unknown): GdlPreferences {
 		// Stored locally only. It is never logged or included in diagnostics.
 		steamGridDbApiKey: typeof record.steamGridDbApiKey === 'string' && record.steamGridDbApiKey.trim()
 			? record.steamGridDbApiKey.trim().slice(0, 160) : DEFAULT_STEAMGRIDDB_API_KEY,
-		defaultBigPictureMode: record.defaultBigPictureMode !== false,
 	};
 }
 
@@ -83,8 +80,4 @@ export function subscribePreferences(listener: (preferences: GdlPreferences) => 
 
 export function simulatedAchievementsEnabled(): boolean {
 	return getPreferences().simulateAchievements;
-}
-
-export function defaultBigPictureModeEnabled(): boolean {
-	return getPreferences().defaultBigPictureMode;
 }

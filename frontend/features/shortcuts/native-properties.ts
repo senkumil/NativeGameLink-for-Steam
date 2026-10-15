@@ -12,6 +12,7 @@ import { escapeHtml } from '../../core/text';
 import { gdlText } from '../../steam/localization';
 import { findNativeSteamAppIdByName, SHORTCUT_THRESHOLD } from '../../steam/shortcuts';
 import { openAchievementPickerModal } from './achievement-picker-modal';
+import { steamSyncFailureMessage } from './achievement-sync-errors';
 
 const GDL_NATIVE_PROP = 'gdl-native-properties-injected';
 
@@ -27,21 +28,6 @@ function parseIpcObject<T>(raw: unknown): T | null {
 	} catch {
 		return null;
 	}
-}
-
-function steamSyncFailureMessage(error?: string): string {
-	const detail = {
-		steam_not_running: 'Steam is not running.',
-		steam_user_not_logged_in: 'No Steam user is logged in.',
-		steam_client_dll_not_found: 'Steam client files were not found.',
-		steam_userstats_unavailable: 'Steam User Stats is unavailable.',
-		request_current_stats_failed: 'Steam rejected the stats request for this AppID.',
-		game_stats_not_owned_or_unavailable: 'Steam could not load stats for this game. Verify that this account owns the exact AppID.',
-		store_stats_not_confirmed: 'Steam did not confirm that the changes were saved.',
-		helper_not_found: 'The NativeGameLink Steam sync helper is missing.',
-		empty_output: 'The NativeGameLink Steam sync helper returned no result.',
-	}[String(error || '')] || String(error || 'sync_failed');
-	return `${gdlText('game_achievement_picker_sync_failed', 'Failed to sync achievements with your Steam account (ensure the game is owned and Steam is running).')} ${detail}`;
 }
 
 export async function resolveNativeGameAppId(doc: Document, gameTitle: string): Promise<string | null> {
@@ -299,12 +285,9 @@ export function tryInjectNativePropertiesField(doc: Document, gameTitle: string,
 				return;
 			}
 
-			const [rawData, rawStatus] = await Promise.all([
-				fetchLocalAchievementsBackend({
-					request_json: JSON.stringify({ steam_app_id: steamAppId, non_steam_id: steamAppId }),
-				}),
-				fetchSteamAccountAchievementsBackend({ steam_app_id: steamAppId }),
-			]);
+			const rawData = await fetchLocalAchievementsBackend({
+				request_json: JSON.stringify({ steam_app_id: steamAppId, non_steam_id: steamAppId }),
+			});
 			const data = parseIpcObject<LocalAchievementData>(rawData);
 			if (!data || !Array.isArray(data.achievements) || data.achievements.length === 0) {
 				statusEl.textContent = gdlText('native_steam_achievements_no_achievements', 'This game has no achievements on Steam.');
@@ -312,17 +295,23 @@ export function tryInjectNativePropertiesField(doc: Document, gameTitle: string,
 				btn.disabled = false;
 				return;
 			}
-
-			const statusData = parseIpcObject<{ ok?: boolean; achievements?: Record<string, { achieved?: boolean }> }>(rawStatus);
-
-			if (statusData?.ok && statusData.achievements) {
-				for (const item of data.achievements) {
-					const achStatus = statusData.achievements[item.name];
-					if (achStatus) {
-						item.earned = Boolean(achStatus.achieved);
-					}
-				}
+			// Schema inspection needs no Steam game session. Do not simulate running
+			// an uninstalled game just to offer changes its permissions prohibit.
+			if (data.achievements.every(item => item.client_writable === false)) {
+				statusEl.textContent = steamSyncFailureMessage('achievement_protected');
+				statusEl.style.color = '#d6b24c';
+				btn.disabled = false;
+				return;
 			}
+			const rawStatus = await fetchSteamAccountAchievementsBackend({ steam_app_id: steamAppId });
+
+			const statusData = parseIpcObject<{ ok?: boolean; appid?: string | number; achievements?: Record<string, { achieved?: boolean }> }>(rawStatus);
+			if (statusData?.ok !== true || String(statusData.appid) !== String(steamAppId)
+				|| !statusData.achievements || data.achievements.some(item =>
+				typeof statusData.achievements![item.name]?.achieved !== 'boolean')) {
+				throw new Error('game_stats_not_owned_or_unavailable');
+			}
+			for (const item of data.achievements) item.earned = statusData.achievements[item.name].achieved!;
 
 			statusEl.textContent = '';
 			btn.disabled = false;
@@ -359,15 +348,18 @@ export function tryInjectNativePropertiesField(doc: Document, gameTitle: string,
 								lock: lockList,
 							}),
 						});
-						const res = parseIpcObject<{ ok?: boolean; unlocked_count?: number; locked_count?: number; error?: string }>(rawSync);
+						const res = parseIpcObject<{ ok?: boolean; noop?: boolean; unlocked_count?: number; locked_count?: number; error?: string }>(rawSync);
 						if (!res || !res.ok) {
 							throw new Error(res?.error || 'sync_failed');
 						}
-						statusEl.textContent = gdlText('game_achievement_picker_sync_success', 'Achievements synced successfully with your Steam account.');
+						statusEl.textContent = res.noop
+							? gdlText('game_achievement_picker_sync_no_changes', 'The selection already matches your Steam account. No changes were needed.')
+							: gdlText('game_achievement_picker_sync_success', 'Achievements synced successfully with your Steam account.');
 						statusEl.style.color = '#66c0f4';
 					} catch (err) {
 						statusEl.textContent = steamSyncFailureMessage(err instanceof Error ? err.message : undefined);
 						statusEl.style.color = '#d94126';
+						throw err;
 					}
 				},
 			});

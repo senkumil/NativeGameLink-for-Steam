@@ -4,6 +4,7 @@ export const RARE_ACHIEVEMENT_MAX_PERCENT = 10;
 export const MAX_HIGHLIGHTED_ACHIEVEMENTS = 1;
 
 function safePercent(item: LocalAchievementItem): number {
+	if (item.global_percent_known === false || item.global_percent == null) return Number.POSITIVE_INFINITY;
 	const value = Number(item.global_percent);
 	return Number.isFinite(value) ? value : Number.POSITIVE_INFINITY;
 }

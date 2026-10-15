@@ -60,6 +60,7 @@ const sources = {
 };
 const modules = {};
 const mocks = {
+  getNativeWindowInstance: () => null,
   backendLog() {}, subscribePreferences() {}, defaultBigPictureModeEnabled: () => false,
   installBrowserProtection: () => () => {}, disposeBigPictureShortcutDetails() {}, invalidateBigPictureMappedShortcuts() {},
   refreshBigPictureShortcutDetails: async () => { detailRefreshes++; },
@@ -71,9 +72,12 @@ const mocks = {
   fetchPlaytimeStatsBatch: () => new Promise(resolve => { completePlaytime = resolve; }),
   resolveNativeAppDetailsStore: doc => doc.defaultView.appDetailsStore,
   getCommittedShortcutSteamAppId: id => mapped.get(id) || null, findMappingForShortcut: id => mapped.get(Number(id)) || null,
+  isCurrentLinkedGamepadTarget: (doc, id, steamAppId) => Number(doc.routeId) === Number(id)
+    && Number(id) >= 2147483648 && mapped.get(Number(id)) === String(steamAppId),
   isShortcutDismissed: () => false, findNonSteamNotice: () => null,
   PLAYBAR_CLASSES: () => ({}), LINKS_BAR_CLASSES: () => ({}), elementsWithCssModuleClass: () => [],
   isRenderedElement: () => false, committedHeaderAppId: () => null, isPaintedLibraryElement: () => false,
+  restoreBigPictureOverviewState: () => {},
 };
 function load(name) {
   if (modules[name]) return modules[name];
@@ -159,10 +163,14 @@ const adopted = fixture(shortcut.id);
 adopted.doc.detail = true;
 runtime.activateBigPicture(adopted.doc);
 await runtime.refreshBigPicture(adopted.doc);
-check(runtime.isBigPictureActive() && runtime.getBigPictureDocument() === adopted.doc && detailRefreshes === 1 && appStoreReads === 1,
+check(runtime.isBigPictureActive() && runtime.getBigPictureDocument() === adopted.doc && detailRefreshes === 1 && appStoreReads === 0,
   'A subsequent real GamepadUI document is adopted and refreshed normally');
-check(!adopted.overview.BIsShortcut() && adopted.overview.controller_support === 2 && adopted.native.controller_support === 0,
-  'Validated GamepadUI entry still applies linked shortcut shims while native models retain their original behavior');
+check(adopted.overview.BIsShortcut() && adopted.overview.controller_support === 0 && !adopted.overview.BIsSteamDeckVerified()
+  && adopted.overview.canonicalAppType === 1073741824 && adopted.overview.local_per_client_data.installed === false
+  && adopted.native.controller_support === 0,
+  'Validated GamepadUI entry preserves real shortcut/install/controller/Deck metadata for linked and native models');
+check(Overview.prototype.BIsShortcut === shortcutMethod && Object.getOwnPropertyDescriptor(Overview.prototype, 'controller_support').get === controllerGetter,
+  'Even an active validated GamepadUI session never modifies shared classification prototypes');
 const readsBeforeWrongDocument = appStoreReads, detailsBeforeWrongDocument = detailRefreshes;
 runtime.activateBigPicture(earlyDesktop.doc);
 await runtime.refreshBigPicture(earlyDesktop.doc);
@@ -170,7 +178,7 @@ check(runtime.getBigPictureDocument() === adopted.doc && appStoreReads === reads
   'A later Desktop callback cannot replace the adopted GamepadUI session or refresh either model store');
 runtime.deactivateBigPicture();
 check(Overview.prototype.BIsShortcut === shortcutMethod && Object.getOwnPropertyDescriptor(Overview.prototype, 'controller_support').get === controllerGetter,
-  'Leaving the valid GamepadUI session restores its shared prototype descriptors exactly');
+  'Leaving GamepadUI retains the shared prototype descriptors that were never modified');
 
 const lateDesktop = fixture(null);
 runtime.activateBigPicture(lateDesktop.doc);

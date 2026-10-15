@@ -199,7 +199,7 @@ function M.neutralize_steam_appid_file(request_json)
     local ok_req, req = pcall(deps.cjson.decode, tostring(request_json or "{}"))
     if not ok_req or type(req) ~= "table" then req = {} end
     local exe_path = clean_path_input(req.exe_path or req.shortcutExecutable or req.executable or "")
-    local start_dir = clean_path_input(req.start_dir or req.trackingStartDir or req.startDir or "")
+    local start_dir = clean_path_input(req.start_dir or req.startDir or "")
     if exe_path == "" and start_dir == "" then
         return deps.cjson.encode({ ok = true, modified = false, skipped = "missing_target" })
     end
@@ -240,7 +240,7 @@ function M.restore_steam_appid_file(request_json)
     local ok_req, req = pcall(deps.cjson.decode, tostring(request_json or "{}"))
     if not ok_req or type(req) ~= "table" then req = {} end
     local exe_path = clean_path_input(req.exe_path or req.shortcutExecutable or req.executable or "")
-    local start_dir = clean_path_input(req.start_dir or req.trackingStartDir or req.startDir or "")
+    local start_dir = clean_path_input(req.start_dir or req.startDir or "")
     local search_dirs = {}
     local seen_dirs = {}
     local function add_dir(d)

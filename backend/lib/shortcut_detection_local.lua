@@ -188,13 +188,9 @@ function M.discover_local_candidates(request)
     local title = detection_trim(request.title):sub(1, 240)
     local exe_path = detection_clean_path(request.exe_path):sub(1, 4096)
     local start_dir = detection_clean_path(request.start_dir):sub(1, 4096)
-    local game_exe_path = detection_clean_path(request.game_exe_path):sub(1, 4096)
-    local game_start_dir = detection_clean_path(request.game_start_dir):sub(1, 4096)
     local launch_options = detection_trim(request.launch_options):sub(1, 4096)
 
-    local identity_exe_path = game_exe_path ~= "" and game_exe_path or exe_path
-    local identity_start_dir = game_start_dir ~= "" and game_start_dir or start_dir
-    local exe_basename = detection_basename(identity_exe_path)
+    local exe_basename = detection_basename(exe_path)
     local raw_exe_stem = detection_stem(exe_basename)
     local exe_stem = detection_game_exe_hint(exe_basename)
     local title_hint = detection_game_exe_hint(title)
@@ -204,10 +200,7 @@ function M.discover_local_candidates(request)
 
     local pe_product_name, pe_file_desc = nil, nil
     if detection_pe and detection_pe.read_pe_metadata then
-        pe_product_name, pe_file_desc = detection_pe.read_pe_metadata(identity_exe_path)
-        if not pe_product_name and identity_exe_path ~= exe_path then
-            pe_product_name, pe_file_desc = detection_pe.read_pe_metadata(exe_path)
-        end
+        pe_product_name, pe_file_desc = detection_pe.read_pe_metadata(exe_path)
     end
     local is_generic_pe = detection_pe and detection_pe.is_generic_product_name or function() return false end
     local clean_pe_product = (pe_product_name and not is_generic_pe(pe_product_name))
@@ -223,16 +216,16 @@ function M.discover_local_candidates(request)
         or launcher_exe_normalized:find("bootstrapper", 1, true) ~= nil
     local generic_launcher = DETECTION_GENERIC_EXES[launcher_exe_normalized] == true
 
-    local folders = detection_folder_hints(identity_exe_path, identity_start_dir)
+    local folders = detection_folder_hints(exe_path, start_dir)
 
     -- Direct proof signals from local filesystem or launch arguments
     local direct_appid = detection_appid_from_arguments(launch_options)
     local direct_source = direct_appid and "launch_argument" or nil
-    if not direct_appid and identity_exe_path ~= "" then
-        direct_appid, direct_source = detection_find_steam_appid_file(identity_exe_path)
+    if not direct_appid and exe_path ~= "" then
+        direct_appid, direct_source = detection_find_steam_appid_file(exe_path)
     end
-    if not direct_appid and identity_exe_path ~= "" then
-        direct_appid, direct_source = detection_find_appmanifest(identity_exe_path)
+    if not direct_appid and exe_path ~= "" then
+        direct_appid, direct_source = detection_find_appmanifest(exe_path)
     end
 
     local by_id = {}

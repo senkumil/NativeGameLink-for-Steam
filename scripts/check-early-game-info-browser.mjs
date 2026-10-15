@@ -8,9 +8,13 @@ import ts from 'typescript';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const edge = process.env.CLOUD_BROWSER_EXECUTABLE || 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
-const steamCss = process.env.STEAM_PLAYBAR_CSS || 'C:/Program Files (x86)/Steam/steamui/css/chunk~2dcc5aaf7.css';
-assert.ok(fs.existsSync(edge) && fs.existsSync(steamCss), 'This browser check requires installed Edge and Steam CSS');
+const steamCss = process.env.STEAM_PLAYBAR_CSS || [
+  'C:/Program Files (x86)/Steam/steamui/css/sp.css',
+  'C:/Program Files (x86)/Steam/steamui/css/chunk~2dcc5aaf7.css',
+].find(filename => fs.existsSync(filename));
+assert.ok(fs.existsSync(edge) && (steamCss && fs.existsSync(steamCss)), 'This browser check requires installed Edge and Steam CSS');
 const sources = Object.fromEntries([
+  ['class-module-cache', 'frontend/steam/class-module-cache.ts'],
   ['css', 'frontend/steam/css.ts'], ['native-dom', 'frontend/steam/native-dom.ts'],
   ['library-details', 'frontend/steam/library-details.ts'], ['dom', 'frontend/core/dom.ts'],
   ['achievement-playbar-space', 'frontend/steam/achievement-playbar-space.ts'],
@@ -34,6 +38,7 @@ async function browserChecks(sources) {
   const localization = { loc: (_key, fallback) => fallback, gdlText: (_key, fallback) => fallback, steamLanguageSync: () => 'english' };
   const dependencies = {
     '@steambrew/client': { findClassModule: () => null },
+    './modules/SteamWebpackRuntime': { steamWebpackRuntime: { getRuntimeIdentity: () => null, getAllModules: () => [] } },
     '../../api/backend': { backendLog() {} },
     '../../core/game-data': { getSynchronousGameData: id => { reads++; return metadata.get(id) || null; } },
     '../../core/text': { escapeHtml: value => String(value || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]) },

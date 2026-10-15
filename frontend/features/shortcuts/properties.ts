@@ -3,7 +3,7 @@ import { backendLog } from '../../api/backend';
 import { escapeHtml, templateToRegex } from '../../core/text';
 import { gdlText, loc, setLocalizationDocumentProvider, steamLanguageSync } from '../../steam/localization';
 import { getCachedGameData, getGameData } from '../../core/game-data';
-import { findActiveShortcutAppId, findShortcutAppIdByName, shortcutPathBasename } from '../../steam/shortcuts';
+import { findActiveShortcutAppId, findShortcutAppIdByName } from '../../steam/shortcuts';
 import { shortcutRuntimeHost } from './host';
 import { findMappingForShortcut } from './registry';
 import { buildShortcutDetectionContext, detectShortcutCandidatesLocal, enrichShortcutCandidatesRemote, mergeCandidateLists } from './detection';
@@ -250,10 +250,6 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 				<input class="gdl-skip-launcher-input" type="checkbox" />
 				<span><strong>${escapeHtml(gdlText('skip_launcher', 'Try to skip the launcher'))}</strong><br />${escapeHtml(gdlText('skip_launcher_help', 'Adds -nolauncher while preserving your current launch options. Enable it only if this game supports that argument.'))}</span>
 			</label>
-			<label class="gdl-tracking-executable gdl-native-option">
-				<input class="gdl-tracking-executable-input" type="checkbox" />
-				<span class="gdl-tracking-executable-copy"></span>
-			</label>
 		</div>
 		${shortcutAchievementSettingsHtml()}
 	`;
@@ -269,9 +265,6 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 	const candidatePreview = section.querySelector('.gdl-auto-candidate-preview') as HTMLElement;
 	const skipLauncherLabel = section.querySelector('.gdl-skip-launcher') as HTMLElement;
 	const skipLauncherInput = section.querySelector('.gdl-skip-launcher-input') as HTMLInputElement;
-	const trackingExecutableLabel = section.querySelector('.gdl-tracking-executable') as HTMLElement;
-	const trackingExecutableInput = section.querySelector('.gdl-tracking-executable-input') as HTMLInputElement;
-	const trackingExecutableCopy = section.querySelector('.gdl-tracking-executable-copy') as HTMLElement;
 	let detectionContext: ShortcutDetectionContext | null = null;
 	let achievementBinding: { sync: (appId?: string) => void } | null = null;
 	let playtimeBinding: { sync: (shortcutAppId?: string | number) => void } | null = null;
@@ -696,24 +689,6 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 				return;
 			}
 
-			if (detectionContext.bootstrapDetected && detectionContext.recommendedExePath) {
-				const bootstrap = shortcutPathBasename(detectionContext.exePath);
-				const gameExe = shortcutPathBasename(detectionContext.recommendedExePath);
-				if (detectionContext.trackingExecutableAutoApply) {
-					trackingExecutableCopy.innerHTML = `<strong style="font-weight:500;color:#dcdedf;">${escapeHtml(gdlText('selected_executable', 'Selected executable: {exe}', { exe: gameExe }))}</strong><br /><span style="color:#8f98a0;font-size:11px;line-height:1.35;display:block;margin-top:2px;">${escapeHtml(gdlText('persistent_tracking_exe_note', '{exe} is the main process for this game to ensure playtime tracking works correctly.', { exe: gameExe }))}</span>`;
-					trackingExecutableLabel.style.display = 'flex';
-					trackingExecutableLabel.style.pointerEvents = 'none';
-					trackingExecutableInput.style.display = 'none';
-					trackingExecutableInput.checked = true;
-				} else {
-					trackingExecutableCopy.innerHTML = `<strong style="font-weight:500;color:#dcdedf;">${escapeHtml(gdlText('use_tracking_executable', 'Use the real game executable'))}</strong><br />${escapeHtml(gdlText('tracking_executable_help', '{bootstrap} closes after launching {game}. Use {game} so Steam tracks your playtime.', { bootstrap, game: gameExe }))}`;
-					trackingExecutableLabel.style.display = 'flex';
-					trackingExecutableLabel.style.pointerEvents = '';
-					trackingExecutableInput.style.display = '';
-					trackingExecutableInput.checked = false;
-				}
-			}
-
 			// Render zero-network evidence first. A slow Store/AppInfo request must
 			// never leave the properties dropdown blank for several seconds.
 			const localDetection = await detectShortcutCandidatesLocal(detectionContext);
@@ -802,8 +777,7 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 			cancelPendingLinkJobs(shortcutId, gameTitle);
 			undismissShortcut(shortcutId);
 			const linkInput = { title: gameTitle, shortcutAppId: shortcutId, steamAppId: val, skipLauncher: !!skipLauncherInput?.checked,
-				existingLaunchOptions: detectionContext?.launchOptions || '', trackingExecutable: trackingExecutableInput?.checked ? detectionContext?.recommendedExePath || '' : '',
-				trackingStartDir: trackingExecutableInput?.checked ? detectionContext?.recommendedStartDir || '' : '', shortcutExecutable: detectionContext?.exePath || '' };
+				existingLaunchOptions: detectionContext?.launchOptions || '', shortcutExecutable: detectionContext?.exePath || '' };
 			stageLinkJobForRecovery({ ...linkInput, repairResources: false });
 			const requestRevision = ++targetRevision;
 			propertyActionBusy = 'link';
@@ -835,8 +809,6 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 						enqueueLinkJob({
 							title: gameTitle, shortcutAppId: result.shortcutAppId || shortcutId, steamAppId: val,
 							skipLauncher: !!skipLauncherInput?.checked, existingLaunchOptions: detectionContext?.launchOptions || '',
-							trackingExecutable: trackingExecutableInput?.checked ? detectionContext?.recommendedExePath || '' : '',
-							trackingStartDir: trackingExecutableInput?.checked ? detectionContext?.recommendedStartDir || '' : '',
 							shortcutExecutable: detectionContext?.exePath || '', repairResources: true,
 						});
 						statusEl.textContent = gdlText('link_queued_background', 'Linked. Resource setup continues in the background.');
@@ -855,8 +827,6 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 						enqueueLinkJob({
 							title: gameTitle, shortcutAppId: committedId, steamAppId: val,
 							skipLauncher: !!skipLauncherInput?.checked, existingLaunchOptions: detectionContext?.launchOptions || '',
-							trackingExecutable: trackingExecutableInput?.checked ? detectionContext?.recommendedExePath || '' : '',
-							trackingStartDir: trackingExecutableInput?.checked ? detectionContext?.recommendedStartDir || '' : '',
 							shortcutExecutable: detectionContext?.exePath || '',
 						});
 						statusEl.textContent = committedMapping === val
@@ -877,8 +847,6 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 				enqueueLinkJob({
 					title: gameTitle, shortcutAppId: shortcutId, steamAppId: val,
 					skipLauncher: !!skipLauncherInput?.checked, existingLaunchOptions: detectionContext?.launchOptions || '',
-					trackingExecutable: trackingExecutableInput?.checked ? detectionContext?.recommendedExePath || '' : '',
-					trackingStartDir: trackingExecutableInput?.checked ? detectionContext?.recommendedStartDir || '' : '',
 					shortcutExecutable: detectionContext?.exePath || '',
 				});
 				if (requestRevision === targetRevision && section.isConnected) {

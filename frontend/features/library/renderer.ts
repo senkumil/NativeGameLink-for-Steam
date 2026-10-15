@@ -11,9 +11,9 @@ import {
 	prepareNativeLibraryLayout,
 } from './layout';
 import { refreshHistoricalSidebarSections, renderLinkedSidebarCore } from './sidebar-sections';
-import { setupControllerSidebarWatcher } from './controller';
+import { disposeControllerSidebarWatcher, getOwnedControllerSidebar, setupControllerSidebarWatcher } from './controller';
 import { renderOptionalStoreSections } from './optional-sections';
-import { createActivityView, wireActivityView } from './activity-view';
+import { createActivityView, parkSharedActivityComposer, wireActivityView } from './activity-view';
 import { createPrimaryLinksBar, insertPrimaryLinksBar } from './primary-links';
 import {
 	disposeCommunitySection,
@@ -25,10 +25,14 @@ import { disposeTradingCardUI } from './trading-cards';
 import { isLegacyGame } from './legacy-games';
 import { runWhenLibrarySidebarIdle } from '../../steam/sidebar-interaction';
 import { ownsCurrentLinkedPrimaryLinks } from './render-session';
+import { adoptLinkedLoadingActivity, getLinkedLoadingActivity } from './first-content';
+import { getOwnedAchievementSidebar } from './early-achievement-sidebar';
+import { disposeLinkedSidebarOrder, ensureLinkedSidebarOrder } from './sidebar-order';
 
 export interface LinkedGameRenderContext {
 	shortcutAppId: string | null;
 	isCurrent: () => boolean;
+	generation?: number;
 }
 
 const INJECTED_SECTION_IDS = [
@@ -48,21 +52,23 @@ const INJECTED_SECTION_IDS = [
 	'gdl-external-achievements-section',
 ] as const;
 
-const controllerWatchers = new WeakMap<Document, () => void>();
-
-function cleanupPreviousRender(doc: Document, preserveLinkBar = false): void {
+function cleanupPreviousRender(doc: Document, preserveLinkBar = false, preserveActivity?: HTMLElement | null, preserveAchievements?: HTMLElement | null, preserveController?: HTMLElement | null, preservedSidebar = new Set<HTMLElement>()): void {
 	// The header can already have mounted this destination's links before the
 	// metadata columns exist. A layout retry must keep that same visible node.
 	preserveLinkBar = ownsCurrentLinkedPrimaryLinks(doc) || preserveLinkBar;
-	controllerWatchers.get(doc)?.();
-	controllerWatchers.delete(doc);
+	if (!preserveActivity) parkSharedActivityComposer(doc);
+	disposeControllerSidebarWatcher(doc, Boolean(preserveController));
+	if (!preservedSidebar.size && !preserveAchievements && !preserveController) disposeLinkedSidebarOrder(doc);
 	removeNativeGameChrome(doc, false, true, true, true);
-	disposeTradingCardUI(doc);
+	const cards = doc.getElementById('gdl-trading-cards-section');
+	if (!cards || !preservedSidebar.has(cards)) disposeTradingCardUI(doc);
 	const community = doc.getElementById('gdl-community-content');
 	if (community instanceof HTMLElement) disposeCommunitySection(community);
 	for (const id of INJECTED_SECTION_IDS) {
 		if (preserveLinkBar && id === 'gdl-link-bar') continue;
-		doc.getElementById(id)?.remove();
+		const node = doc.getElementById(id);
+		if (node === preserveActivity || node === preserveAchievements || node === preserveController || (node && preservedSidebar.has(node))) continue;
+		node?.remove();
 	}
 	doc.querySelectorAll<HTMLElement>('[data-gdl-hidden]').forEach(element => {
 		element.style.display = '';
@@ -89,18 +95,31 @@ export function renderLinkedGamePage(
 ): boolean {
 	if (noticeElement.ownerDocument !== doc || !noticeElement.isConnected || !context.isCurrent()) return false;
 	const previousActivity = doc.getElementById(GDL_INJECTED) as HTMLElement | null;
+	const firstActivity = getLinkedLoadingActivity(doc, steamAppId, context.shortcutAppId);
+	const firstAchievements = getOwnedAchievementSidebar(doc, steamAppId, context.shortcutAppId);
+	const firstController = getOwnedControllerSidebar(doc, steamAppId, context.shortcutAppId);
 	const previousBelongsToSession = previousActivity?.dataset.gdlSteamAppId === steamAppId
 		&& (!context.shortcutAppId || previousActivity.dataset.gdlShortcutAppId === context.shortcutAppId);
 	const layout = discoverNativeLibraryLayout(doc, noticeElement);
 	if (!layout.anchorRegion?.isConnected || !layout.sidebarColumn?.isConnected
 		|| !layout.twoColumnRow?.isConnected || !layout.contentColumn?.isConnected) {
-		if (!previousBelongsToSession || previousActivity?.dataset.gdlLayoutComplete !== '1') cleanupPreviousRender(doc);
+		if (!previousBelongsToSession || previousActivity?.dataset.gdlLayoutComplete !== '1') cleanupPreviousRender(doc, false, firstActivity, firstAchievements, firstController);
 		return false;
 	}
-	cleanupPreviousRender(doc, previousBelongsToSession);
+	// A metadata update for this same shortcut must not tear down the sidebar's
+	// images, interactions or native neighbours before rebuilding the main feed.
+	const preservedSidebar = new Set<HTMLElement>();
+	for (const node of Array.from(layout.sidebarColumn.children)) {
+		if (node instanceof HTMLElement && node.id.startsWith('gdl-')
+			&& node.dataset.gdlSteamAppId === steamAppId
+			&& (node.dataset.gdlShortcutAppId || null) === context.shortcutAppId) preservedSidebar.add(node);
+	}
+	cleanupPreviousRender(doc, previousBelongsToSession, firstActivity, firstAchievements, firstController, preservedSidebar);
 	const isLegacy = isLegacyGame(steamAppId, data);
 	const initialAssets = getResolvedLibraryAssets(steamAppId);
 	prepareNativeLibraryLayout(layout);
+	ensureLinkedSidebarOrder(doc, layout, { steamAppId, shortcutAppId: context.shortcutAppId,
+		generation: context.generation, isCurrent: context.isCurrent });
 
 	renderLinkedSidebarCore(doc, layout, {
 		steamAppId,
@@ -108,15 +127,17 @@ export function renderLinkedGamePage(
 		data,
 		friendResult,
 		modern: initialAssets,
+		isCurrent: context.isCurrent,
+		generation: context.generation,
 	});
 
-	controllerWatchers.get(doc)?.();
-	controllerWatchers.set(doc, setupControllerSidebarWatcher(doc, layout, steamAppId, context.shortcutAppId, context.isCurrent));
+	setupControllerSidebarWatcher(doc, layout, steamAppId, context.shortcutAppId, context.isCurrent);
 
 	const capabilities = renderOptionalStoreSections(doc, layout, {
 		steamAppId,
 		gameName: data.name,
 		data,
+		shortcutAppId: context.shortcutAppId,
 		isCurrent: context.isCurrent,
 	});
 
@@ -126,7 +147,7 @@ export function renderLinkedGamePage(
 		newsItems,
 		headerImage: data.header_image || '',
 	};
-	const activity = createActivityView(doc, layout, activityOptions);
+	const activity = adoptLinkedLoadingActivity(doc, steamAppId, context.shortcutAppId) || createActivityView(doc, layout, activityOptions);
 	// Steam's native content column can itself be a grid/flex layout. Inserting
 	// Activity and Community as separate direct children lets that outer layout
 	// place Community on a new row after the entire sidebar, leaving a tall gap.

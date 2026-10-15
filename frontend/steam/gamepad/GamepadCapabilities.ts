@@ -1,4 +1,5 @@
-﻿import { backendLog } from '../../api/backend';
+import { DocumentRuntimeCache } from './runtime-cache';
+import { backendLog } from '../../api/backend';
 
 export interface GamepadCapabilities {
 	runtime: boolean;
@@ -21,7 +22,8 @@ export interface GamepadCapabilities {
 export type GamepadCapabilityKey = keyof Omit<GamepadCapabilities, 'runtime'>;
 
 class GamepadCapabilitiesManager {
-	private capabilities: GamepadCapabilities = {
+	private states = new DocumentRuntimeCache(() => ({
+		capabilities: {
 		runtime: false,
 		appStore: false,
 		libraryStore: false,
@@ -36,42 +38,46 @@ class GamepadCapabilitiesManager {
 		friends: false,
 		community: false,
 		gameDetails: false,
-	};
+	} as GamepadCapabilities,
+		circuitBreakers: new Map<GamepadCapabilityKey, { failures: number; broken: boolean; lastError?: string }>(),
+	}));
 
-	private circuitBreakers = new Map<GamepadCapabilityKey, { failures: number; broken: boolean; lastError?: string }>();
-
-	public isAvailable(key: GamepadCapabilityKey): boolean {
-		const cb = this.circuitBreakers.get(key);
+	public isAvailable(key: GamepadCapabilityKey, doc?: Document): boolean {
+		const state = this.states.get(doc);
+		const cb = state.circuitBreakers.get(key);
 		if (cb && cb.broken) return false;
-		return this.capabilities[key] ?? false;
+		return state.capabilities[key] ?? false;
 	}
 
-	public setAvailable(key: GamepadCapabilityKey, available: boolean): void {
-		this.capabilities[key] = available;
+	public setAvailable(key: GamepadCapabilityKey, available: boolean, doc?: Document): void {
+		const state = this.states.get(doc);
+		state.capabilities[key] = available;
 		if (available) {
-			this.circuitBreakers.delete(key);
+			state.circuitBreakers.delete(key);
 			backendLog(`[NGL][Gamepad][Capabilities] Capability enabled: "${key}"`);
 		}
 	}
 
-	public recordFailure(key: GamepadCapabilityKey, error: unknown): void {
-		const entry = this.circuitBreakers.get(key) || { failures: 0, broken: false };
+	public recordFailure(key: GamepadCapabilityKey, error: unknown, doc?: Document): void {
+		const state = this.states.get(doc);
+		const entry = state.circuitBreakers.get(key) || { failures: 0, broken: false };
 		entry.failures += 1;
 		entry.lastError = String(error);
 		if (entry.failures >= 3 && !entry.broken) {
 			entry.broken = true;
-			this.capabilities[key] = false;
+			state.capabilities[key] = false;
 			backendLog(`[NGL][Gamepad][CircuitBreaker] Tripped for capability "${key}" after 3 failures. Fallback engaged. Error: ${entry.lastError}`);
 		}
-		this.circuitBreakers.set(key, entry);
+		state.circuitBreakers.set(key, entry);
 	}
 
-	public getSnapshot(): GamepadCapabilities {
-		return { ...this.capabilities };
+	public getSnapshot(doc?: Document): GamepadCapabilities {
+		const state = this.states.get(doc);
+		return { ...state.capabilities };
 	}
 
-	public resetCircuitBreakers(): void {
-		this.circuitBreakers.clear();
+	public resetCircuitBreakers(doc?: Document): void {
+		this.states.clear(doc);
 	}
 }
 

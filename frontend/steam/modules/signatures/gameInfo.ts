@@ -9,8 +9,8 @@ export interface GameInfoCandidate {
 	matchedSignatures: string[];
 }
 
-export function findTopGameInfoCandidates(maxResults = 3): GameInfoCandidate[] {
-	const modules = steamWebpackRuntime.getAllModules();
+export function findTopGameInfoCandidates(maxResults = 3, doc?: Document): GameInfoCandidate[] {
+	const modules = steamWebpackRuntime.getAllModules(doc);
 	const candidates: GameInfoCandidate[] = [];
 
 	for (const mod of modules) {

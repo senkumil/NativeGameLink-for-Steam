@@ -15,6 +15,51 @@ export interface ActivityViewOptions {
 	headerImage: string;
 }
 
+type SharedComposer = { nodes: HTMLElement[]; key: string; textarea: HTMLTextAreaElement; drafts: Map<string, string> };
+const sharedComposers = new WeakMap<Document, SharedComposer>();
+
+/** Game-independent chrome keeps its DOM, focusable controls and native spacing.
+ * Drafts remain scoped to the exact game instead of following the shared input. */
+function reuseActivityComposer(doc: Document, wrapper: HTMLElement, options: ActivityViewOptions): void {
+	let shared = sharedComposers.get(doc);
+	const key = `${options.steamAppId}:${options.shortcutAppId || ''}`;
+	if (shared) {
+		if (shared.key !== key) {
+			shared.drafts.delete(shared.key);
+			if (shared.textarea.value) shared.drafts.set(shared.key, shared.textarea.value);
+			while (shared.drafts.size > 16) shared.drafts.delete(shared.drafts.keys().next().value!);
+			shared.textarea.value = shared.drafts.get(key) || '';
+			shared.key = key;
+			shared.nodes.find(node => node.classList.contains('gdl-status-box-container'))?.classList.remove('gdl-composer-active');
+		}
+		const feed = wrapper.querySelector('#gdl-activity-feed');
+		for (const node of shared.nodes) wrapper.insertBefore(node, feed);
+	} else {
+		const textarea = wrapper.querySelector<HTMLTextAreaElement>('#gdl-status-text');
+		if (!textarea) return;
+		shared = { key, textarea, drafts: new Map(), nodes: Array.from(wrapper.children).filter(node => node.id !== 'gdl-activity-feed') as HTMLElement[] };
+		sharedComposers.set(doc, shared);
+	}
+	shared.textarea.placeholder = gdlText('post_placeholder', loc('AppActivity_StatusUpdate_Post', 'Say something about this game to your friends...'));
+	const heading = wrapper.querySelector<HTMLElement>('.gdl-ui-activity-heading');
+	const label = heading?.querySelector('div div') || heading?.querySelector('div') || heading;
+	if (label) label.textContent = gdlText('activity', loc('AppDetails_SectionTitle_Activity', 'Activity'));
+	refreshActivityNewsLink(doc, options);
+}
+
+export function refreshActivityNewsLink(doc: Document, options: ActivityViewOptions): void {
+	const shared = sharedComposers.get(doc);
+	if (!shared || shared.key !== `${options.steamAppId}:${options.shortcutAppId || ''}`) return;
+	const row = shared.nodes.find(node => node.classList.contains('gdl-latest-news-row'));
+	const button = row?.querySelector<HTMLElement>('.gdl-latest-news-button');
+	if (!row || !button) return;
+	const latest = [...options.newsItems].filter(item => item?.url && item.title && Number(item.date || 0) > 0)
+		.sort((a, b) => Number(b.date || 0) - Number(a.date || 0))[0];
+	button.dataset.gdlOpenUrl = latest?.url || '';
+	button.textContent = gdlText('latest_news', loc('AppActivity_ViewLatestNews', 'View latest news'));
+	row.style.display = latest && !steamUIModeService.isGamepadUI(doc) ? '' : 'none';
+}
+
 export function createActivityView(
 	doc: Document,
 	layout: NativeLibraryLayout,
@@ -30,10 +75,6 @@ export function createActivityView(
 	const postClasses = POST_CLASSES();
 	const feedClasses = FEED_CLASSES();
 	const isGamepad = steamUIModeService.isGamepadUI(doc);
-	// Remote activity is hydrated after the page is mounted. Leave this area
-	// empty until it arrives instead of rendering a second skeleton state.
-	const sortedNews = [...options.newsItems].filter(item => item && item.title && Number(item.date || 0) > 0).sort((a, b) => Number(b.date || 0) - Number(a.date || 0));
-	const latestNewsUrl = String(sortedNews[0]?.url || '').trim();
 	// Always ask the feed snapshot owner for initial markup. It can reuse the
 	// last in-memory news/friend snapshot when persistent storage is under quota,
 	// avoiding an empty feed followed by a second paint on every revisit.
@@ -41,6 +82,7 @@ export function createActivityView(
 		options.steamAppId, options.shortcutAppId, options.newsItems, options.headerImage,
 	);
 	wrapper.innerHTML = `
+		${sharedComposers.has(doc) ? '' : `
 		<div class="gdl-native-activity-heading-fallback gdl-ui-activity-heading" style="font-family:'Motiva Sans',Arial,Helvetica,sans-serif;font-size:13.5px;font-weight:700;letter-spacing:1.5px;color:#8f98a0;margin:0 0 8px 0 !important;padding:0 !important;text-transform:uppercase;">${escapeHtml(gdlText('activity', loc('AppDetails_SectionTitle_Activity', 'Activity')).toUpperCase())}</div>
 		<div class="${feedClasses.AddToFeed || ''} ${feedClasses.PostTextEntry || ''} gdl-status-box-container ${postClasses.PostTextEntry || ''}" style="display:block !important;margin:0 0 2px 0 !important;min-height:0 !important;position:relative !important;z-index:50 !important;">
 			<textarea id="gdl-status-text" class="${postClasses.PostTextEntryArea}" rows="1" placeholder="${escapeHtml(gdlText('post_placeholder', loc('AppActivity_StatusUpdate_Post', 'Say something about this game to your friends...')))}"></textarea>
@@ -58,7 +100,7 @@ export function createActivityView(
 				</button>
 			</div>` : ''}
 		</div>
-		${(!isGamepad && latestNewsUrl) ? `<div class="gdl-latest-news-row"><button type="button" class="gdl-latest-news-button" data-gdl-open-url="${escapeHtml(latestNewsUrl)}">${escapeHtml(gdlText('latest_news', loc('AppActivity_ViewLatestNews', 'View latest news')))}</button></div>` : ''}
+		<div class="gdl-latest-news-row"><button type="button" class="gdl-latest-news-button" data-gdl-open-url="">${escapeHtml(gdlText('latest_news', loc('AppActivity_ViewLatestNews', 'View latest news')))}</button></div>`}
 		<div id="gdl-activity-feed" data-gdl-news-signature="${newsItemsSignature(options.newsItems)}" data-gdl-feed-signature="${feedSnapshot.signature}">${feedSnapshot.html}</div>`;
 
 	const sourceHeading = layout.anchorRegion
@@ -76,9 +118,18 @@ export function createActivityView(
 		heading.style.setProperty('padding-bottom', '0px', 'important');
 		fallbackHeading.replaceWith(heading);
 	}
+	reuseActivityComposer(doc, wrapper, options);
 	return wrapper;
 }
 
 export function wireActivityView(doc: Document, wrapper: HTMLElement, options: ActivityViewOptions): void {
+	refreshActivityNewsLink(doc, options);
 	setupStatusPostBox(doc, wrapper, options.steamAppId, options.shortcutAppId, options.newsItems, options.headerImage);
+}
+
+export function disposeSharedActivityComposer(doc: Document): void { sharedComposers.delete(doc); }
+
+/** Retain only the small shared controls, never their previous feed/ancestors. */
+export function parkSharedActivityComposer(doc: Document): void {
+	for (const node of sharedComposers.get(doc)?.nodes || []) node.remove();
 }

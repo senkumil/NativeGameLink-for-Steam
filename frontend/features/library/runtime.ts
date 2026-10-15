@@ -3,7 +3,7 @@ import { backendLog } from '../../api/backend';
 import { getCachedGameData, getGameData, gameDataCache, gameDataLanguageKey } from '../../core/game-data';
 import { isMappingSnapshotVerified, mappings, loadMappings, saveMappingChecked, shortcutMappingKey } from '../../core/mappings';
 import { perfMark, perfMeasure } from '../../core/perf';
-import { NativePaintQueue } from '../../core/after-native-paint';
+import { NativePaintQueue, type NativePaintReadiness } from '../../core/after-native-paint';
 import { cancelLibrarySidebarWork, runWhenLibrarySidebarIdle } from '../../steam/sidebar-interaction';
 import { paintedNativePlaybar } from '../../steam/library-details';
 import { steamLanguageSync } from '../../steam/localization';
@@ -19,18 +19,19 @@ import { disposeStatusPostBox } from './social/status';
 import { disposeCommunitySection } from './community-view';
 import { disposeTradingCardUI } from './trading-cards';
 import { renderLinkedGamePage } from './renderer';
-import { finalizeLinkedAchievements } from './achievement-chrome';
-import { cacheLocalAchievements, hasCachedLocalAchievements } from '../achievements/runtime';
-import { fetchLocalAchievementData } from '../achievements/service';
+import { disposeControllerSidebarWatcher } from './controller';
+import { disposeLinkedSidebarOrder } from './sidebar-order';
+import { finalizeLinkedAchievements, warmLocalAchievements } from './achievement-chrome';
+import { disposeSharedActivityComposer, parkSharedActivityComposer } from './activity-view';
 import { findMappingForShortcut, isShortcutDismissed, normalizedShortcutAppId, syncLinkedGameNote } from '../shortcuts/runtime';
 import { injectPlaytimeFallbackStats, removePlaytimeFallbackStats } from '../playtime/tracker';
 import { findNonSteamNotice } from './notice';
-import { restoreNativeLibraryStyles } from './layout';
+import { discoverNativeLibraryLayoutForShortcut, restoreNativeLibraryStyles } from './layout';
 import { LibraryNavigationController } from './navigation-controller';
 import { isPublicSteamLibraryRoute, libraryRouteIdentity, reconcileLibraryNavigation, routedSteamAppId } from './native-route';
 import { ensureManualLinkNoticeButton, removeManualLinkNoticeButton } from './manual-link-button';
 import { beginLibraryRouteExit, finishLibraryRouteExit, hasOwnedLibraryChrome, isLibraryRouteExitPending, removeOwnedLibraryChrome } from './route-exit';
-import { cancelLinkedShortcutLoading, completeLinkedShortcutLoading, LINKED_LOADING_SIDEBAR_ID, stageLinkedShortcutLoading } from './loading-stage';
+import { cancelLinkedShortcutLoading, completeLinkedShortcutLoading, LINKED_LOADING_SIDEBAR_ID, stageLinkedShortcutLoading, warmVisibleLinkedResources, cancelLinkedFirstContentPaint, syncEarlyLinkedFirstContent } from './loading-stage';
 import { hydrateLinkedRouteResources } from './hydration';
 import { reprioritizeLinkedGame } from './prefetch';
 import { tryRedirectUnownedMappedGame } from './sidebar-cleanup';
@@ -40,13 +41,15 @@ export { findNonSteamNotice, hideNoticeQuick } from './notice';
 export interface LibraryRuntimeHost {
 	getMainWindowDoc: () => Document | null;
 	prepareLinkedPage?: (doc: Document) => void;
+	waitForNativeArtwork?: NativePaintReadiness;
 }
 let configuredLibraryRuntimeHost: LibraryRuntimeHost | null = null, currentInjectedDocument: Document | null = null;
 let currentInjectedAppId: string | null = null, currentInjectedShortcutAppId: string | null = null, injectionGeneration = 0;
 let injectionInFlight: { doc: Document; steamAppId: string; generation: number } | null = null;
 const navigationController = new LibraryNavigationController();
 const nativePaintQueue = new NativePaintQueue();
-export function cancelPendingLibraryPaint(doc: Document): void { cancelLibrarySidebarWork(doc); nativePaintQueue.cancel(doc); }
+export function cancelPendingLibraryPaint(doc: Document): void { cancelLibrarySidebarWork(doc); nativePaintQueue.cancel(doc); cancelLinkedFirstContentPaint(doc); }
+export function syncLinkedFirstContent(doc: Document): void { const generation = navigationController.current(doc); const preview = syncEarlyLinkedFirstContent(doc, generation, () => isCurrentNavigation(doc, generation)); if (preview?.dataset.gdlSteamAppId && preview.dataset.gdlShortcutAppId) setCurrentInjection(doc, preview.dataset.gdlSteamAppId, preview.dataset.gdlShortcutAppId); }
 const linkedRenderRetryState = new WeakMap<Document, { generation: number; attempts: number }>(), routeMismatchRetryState = new WeakMap<Document, { generation: number; attempts: number }>();
 const MAX_LINKED_RENDER_RETRIES = 12;
 function isCurrentNavigation(doc: Document, generation: number): boolean {
@@ -87,6 +90,7 @@ function renderLinkedPage(
 ): boolean {
 	const rendered = renderLinkedGamePage(doc, notice, data, steamAppId, newsItems, friendResult, communityItems, {
 		shortcutAppId: currentInjectedShortcutAppId,
+		generation,
 		isCurrent: () => isCurrentRender(doc, steamAppId, generation),
 	});
 	if (rendered) {
@@ -97,12 +101,13 @@ function renderLinkedPage(
 }
 /** Remove GDL desktop-Library UI and restore Steam's original shortcut notice. */
 export function cleanupInjection(doc: Document, preserveLinkBar = false, preserveCloudStatus = false): void {
+	disposeLinkedSidebarOrder(doc); disposeControllerSidebarWatcher(doc);
 	preserveLinkBar = ownsCurrentLinkedPrimaryLinks(doc) && (preserveLinkBar || !isPublicSteamLibraryRoute(doc));
 	cancelLinkedShortcutLoading(doc);
 	linkedRenderRetryState.delete(doc); routeMismatchRetryState.delete(doc);
 	navigationController.cancelCleanup(doc); finishLibraryRouteExit(doc);
 	removeNativeGameChrome(doc, true, preserveCloudStatus, preserveCloudStatus, preserveCloudStatus); removePlaytimeFallbackStats(doc, preserveCloudStatus);
-	disposeStatusPostBox(doc); disposeActivityFeedInteractions(doc);
+	disposeStatusPostBox(doc); disposeActivityFeedInteractions(doc); parkSharedActivityComposer(doc);
 	disposeTradingCardUI(doc);
 	const community = doc.getElementById('gdl-community-content');
 	if (community instanceof HTMLElement) disposeCommunitySection(community);
@@ -113,10 +118,10 @@ export function cleanupInjection(doc: Document, preserveLinkBar = false, preserv
 	removeManualLinkNoticeButton(doc); restoreNativeLibraryStyles(doc);
 	doc.querySelectorAll('[data-gdl-hidden]').forEach(element => element.removeAttribute('data-gdl-hidden'));
 }
-
 function cleanupOwnedLibraryChromeAfterRouteExit(doc: Document): void {
+	disposeLinkedSidebarOrder(doc); disposeControllerSidebarWatcher(doc);
 	cancelLinkedShortcutLoading(doc); finishLibraryRouteExit(doc);
-	disposeStatusPostBox(doc); disposeActivityFeedInteractions(doc);
+	disposeStatusPostBox(doc); disposeActivityFeedInteractions(doc); parkSharedActivityComposer(doc);
 	disposeTradingCardUI(doc);
 	const community = doc.getElementById('gdl-community-content');
 	if (community instanceof HTMLElement) disposeCommunitySection(community);
@@ -124,7 +129,6 @@ function cleanupOwnedLibraryChromeAfterRouteExit(doc: Document): void {
 	const isCurrentLinked = Boolean(currentId && currentId >= 2147483648 && !isShortcutDismissed(currentId) && findMappingForShortcut(String(currentId), ''));
 	removeNativeGameChrome(doc, true, isCurrentLinked); removeOwnedLibraryChrome(doc);
 }
-
 function retireLinkedRouteFromNativePage(doc: Document, generation: number): void {
 	if (currentInjectedDocument === doc) clearCurrentInjection(doc);
 	cancelLinkedShortcutLoading(doc, generation);
@@ -135,6 +139,7 @@ function retireLinkedRouteFromNativePage(doc: Document, generation: number): voi
 	cleanupOwnedLibraryChromeAfterRouteExit(doc);
 }
 export function handleLibraryNavigation(doc: Document): void {
+	disposeLinkedSidebarOrder(doc); disposeControllerSidebarWatcher(doc, true);
 	cancelPendingLibraryPaint(doc);
 	removeNativeInfoButton(doc); if (!isPublicSteamLibraryRoute(doc)) resetMainScrollToTop(doc);
 	const generation = navigationController.advance(doc);
@@ -169,7 +174,6 @@ function scheduleNavigationRetry(doc: Document, generation: number, delayMs: num
 		if (isUsableLibraryDocument(doc)) void tryInjectLibraryData(doc).catch(() => {});
 	});
 }
-
 /** Retry incomplete columns within this route, with a bounded attempt count. */
 function scheduleLinkedRenderRetry(doc: Document, generation: number): void {
 	const previous = linkedRenderRetryState.get(doc);
@@ -199,12 +203,6 @@ function scheduleNavigationCleanup(doc: Document, generation = navigationControl
 	});
 }
 
-async function warmLocalAchievements(steamAppId: string, shortcutAppId: string | null): Promise<void> {
-	if (hasCachedLocalAchievements(steamAppId)) return;
-	const data = await fetchLocalAchievementData(steamAppId, { stateAppId: shortcutAppId });
-	if (data?.found && Array.isArray(data.achievements) && data.total > 0) cacheLocalAchievements(data, steamAppId, shortcutAppId);
-}
-
 function finalizeAchievements(doc: Document, steamAppId: string, fallbackTotal: number, generation = injectionGeneration): void {
 	void finalizeLinkedAchievements(doc, {
 		steamAppId, fallbackTotal, stateAppId: currentInjectedShortcutAppId || undefined,
@@ -221,11 +219,12 @@ export async function tryInjectLibraryData(doc: Document): Promise<void> {
 	}
 	const generation = navigationController.current(doc);
 	const route = libraryRouteIdentity(doc);
+	syncLinkedFirstContent(doc); warmVisibleLinkedResources(doc);
 	return runWhenLibrarySidebarIdle(doc, 'library-schedule', () => nativePaintQueue.run(doc, `${generation}:${route}`, () => runWhenLibrarySidebarIdle(doc, 'library-commit', () => {
 		if (!isCurrentNavigation(doc, generation) || libraryRouteIdentity(doc) !== route) return undefined;
 		if (!isPublicSteamLibraryRoute(doc)) configuredLibraryRuntimeHost?.prepareLinkedPage?.(doc);
 		return injectLibraryDataAfterNativePaint(doc);
-	})));
+	}), configuredLibraryRuntimeHost?.waitForNativeArtwork));
 }
 
 async function injectLibraryDataAfterNativePaint(doc: Document): Promise<void> {
@@ -253,8 +252,8 @@ async function injectLibraryDataAfterNativePaint(doc: Document): Promise<void> {
 			const app = getShortcutAppById(Number(nextAppId));
 			const title = String(app?.display_name || app?.m_strDisplayName || '').trim();
 			const mapped = findMappingForShortcut(String(nextAppId), title);
-			const existingStack = doc.getElementById('gdl-main-content-stack');
-			if (mapped && existingStack?.isConnected) noticeInfo = { element: existingStack, title: title || '' };
+			const nativeContent = mapped && discoverNativeLibraryLayoutForShortcut(doc, nextAppId).contentColumn;
+			if (nativeContent?.isConnected) noticeInfo = { element: nativeContent, title: title || '' };
 		}
 	}
 	if (!noticeInfo) {
@@ -345,7 +344,7 @@ async function injectLibraryDataAfterNativePaint(doc: Document): Promise<void> {
 	}
 	reprioritizeLinkedGame(steamAppId);
 
-	stageLinkedShortcutLoading(doc, notice, navigationGeneration);
+	const stage = () => stageLinkedShortcutLoading(doc, notice, navigationGeneration, { steamAppId, shortcutAppId: resolvedShortcutAppId, isCurrent: () => isCurrentNavigation(doc, navigationGeneration) && libraryRouteIdentity(doc) === navigationRoute });
 
 	if (activeShortcutAppId && !mappings[shortcutMappingKey(activeShortcutAppId)]) {
 		const activeKey = shortcutMappingKey(activeShortcutAppId);
@@ -384,6 +383,11 @@ async function injectLibraryDataAfterNativePaint(doc: Document): Promise<void> {
 		if (isUsableLibraryDocument(previousDoc)) cleanupInjection(previousDoc);
 	}
 	const generation = setCurrentInjection(doc, steamAppId, resolvedShortcutAppId);
+	await stage();
+	if (!isCurrentNavigation(doc, navigationGeneration) || !isCurrentRender(doc, steamAppId, generation)) return;
+	const mountedDuringPaint = doc.getElementById(GDL_INJECTED);
+	if (mountedDuringPaint?.dataset.gdlLayoutComplete === '1' && mountedDuringPaint.dataset.gdlSteamAppId === steamAppId
+		&& mountedDuringPaint.dataset.gdlShortcutAppId === resolvedShortcutAppId) return;
 	removeManualLinkNoticeButton(doc);
 	perfMark('game-select-' + steamAppId);
 	backendLog(`Library page: "${gameTitle}" -> injecting data for ${steamAppId}`);
@@ -405,11 +409,10 @@ async function injectLibraryDataAfterNativePaint(doc: Document): Promise<void> {
 		if (renderedFromCache) {
 			perfMeasure('game-selection -> first-render', 'game-select-' + steamAppId);
 			finalizeAchievements(doc, steamAppId, cachedData.achievements?.total || 0, generation);
+			hydrateLinkedRouteResources(doc, steamAppId, resolvedShortcutAppId, language, () => isCurrentRender(doc, steamAppId, generation), cachedData);
 		} else {
 			scheduleLinkedRenderRetry(doc, navigationGeneration);
 		}
-	} else {
-		stageLinkedShortcutLoading(doc, notice, navigationGeneration);
 	}
 
 	if (injectionInFlight?.doc === doc && injectionInFlight.steamAppId === steamAppId && injectionInFlight.generation === generation) return;
@@ -443,27 +446,29 @@ async function injectLibraryDataAfterNativePaint(doc: Document): Promise<void> {
 		}
 		return;
 	}
-	await runWhenLibrarySidebarIdle(doc, 'library-core-result', () => {});
-	if (!isCurrentNavigation(doc, navigationGeneration) || !isCurrentRender(doc, steamAppId, generation)) return;
-	cachedNews = getCachedNews(steamAppId, language, data)?.data || cachedNews;
-	void syncLinkedGameNote(gameTitle || data.name, data, steamAppId);
-	if (!renderedFromCache) {
-		const latestNotice = findNonSteamNotice(doc);
-		if (!latestNotice || !renderLinkedPage(doc, latestNotice.element, data, steamAppId,
-			cachedNews, cachedFriends, cachedCommunity, generation)) {
-			if (isCurrentNavigation(doc, navigationGeneration)
-				&& isCurrentRender(doc, steamAppId, generation)) {
-				stageLinkedShortcutLoading(doc, notice, navigationGeneration);
-				scheduleLinkedRenderRetry(doc, navigationGeneration);
+	const refreshedData = data;
+	await nativePaintQueue.run(doc, `${navigationGeneration}:${navigationRoute}:result:${generation}`, () => runWhenLibrarySidebarIdle(doc, 'library-core-result', () => {
+		if (!isCurrentNavigation(doc, navigationGeneration) || !isCurrentRender(doc, steamAppId, generation)) return;
+		cachedNews = getCachedNews(steamAppId, language, refreshedData)?.data || cachedNews;
+		void syncLinkedGameNote(gameTitle || refreshedData.name, refreshedData, steamAppId);
+		if (!renderedFromCache) {
+			const latestNotice = findNonSteamNotice(doc)?.element || discoverNativeLibraryLayoutForShortcut(doc, resolvedShortcutAppId || '').contentColumn;
+			if (!latestNotice || !renderLinkedPage(doc, latestNotice, refreshedData, steamAppId,
+				cachedNews, cachedFriends, cachedCommunity, generation)) {
+				if (isCurrentNavigation(doc, navigationGeneration)
+					&& isCurrentRender(doc, steamAppId, generation)) {
+					stage();
+					scheduleLinkedRenderRetry(doc, navigationGeneration);
+				}
+				return;
 			}
-			return;
+			perfMeasure('game-selection -> first-render', 'game-select-' + steamAppId);
 		}
-		perfMeasure('game-selection -> first-render', 'game-select-' + steamAppId);
-	}
-	finalizeAchievements(doc, steamAppId, data.achievements?.total || 0, generation);
-	hydrateLinkedRouteResources(doc, steamAppId, resolvedShortcutAppId, language,
-		() => isCurrentRender(doc, steamAppId, generation), data);
-	perfMeasure('background-revalidation', 'game-select-' + steamAppId);
+		finalizeAchievements(doc, steamAppId, refreshedData.achievements?.total || 0, generation);
+		hydrateLinkedRouteResources(doc, steamAppId, resolvedShortcutAppId, language,
+			() => isCurrentRender(doc, steamAppId, generation), refreshedData);
+		perfMeasure('background-revalidation', 'game-select-' + steamAppId);
+	}), configuredLibraryRuntimeHost?.waitForNativeArtwork);
 }
 
 export function getCurrentInjectedAppId(): string | null { return currentInjectedAppId; }
@@ -482,11 +487,11 @@ export function resetLibraryInjection(reinject = false, targetDoc?: Document | n
 export function disposeLibraryRuntime(): void {
 	nativePaintQueue.cancel();
 	const doc = currentInjectedDocument || configuredLibraryRuntimeHost?.getMainWindowDoc() || null;
-	if (doc) { cancelLibrarySidebarWork(doc);
+	if (doc) { disposeLinkedSidebarOrder(doc); disposeControllerSidebarWatcher(doc); cancelLibrarySidebarWork(doc);
 		if (isPublicSteamLibraryRoute(doc)) {
 			if (hasOwnedLibraryChrome(doc) || isLibraryRouteExitPending(doc)) { restoreNativeLibraryStyles(doc); cleanupOwnedLibraryChromeAfterRouteExit(doc); }
 		} else cleanupInjection(doc);
-		disposeSteamNavigation(doc);
+		disposeSteamNavigation(doc); disposeSharedActivityComposer(doc);
 	}
 	navigationController.dispose();
 	clearCurrentInjection();

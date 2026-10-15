@@ -7,6 +7,30 @@ import { gdlText, steamLanguageSync } from '../../steam/localization';
 
 export interface LinkedAchievementTarget { steamAppId: string; shortcutAppId: string }
 
+type EarlySidebarOwner = { doc: Document; target: LinkedAchievementTarget; header: HTMLElement; isCurrent: () => boolean };
+// The node is the weak key: retiring an early sidebar retains no detached DOM
+// snapshot or extra document cache while the next metadata page is prepared.
+const earlySidebarOwners = new WeakMap<HTMLElement, EarlySidebarOwner>();
+
+export function registerEarlyAchievementSidebarOwner(
+	doc: Document, section: HTMLElement, target: LinkedAchievementTarget, header: HTMLElement, isCurrent: () => boolean,
+): void {
+	earlySidebarOwners.set(section, { doc, target, header, isCurrent });
+}
+
+export function adoptEarlyAchievementSidebarOwner(section: HTMLElement): void {
+	earlySidebarOwners.delete(section);
+}
+
+function ownsEarlySidebar(doc: Document, section: HTMLElement, target: LinkedAchievementTarget, owner: EarlySidebarOwner): boolean {
+	return owner.doc === doc && owner.target.steamAppId === target.steamAppId
+		&& owner.target.shortcutAppId === target.shortcutAppId && owner.isCurrent()
+		&& section.isConnected && section.ownerDocument === doc
+		&& section.dataset.gdlSteamAppId === target.steamAppId && section.dataset.gdlShortcutAppId === target.shortcutAppId
+		&& owner.header.isConnected
+		&& isCurrentAchievementTarget(doc, target);
+}
+
 /** The displayed document owns the target; another window's runtime does not. */
 export function linkedAchievementTarget(doc: Document): LinkedAchievementTarget | null {
 	const routeId = routedSteamAppId(doc);
@@ -24,6 +48,9 @@ export function isCurrentAchievementTarget(doc: Document, target: LinkedAchievem
 }
 
 export function ownsAchievementSidebar(doc: Document, target: LinkedAchievementTarget): boolean {
+	const section = doc.getElementById('gdl-achievements-section') as HTMLElement | null;
+	const early = section && earlySidebarOwners.get(section);
+	if (section && early) return ownsEarlySidebar(doc, section, target, early);
 	const root = doc.getElementById('gdl-library-injected') as HTMLElement | null;
 	return Boolean(root && root.dataset.gdlSteamAppId === target.steamAppId
 		&& root.dataset.gdlShortcutAppId === target.shortcutAppId);

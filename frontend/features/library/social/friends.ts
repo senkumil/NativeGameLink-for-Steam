@@ -8,12 +8,16 @@ import { extractSteamIdFromValue, fetchFriendsGameplayInfo } from '../../../stea
 import { cachePersona, getCachedPersona, hasCachedPersona } from './personas';
 import { buildNativeSidebarSection, discoverNativeLibraryLayout } from '../layout';
 import { runWhenLibrarySidebarIdle } from '../../../steam/sidebar-interaction';
+import { getLinkedSidebarOrder } from '../sidebar-order';
+import type { LinkedSidebarOrder } from '../sidebar-order';
 
 const DEFAULT_AVATAR = 'https://avatars.cloudflare.steamstatic.com/fef49e7fa7e1997310d705b2a6158ff8dc1cdfeb_medium.jpg';
 
 const friendRequests = new Map<string, Promise<{ html: string; data: FriendCategories | null }>>();
 const emptyFriendResults = new Map<string, { expiresAt: number; data: FriendCategories | null }>();
 let friendCacheGeneration = 0;
+const hydrationEpochs = new WeakMap<LinkedSidebarOrder, number>();
+const hydratedBodies = new WeakMap<HTMLElement, string>();
 
 export function clearEmptyFriendResults(): void {
 	friendCacheGeneration += 1;
@@ -293,7 +297,7 @@ export function renderFriendsSection(friendResult: FriendCategories | null, stea
 
 export interface FriendHydrationGuard {
 	isCurrent: () => boolean;
-	shortcutAppId?: string | null;
+	shortcutAppId: string | null;
 }
 
 export async function hydrateFriendPersonas(
@@ -303,13 +307,23 @@ export async function hydrateFriendPersonas(
 	gameName: string,
 	guard: FriendHydrationGuard,
 ): Promise<void> {
-	if (!guard.isCurrent()) return;
+	if (!guard.shortcutAppId) return;
+	const order = getLinkedSidebarOrder(doc, undefined, steamAppId, guard.shortcutAppId);
+	if (!order || !guard.isCurrent()) return;
+	const epoch = (hydrationEpochs.get(order) || 0) + 1;
+	hydrationEpochs.set(order, epoch);
+	const isCurrent = () => guard.isCurrent() && order.isCurrent() && hydrationEpochs.get(order) === epoch;
+	const ownSection = () => {
+		const section = doc.getElementById('gdl-friends-section');
+		return section?.parentElement === order.column && section.dataset.gdlSteamAppId === steamAppId
+			&& section.dataset.gdlShortcutAppId === order.shortcutAppId ? section : null;
+	};
 
-	if (!friendData || friendData.totalCount <= 0) {
+	if (!friendData) return;
+	if (friendData.totalCount <= 0) {
 		await runWhenLibrarySidebarIdle(doc, 'secondary-friends', () => {
-			if (!guard.isCurrent()) return;
-			const section = doc.getElementById('gdl-friends-section');
-			if (section && (section.dataset.gdlSteamAppId === steamAppId || !section.dataset.gdlSteamAppId)) section.remove();
+			if (!isCurrent()) return;
+			ownSection()?.remove();
 		});
 		return;
 	}
@@ -335,20 +349,23 @@ export async function hydrateFriendPersonas(
 		}
 	}
 
-	if (!guard.isCurrent()) return;
+	if (!isCurrent()) return;
 
 	await runWhenLibrarySidebarIdle(doc, 'secondary-friends', () => {
-		if (!guard.isCurrent()) return;
+		if (!isCurrent()) return;
 		const renderedHtml = renderFriendsSection(friendData, steamAppId, gameName, personas);
-		let section = doc.getElementById('gdl-friends-section');
-		let target = doc.getElementById('gdl-friends-content');
+		let section = ownSection();
+		let target = section?.querySelector<HTMLElement>('#gdl-friends-content') || null;
 		const root = doc.getElementById('gdl-library-injected');
+		if (!root || root.dataset.gdlSteamAppId !== steamAppId || root.dataset.gdlShortcutAppId !== order.shortcutAppId) return;
 
 		if (!section) {
-			const notice = root || doc.querySelector('[data-gdl-notice]') || doc.getElementById('gdl-main-content-stack');
-			if (!notice) return;
-			const layout = discoverNativeLibraryLayout(doc, notice);
-			if (layout.sidebarColumn) {
+			// The native explanation is hidden after the first render. Resolve
+			// siblings from this owner's native column, never from GDL markup.
+			const nativeContent = (root.closest('#gdl-main-content-stack') || root).parentElement;
+			if (!nativeContent) return;
+			const layout = discoverNativeLibraryLayout(doc, nativeContent);
+			if (layout.sidebarColumn === order.column) {
 				section = buildNativeSidebarSection(doc, layout, {
 					sectionId: 'gdl-friends-section',
 					headerText: loc('AppDetails_SectionTitle_Friends', 'Friends who play'),
@@ -357,26 +374,16 @@ export async function hydrateFriendPersonas(
 					cloneInnerClass: false,
 				});
 				if (section) {
-					section.dataset.gdlSteamAppId = steamAppId;
-					const achievementsNode = doc.getElementById('gdl-achievements-section');
-					const tradingCardsNode = doc.getElementById('gdl-trading-cards-section');
-					const dlcNode = doc.getElementById('gdl-dlc-section');
-					const nextNode = achievementsNode || tradingCardsNode || dlcNode;
-					if (nextNode && nextNode.parentElement === layout.sidebarColumn) {
-						layout.sidebarColumn.insertBefore(section, nextNode);
-					} else {
-						layout.sidebarColumn.insertBefore(section, layout.sidebarColumn.firstChild);
-					}
-					target = doc.getElementById('gdl-friends-content');
+					if (!order.publish(section, 'friends')) return;
+					target = section.querySelector<HTMLElement>('#gdl-friends-content');
 				}
 			}
 		}
 
-		if (!target || !section || !root) return;
-		if (section.dataset.gdlSteamAppId !== steamAppId || root.dataset.gdlSteamAppId !== steamAppId) return;
-		if (guard.shortcutAppId && root.dataset.gdlShortcutAppId && root.dataset.gdlShortcutAppId !== guard.shortcutAppId) return;
-
-		target.innerHTML = renderedHtml;
-		section.style.display = '';
+		if (!target || !section || !isCurrent()) return;
+		if (hydratedBodies.get(target) !== renderedHtml) target.innerHTML = renderedHtml;
+		hydratedBodies.set(target, renderedHtml);
+		section.dataset.gdlFriendDataSignature = `${friendDataSignature(friendData)}:${gameName}:${loc('AppDetails_SectionTitle_Friends', 'Friends who play')}`;
+		order.publish(section, 'friends');
 	});
 }

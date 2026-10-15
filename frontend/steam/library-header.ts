@@ -4,11 +4,12 @@ import { elementsWithCssModuleClass, hasCssModuleClass } from './native-dom';
 
 // Steam Desktop's current AppDetails/header modules. Keep these fallbacks for
 // the early route commit, before its webpack CSS exports become available.
-const HEADER_FALLBACK: CssClasses = { Header: '_2gZXhRmKUk68pA28-5ZmGQ' };
+const HEADER_FALLBACK: CssClasses = { Header: '_2gZXhRmKUk68pA28-5ZmGQ', HeaderLoaded: 'tXlLvuTxOVL1w3aVPX4bm' };
 const HERO_FALLBACK: CssClasses = {
 	TopCapsule: 'NZMJ6g2iVnFsOOp-lDmIP',
 	HeaderBackgroundImage: '_1IX7FPSY9Jb82KhBVBSkZa',
 	TitleLogo: '_3NBxSLAZLbbbnul8KfDFjw',
+	ImgContainer: 'QlR9EFwTdUNm_J5vx54_Z',
 };
 const DESCRIPTIVE_SURFACES = '[class*="AppDetailsHeader"], [class*="appdetailsheader"], [class*="HeaderContainer"], [class*="TopCapsule"], [class*="HeroContainer"], [class*="HeroAndLogo"], [class*="PlayBar"], [class*="playbar"], [class*="PlayButton"], [class*="playButton"], [class*="GameStatsSection"]';
 let headerClasses = HEADER_FALLBACK, heroClasses = HERO_FALLBACK, nextResolveAt = 0;
@@ -55,4 +56,21 @@ export function findNativeLibraryHeader(doc: Document): HTMLElement | null {
 		if (header) return header;
 	}
 	return doc.querySelector<HTMLElement>('[class*="AppDetailsHeader"], [class*="appdetailsheader"], [class*="HeaderContainer"]');
+}
+
+/** Artwork readiness reads the same native CSS exports as layout protection. */
+export function getNativeLibraryArtworkSelectors(): { header: string; loaded: string; hero: string; logo: string } {
+	protectedClassNames();
+	const classes = (...values: unknown[]): string => Array.from(new Set(values
+		.map(value => String(value || '').split(/\s+/).filter(Boolean))
+		.filter(tokens => tokens.length && tokens.every(token => /^[-_a-zA-Z0-9]+$/.test(token)))
+		.map(tokens => tokens.map(token => `.${token}`).join('')))).join(',');
+	const backgrounds = classes(heroClasses.HeaderBackgroundImage, HERO_FALLBACK.HeaderBackgroundImage).split(',');
+	const containers = classes(heroClasses.ImgContainer, HERO_FALLBACK.ImgContainer).split(',');
+	return {
+		header: `${classes(headerClasses.Header, HEADER_FALLBACK.Header, heroClasses.TopCapsule, HERO_FALLBACK.TopCapsule)},[class*="AppDetailsHeader"],[class*="appdetailsheader"],[class*="HeaderContainer"]`,
+		loaded: `${classes(headerClasses.HeaderLoaded, HEADER_FALLBACK.HeaderLoaded)},[class*="HeaderLoaded"]`,
+		hero: backgrounds.flatMap(background => containers.map(container => `${background} ${container} img`)).join(','),
+		logo: classes(heroClasses.TitleLogo, HERO_FALLBACK.TitleLogo).split(',').map(selector => `img${selector}`).join(','),
+	};
 }

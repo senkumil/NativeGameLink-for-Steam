@@ -1,4 +1,4 @@
-import { findClassModule } from '@steambrew/client';
+import { resolveSteamClassModule, resetSteamClassModuleCache } from './class-module-cache';
 
 export type CssClasses = { [name: string]: string };
 
@@ -189,12 +189,8 @@ export interface ResolvedCssClasses {
 	native: boolean;
 }
 
-export function resolveClassModule(predicate: (m: any) => boolean, fallback: CssClasses): ResolvedCssClasses {
-	try {
-		const module = findClassModule(predicate) as CssClasses | undefined;
-		if (module) return { classes: module, native: true };
-	} catch {}
-	return { classes: fallback, native: false };
+export function resolveClassModule(predicate: (m: any) => boolean, fallback: CssClasses, doc?: Document): ResolvedCssClasses {
+	return resolveSteamClassModule(predicate, fallback, doc);
 }
 
 /**
@@ -202,60 +198,54 @@ export function resolveClassModule(predicate: (m: any) => boolean, fallback: Css
  * New native-UI code should prefer the explicit `*_CLASS_MODULE()` accessors
  * so it can distinguish a live Steam module from a stale hash fallback.
  */
-export function resolveClasses(predicate: (m: any) => boolean, fallback: CssClasses): CssClasses {
-	return resolveClassModule(predicate, fallback).classes;
+export function resolveClasses(predicate: (m: any) => boolean, fallback: CssClasses, doc?: Document): CssClasses {
+	return resolveClassModule(predicate, fallback, doc).classes;
 }
 
-let _feedClassModule: ResolvedCssClasses | null = null;
-let _eventClassModule: ResolvedCssClasses | null = null;
-let _achClassModule: ResolvedCssClasses | null = null;
-let _postClassModule: ResolvedCssClasses | null = null;
-let _playbarClassModule: ResolvedCssClasses | null = null;
-let _gameInfoOuterClassModule: ResolvedCssClasses | null = null;
-let _appPortraitClassModule: ResolvedCssClasses | null = null;
-let _gameInfoClassModule: ResolvedCssClasses | null = null;
-let _linksBarClassModule: ResolvedCssClasses | null = null;
-let _librarySidebarEntryClassModule: ResolvedCssClasses | null = null;
-let _librarySidebarClassModule: ResolvedCssClasses | null = null;
-
-export const LIBRARY_SIDEBAR_ENTRY_CLASSES = (): CssClasses =>
-	(_librarySidebarEntryClassModule ||= resolveClassModule(
+export const LIBRARY_SIDEBAR_ENTRY_CLASSES = (doc?: Document): CssClasses =>
+	resolveClassModule(
 		module => module.GameListEntryContainer && module.GameListEntryName && module.GameIcon,
 		LIBRARY_SIDEBAR_ENTRY_CLASSES_FALLBACK,
-	)).classes;
+		doc,
+	).classes;
 
-export const LIBRARY_SIDEBAR_CLASSES = (): CssClasses =>
-	(_librarySidebarClassModule ||= resolveClassModule(
+export const LIBRARY_SIDEBAR_CLASSES = (doc?: Document): CssClasses =>
+	resolveClassModule(
 		module => module.Container && module.GameListHomeAndSearch && module.CollectionsButton,
 		LIBRARY_SIDEBAR_CLASSES_FALLBACK,
-	)).classes;
+		doc,
+	).classes;
 
-export const FEED_CLASS_MODULE = (): ResolvedCssClasses =>
-	(_feedClassModule ||= resolveClassModule(
+export const FEED_CLASS_MODULE = (doc?: Document): ResolvedCssClasses =>
+	resolveClassModule(
 		module => module.ActivityFeedContainer && module.FetchMoreContainer && module.ViewLastNews,
 		FEED_CLASSES_FALLBACK,
-	));
+		doc,
+	);
 
-export const EVENT_CLASS_MODULE = (): ResolvedCssClasses =>
-	(_eventClassModule ||= resolveClassModule(
+export const EVENT_CLASS_MODULE = (doc?: Document): ResolvedCssClasses =>
+	resolveClassModule(
 		module => module.AppActivityDay && module.EventHeadline && module.ActivityAchievementUnlocked,
 		EVENT_CLASSES_FALLBACK,
-	));
+		doc,
+	);
 
-export const ACH_CLASS_MODULE = (): ResolvedCssClasses =>
-	(_achClassModule ||= resolveClassModule(
+export const ACH_CLASS_MODULE = (doc?: Document): ResolvedCssClasses =>
+	resolveClassModule(
 		module => module.AchievementHoverContainer && module.UnlockedLabel && module.SingleAchievementProgressBar,
 		ACH_CLASSES_FALLBACK,
-	));
+		doc,
+	);
 
-export const POST_CLASS_MODULE = (): ResolvedCssClasses =>
-	(_postClassModule ||= resolveClassModule(
+export const POST_CLASS_MODULE = (doc?: Document): ResolvedCssClasses =>
+	resolveClassModule(
 		module => module.PostTextEntryArea && module.EmoticonButton && module.PostButton,
 		POST_CLASSES_FALLBACK,
-	));
+		doc,
+	);
 
-export const PLAYBAR_CLASS_MODULE = (): ResolvedCssClasses =>
-	(_playbarClassModule ||= resolveClassModule(
+export const PLAYBAR_CLASS_MODULE = (doc?: Document): ResolvedCssClasses =>
+	resolveClassModule(
 		module => module.PlayBarDetailLabel
 			&& module.GameStatsSection
 			&& module.PlayBarCloudStatusContainer
@@ -263,28 +253,31 @@ export const PLAYBAR_CLASS_MODULE = (): ResolvedCssClasses =>
 			&& module.InPage
 			&& module.MenuButton,
 		PLAYBAR_CLASSES_FALLBACK,
-	));
+		doc,
+	);
 
-export const GAME_INFO_OUTER_CLASS_MODULE = (): ResolvedCssClasses =>
-	(_gameInfoOuterClassModule ||= resolveClassModule(
+export const GAME_INFO_OUTER_CLASS_MODULE = (doc?: Document): ResolvedCssClasses =>
+	resolveClassModule(
 		module => module.AppGameInfoContainer
 			&& module.AppDetailsExpanded
 			&& module.AppDetailsCollapsed
 			&& module.GameInfoShadow,
 		GAME_INFO_OUTER_CLASSES_FALLBACK,
-	));
+		doc,
+	);
 
-export const APP_PORTRAIT_CLASS_MODULE = (): ResolvedCssClasses =>
-	(_appPortraitClassModule ||= resolveClassModule(
+export const APP_PORTRAIT_CLASS_MODULE = (doc?: Document): ResolvedCssClasses =>
+	resolveClassModule(
 		module => module.LibraryItemBox
 			&& module.PlaytimeDetails
 			&& module.PlayedRecent
 			&& module.PlayedTotal,
 		APP_PORTRAIT_CLASSES_FALLBACK,
-	));
+		doc,
+	);
 
-export const GAME_INFO_CLASS_MODULE = (): ResolvedCssClasses =>
-	(_gameInfoClassModule ||= resolveClassModule(
+export const GAME_INFO_CLASS_MODULE = (doc?: Document): ResolvedCssClasses =>
+	resolveClassModule(
 		module => module.InnerContainer
 			&& module.SectionContainer
 			&& module.GameDescription
@@ -292,38 +285,30 @@ export const GAME_INFO_CLASS_MODULE = (): ResolvedCssClasses =>
 			&& module.FeaturesList
 			&& module.AssociationList,
 		GAME_INFO_CLASSES_FALLBACK,
-	));
+		doc,
+	);
 
-export const LINKS_BAR_CLASS_MODULE = (): ResolvedCssClasses =>
-	(_linksBarClassModule ||= resolveClassModule(
+export const LINKS_BAR_CLASS_MODULE = (doc?: Document): ResolvedCssClasses =>
+	resolveClassModule(
 		module => module.LinksSection && module.Link && module.Links && module.LinkInner,
 		LINKS_BAR_CLASSES_FALLBACK,
-	));
+		doc,
+	);
 
-export const FEED_CLASSES = (): CssClasses => FEED_CLASS_MODULE().classes;
-export const EVENT_CLASSES = (): CssClasses => EVENT_CLASS_MODULE().classes;
-export const ACH_CLASSES = (): CssClasses => ACH_CLASS_MODULE().classes;
-export const POST_CLASSES = (): CssClasses => POST_CLASS_MODULE().classes;
-export const PLAYBAR_CLASSES = (): CssClasses => PLAYBAR_CLASS_MODULE().classes;
-export const GAME_INFO_OUTER_CLASSES = (): CssClasses => GAME_INFO_OUTER_CLASS_MODULE().classes;
-export const APP_PORTRAIT_CLASSES = (): CssClasses => APP_PORTRAIT_CLASS_MODULE().classes;
-export const GAME_INFO_CLASSES = (): CssClasses => GAME_INFO_CLASS_MODULE().classes;
-export const LINKS_BAR_CLASSES = (): CssClasses => LINKS_BAR_CLASS_MODULE().classes;
+export const FEED_CLASSES = (doc?: Document): CssClasses => FEED_CLASS_MODULE(doc).classes;
+export const EVENT_CLASSES = (doc?: Document): CssClasses => EVENT_CLASS_MODULE(doc).classes;
+export const ACH_CLASSES = (doc?: Document): CssClasses => ACH_CLASS_MODULE(doc).classes;
+export const POST_CLASSES = (doc?: Document): CssClasses => POST_CLASS_MODULE(doc).classes;
+export const PLAYBAR_CLASSES = (doc?: Document): CssClasses => PLAYBAR_CLASS_MODULE(doc).classes;
+export const GAME_INFO_OUTER_CLASSES = (doc?: Document): CssClasses => GAME_INFO_OUTER_CLASS_MODULE(doc).classes;
+export const APP_PORTRAIT_CLASSES = (doc?: Document): CssClasses => APP_PORTRAIT_CLASS_MODULE(doc).classes;
+export const GAME_INFO_CLASSES = (doc?: Document): CssClasses => GAME_INFO_CLASS_MODULE(doc).classes;
+export const LINKS_BAR_CLASSES = (doc?: Document): CssClasses => LINKS_BAR_CLASS_MODULE(doc).classes;
 
 /**
  * Clear resolved module caches after a Steam UI context reset. This is useful
  * when the client recreates its shared JS context after an update/reload.
  */
 export function resetResolvedCssClassModules(): void {
-	_feedClassModule = null;
-	_eventClassModule = null;
-	_achClassModule = null;
-	_postClassModule = null;
-	_playbarClassModule = null;
-	_gameInfoOuterClassModule = null;
-	_appPortraitClassModule = null;
-	_gameInfoClassModule = null;
-	_linksBarClassModule = null;
-	_librarySidebarEntryClassModule = null;
-	_librarySidebarClassModule = null;
+	resetSteamClassModuleCache();
 }

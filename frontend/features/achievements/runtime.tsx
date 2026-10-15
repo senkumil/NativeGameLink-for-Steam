@@ -25,7 +25,7 @@ export { renderLocalAchievementSidebarHtml, renderLocalAchievementSidebar, revea
 export { ensureAchievementSidebarStyles } from './styles/sidebar';
 export { ensureAchievementModalStyles } from './styles/modal';
 export { findVisibleTextElement, ensureLocalPlaybarStat } from './playbar';
-export { openLocalAchievementsModal } from './modal';
+export { disposeAllLocalAchievementsModals, disposeLocalAchievementsModal, openLocalAchievementsModal } from './modal';
 export {
 	getCachedLocalAchievements,
 	getCachedLocalAchievementsForGame,

@@ -112,15 +112,14 @@
     "expect": {
       "exactOfficialTitleOverridesAliasCaution": true,
       "bulkCanAcceptUniqueExactTitle": true,
-      "persistentLauncherOverride": true,
-      "trackingExecutableAutoApply": true
+      "selectedExecutableIsPreserved": true
     }
   },
   {
     "executable": "Launcher.exe",
     "title": "Red Dead Redemption 2",
     "expect": {
-      "persistentLauncherIsPreserved": true,
+      "selectedExecutableIsPreserved": true,
       "launcherIsNotSilentlyReplaced": true
     }
   },

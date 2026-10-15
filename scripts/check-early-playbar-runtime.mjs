@@ -5,7 +5,7 @@ import ts from 'typescript';
 
 const observers = new Set();
 const mappingListeners = new Set();
-const classes = { GameStatsSection: 'GameStatsSection' };
+const classes = { Container: 'PlaybarContainer', GameStatsSection: 'GameStatsSection' };
 let cloudSyncs = 0;
 let playtimeSyncs = 0;
 let mappingVerified = false;
@@ -18,6 +18,11 @@ class Element {
   constructor(doc) { this.ownerDocument = doc; }
   get isConnected() { return this === this.ownerDocument.body || Boolean(this.parentElement?.isConnected); }
   appendChild(child) { child.parentElement = this; this.children.push(child); }
+  removeChild(child) {
+    this.children = this.children.filter(value => value !== child);
+    child.parentElement = null;
+    return child;
+  }
   contains(node) { return node === this || this.children.some(child => child === node || child.contains?.(node)); }
   closest() { return this.owned ? this : this.parentElement?.closest() || null; }
   getBoundingClientRect() { return { width: 180, height: 40 }; }
@@ -55,7 +60,7 @@ function createDocument() {
   const doc = { routeId: 3000000000 };
   doc.body = new Element(doc);
   doc.documentElement = new Element(doc);
-  doc.playbar = new Element(doc); doc.body.appendChild(doc.playbar);
+  doc.playbar = new Element(doc); doc.playbar.className = classes.Container; doc.body.appendChild(doc.playbar);
   doc.querySelector = () => doc.cloud?.isConnected ? doc.cloud : null;
   doc.querySelectorAll = () => [];
   doc.addEventListener = (name, listener) => { if (!events.has(name)) events.set(name, new Set()); events.get(name).add(listener); };
@@ -166,12 +171,45 @@ const sidebar = new Element(doc); sidebar.sidebar = true; doc.body.appendChild(s
 deliver(record('childList', sidebar, { addedNodes: [new Element(doc)] }));
 assert.equal(cloudSyncs, beforeOwned, 'virtual sidebar recycling never synchronizes the playbar');
 const bodyDiscovery = Array.from(observers).find(observer => observer.targets.has(doc.body));
+const hero = new Element(doc); hero.className = 'HeaderBackgroundImage'; doc.body.appendChild(hero);
+const content = new Element(doc); content.className = 'CommunityContent'; doc.body.appendChild(content);
+for (let index = 0; index < 100; index++) {
+  const image = new Element(doc); image.className = index % 2 ? 'TitleLogo' : 'ImgSrc'; hero.appendChild(image);
+  const article = new Element(doc); article.className = 'CommunityCard'; content.appendChild(article);
+  bodyDiscovery.callback([
+    record('childList', hero, { addedNodes: [image] }),
+    record('childList', content, { addedNodes: [article] }),
+  ]);
+  hero.removeChild(image); content.removeChild(article);
+  bodyDiscovery.callback([
+    record('childList', hero, { removedNodes: [image] }),
+    record('childList', content, { removedNodes: [article] }),
+  ]);
+}
+assert.equal(cloudSyncs, beforeOwned, '100 image/content insertion and removal batches never resynchronize the playbar');
+assert.equal(doc.frames.size, 0, 'unrelated hero/logo/content changes never schedule settling frames');
+
+const hostWrapper = new Element(doc);
+const extraPlaybar = new Element(doc); extraPlaybar.className = classes.Container;
+hostWrapper.appendChild(extraPlaybar); doc.body.appendChild(hostWrapper);
+bodyDiscovery.callback([record('childList', doc.body, { addedNodes: [hostWrapper] })]);
+assert.equal(cloudSyncs, beforeOwned + 1, 'a native playbar nested inside a newly mounted wrapper is discovered');
+doc.body.removeChild(hostWrapper);
+bodyDiscovery.callback([record('childList', doc.body, { removedNodes: [hostWrapper] })]);
+assert.equal(cloudSyncs, beforeOwned + 2, 'removing a wrapper containing a native playbar synchronizes the remaining hosts');
+const removedStats = doc.playbar.removeChild(stats);
+bodyDiscovery.callback([record('childList', doc.playbar, { removedNodes: [removedStats] })]);
+assert.equal(cloudSyncs, beforeOwned + 3, 'removing a statistics host is discovered outside its former subtree');
+doc.playbar.appendChild(stats);
+bodyDiscovery.callback([record('childList', doc.playbar, { addedNodes: [stats] })]);
+assert.equal(cloudSyncs, beforeOwned + 4, 'remounting the statistics host rebinds its scoped observer');
+const afterHostChanges = cloudSyncs;
 const sidebarChange = record('childList', sidebar, { addedNodes: [new Element(doc)] });
 const ownChange = record('childList', doc.body, { addedNodes: [doc.cloud] });
 for (let i = 0; i < 100; i++) bodyDiscovery.callback([sidebarChange, ownChange]);
-assert.equal(cloudSyncs, beforeOwned, 'mixed sidebar/owned batches never restart early synchronization');
+assert.equal(cloudSyncs, afterHostChanges, 'mixed sidebar/owned batches never restart early synchronization');
 bodyDiscovery.callback([sidebarChange, ownChange, record('childList', doc.playbar, { addedNodes: [stats] })]);
-assert.equal(cloudSyncs, beforeOwned + 1, 'mixed batches retain real native details host replacements');
+assert.equal(cloudSyncs, afterHostChanges + 1, 'mixed batches retain real native details host replacements');
 
 doc.playbar.style.opacity = '0';
 deliver(record('attributes', doc.playbar, { attributeName: 'style' }));
@@ -201,4 +239,4 @@ replacement.sync();
 assert.equal(cloudSyncs, beforeNative, 'native Steam routes do not run shortcut synchronization');
 assert.equal(doc.frames.size, 0);
 replacement.dispose();
-console.log('Early playbar runtime checks passed: immediate sync, verified-mapping hydration, native text/style signals, bounded settling, sidebar isolation, owned-mutation isolation and lifecycle cleanup.');
+console.log('Early playbar runtime checks passed: immediate sync, verified-mapping hydration, native text/style signals, host mount/removal discovery, image/content isolation, bounded settling, sidebar isolation, owned-mutation isolation and lifecycle cleanup.');

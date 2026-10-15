@@ -74,7 +74,10 @@ doc.defaultView.parent = doc.defaultView; doc.defaultView.top = doc.defaultView;
 const storage = new Map();
 const localStorage = { getItem: key => storage.get(key) || null, setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) };
 const globals = { window: doc.defaultView, document: doc, localStorage };
-const css = load('frontend/steam/css.ts', { '@steambrew/client': { findClassModule: () => null } });
+const classModuleCache = load('frontend/steam/class-module-cache.ts', {
+  './modules/SteamWebpackRuntime': { steamWebpackRuntime: { getRuntimeIdentity: () => null, getAllModules: () => [] } },
+});
+const css = load('frontend/steam/css.ts', { './class-module-cache': classModuleCache });
 const sidebar = load('frontend/steam/library-sidebar.ts', { './css': css });
 const interaction = load('frontend/steam/sidebar-interaction.ts', { './library-sidebar': sidebar });
 interaction.installLibrarySidebarInteraction(doc, true);
@@ -93,6 +96,7 @@ const progress = load('frontend/features/achievements/progress.ts', {
 check(!('syncNativeAchievementProgressCache' in progress), 'The global native progress writer is removed instead of retained as a silent compatibility export');
 const requests = [];
 const service = load('frontend/features/achievements/service.ts', {
+  './native-schema': { readNativeAchievementSchema: async () => null },
   '../../api/backend': { fetchLocalAchievementsBackend: request => new Promise(resolve => requests.push({ request, resolve })) },
   '../../core/preferences': { getPreferences: () => ({}), simulatedAchievementsEnabled: () => false },
   '../../steam/localization': { steamLanguageSync: () => 'english' },

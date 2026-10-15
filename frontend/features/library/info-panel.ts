@@ -55,7 +55,13 @@ function scrollToTopSvg(): string {
 const infoScrollCleanups = new WeakMap<Document, () => void>();
 const infoButtonSessions = new WeakMap<Document, { shortcutId: number; key: string; sync: () => void }>();
 const infoKnownScrollTargets = new WeakMap<Document, Set<HTMLElement>>();
+const infoButtonClickHandlers = new WeakMap<HTMLElement, { isCurrent: () => boolean; click: (event: MouseEvent) => void }>();
 const SCROLL_TOP_BUTTON_THRESHOLD = 120;
+
+function isInfoDocumentElement(doc: Document, value: unknown): value is HTMLElement {
+	const ElementType = (doc.defaultView as (Window & typeof globalThis) | null)?.HTMLElement || HTMLElement;
+	return value instanceof ElementType;
+}
 
 function infoButtonLabel(expanded: boolean): string {
 	return expanded
@@ -85,7 +91,7 @@ function mainScrollAnchors(doc: Document): HTMLElement[] {
 		doc.getElementById('gdl-link-bar'),
 		doc.getElementById('gdl-playbar-achievements'),
 		doc.querySelector<HTMLElement>('[data-gdl-game-info-button="1"]'),
-	].filter((element): element is HTMLElement => element instanceof HTMLElement && element.isConnected);
+	].filter((element): element is HTMLElement => isInfoDocumentElement(doc, element) && element.isConnected);
 	return anchors;
 }
 
@@ -130,7 +136,7 @@ function collectMainScrollTargets(doc: Document, knownTargets?: Iterable<HTMLEle
 	}
 
 	const scrolling = doc.scrollingElement;
-	if (scrolling instanceof HTMLElement) consider(scrolling);
+	if (isInfoDocumentElement(doc, scrolling)) consider(scrolling);
 	return Array.from(targets);
 }
 
@@ -282,7 +288,7 @@ function findRelevantScrollTargetFromPath(doc: Document, path: EventTarget[]): H
 	const view = doc.defaultView;
 	const anchors = mainScrollAnchors(doc);
 	for (const item of path) {
-		if (!(item instanceof HTMLElement) || !item.isConnected) continue;
+		if (!isInfoDocumentElement(doc, item) || !item.isConnected) continue;
 		const style = view?.getComputedStyle(item);
 		const overflowY = style?.overflowY || '';
 		const scrollable = item.scrollHeight > item.clientHeight + 8;
@@ -376,7 +382,7 @@ function installInfoButtonScrollBehavior(
 		if (!isCurrent()) return;
 		const target = rawEvent.target;
 		if (isLibrarySidebarNode(target)) return;
-		if (target instanceof HTMLElement) {
+		if (isInfoDocumentElement(doc, target)) {
 			const anchors = mainScrollAnchors(doc);
 			const rect = target.getBoundingClientRect();
 			const rightPaneScroller = target.scrollHeight > target.clientHeight + 8 && rect.right > rightDetailsLeft(doc) + 40;
@@ -812,20 +818,6 @@ export function ensureNativeInfoButton(doc: Document, model: NativeGameInfo): vo
 				const expanded = doc.getElementById('gdl-game-info-panel')?.dataset.expanded === '1';
 				button.setAttribute('aria-label', infoButtonLabel(expanded));
 				button.setAttribute('aria-expanded', String(expanded));
-				button.addEventListener('click', event => {
-					if (!isCurrent() || !button?.isConnected) return;
-					event.preventDefault();
-					event.stopPropagation();
-					if (button!.dataset.gdlScrollTopActive === '1') {
-						scrollMainContentToTop(doc, undefined, isCurrent);
-						return;
-					}
-					const key = button!.dataset.gameKey || '';
-					const panel = doc.getElementById('gdl-game-info-panel') as HTMLElement | null;
-					const isCurrentlyExpanded = panel ? panel.dataset.expanded === '1' : false;
-					const nextState = !isCurrentlyExpanded;
-					setNativeInfoExpanded(doc, key, nextState, false, true);
-				});
 				let favorite = elementsWithCssModuleClass(container, classes.FavoriteButton)[0] || null;
 				while (favorite && favorite.parentElement !== container) favorite = favorite.parentElement;
 				container.insertBefore(button, favorite);
@@ -833,6 +825,27 @@ export function ensureNativeInfoButton(doc: Document, model: NativeGameInfo): vo
 				normalizeInformationButtonIcon(button, playbarModule.native ? (classes.DotDotDot || '') : '');
 			}
 			if (button.dataset.gameKey !== model.key) button.dataset.gameKey = model.key;
+			// Steam can clone the sticky controls with our attributes and icon,
+			// but DOM cloning does not retain listeners. Bind every current node
+			// once per session, including controls adopted after a rebuild.
+			const previousHandler = infoButtonClickHandlers.get(button);
+			if (previousHandler?.isCurrent !== isCurrent) {
+				if (previousHandler) button.removeEventListener('click', previousHandler.click);
+				const currentButton = button;
+				const click = (event: MouseEvent): void => {
+					if (!isCurrent() || !currentButton.isConnected) return;
+					event.preventDefault();
+					event.stopPropagation();
+					if (currentButton.dataset.gdlScrollTopActive === '1') {
+						scrollMainContentToTop(doc, undefined, isCurrent);
+						return;
+					}
+					const panel = doc.getElementById('gdl-game-info-panel');
+					setNativeInfoExpanded(doc, currentButton.dataset.gameKey || '', panel?.dataset.expanded !== '1', false, true);
+				};
+				button.addEventListener('click', click);
+				infoButtonClickHandlers.set(button, { isCurrent, click });
+			}
 		}
 		syncAchievementPlaybarSpace(doc);
 	};
@@ -846,7 +859,12 @@ export function ensureNativeInfoButton(doc: Document, model: NativeGameInfo): vo
 export function removeNativeInfoButton(doc: Document): void {
 	infoButtonSessions.delete(doc);
 	infoScrollCleanups.get(doc)?.();
-	doc.querySelectorAll('[data-gdl-game-info-button="1"]').forEach(element => element.remove());
+	doc.querySelectorAll<HTMLElement>('[data-gdl-game-info-button="1"]').forEach(element => {
+		const handler = infoButtonClickHandlers.get(element);
+		if (handler) element.removeEventListener('click', handler.click);
+		infoButtonClickHandlers.delete(element);
+		element.remove();
+	});
 	syncAchievementPlaybarSpace(doc);
 }
 

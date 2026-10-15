@@ -59,7 +59,7 @@ function scope() {
     getComputedStyle: () => ({}), innerHeight: 1080,
     MutationObserver: class {
       constructor(callback) { this.callback = callback; observers.push(this); }
-      observe() {}
+      observe(target, options) { this.target = target; this.options = options; }
       disconnect() { this.disconnected = true; }
     },
   });
@@ -252,14 +252,20 @@ assert.equal(listOffset, 650); assert.equal(listScrollWrites + globalScrollCalls
 
 const controller = scope();
 const controllerModule = load('frontend/features/library/controller.ts', {
+	'../achievements/navigation': { linkedAchievementTarget: () => null },
+	'../../steam/library-details': { committedHeaderAppId: () => null },
   '../../api/backend': { backendLog() {} }, '../../core/text': {}, '../../core/dom': domSignals, '../../core/game-data': {},
   '../../steam/gamepad/stores/AppStoreAdapter': {}, '../../steam/localization': {}, './styles/controller': {}, './layout': {},
   '../../steam/modules/SteamModuleResolver': { getSteamStore: () => null },
   '../../steam/modules/SteamWebpackRuntime': { steamWebpackRuntime: { getAllModules: () => [], getRequire: () => null } },
   '../../steam/sidebar-interaction': { isLibrarySidebarInteractionActive: () => false },
+  './sidebar-order': { getLinkedSidebarOrder: () => null, hasLinkedSidebarOrder: () => false },
   './controller-svgs': {}, '../../steam/library-sidebar': signals,
 }, controller.globals, '\nexports.installScrollBehavior = setupControllerScrollTranslucencyWatcher;');
-const disposeController = controllerModule.installScrollBehavior(controller.doc, { sidebarColumn: new Element() }, '10', '3000000000', () => true);
+const controllerColumn = new Element();
+const disposeController = controllerModule.installScrollBehavior(controller.doc, { sidebarColumn: controllerColumn }, '10', '3000000000', () => true);
+assert.equal(controller.observers[0].target, controllerColumn, 'controller recovery watches only its actual details column');
+assert.deepEqual({ ...controller.observers[0].options }, { childList: true }, 'controller recovery does not observe body or nested section updates');
 controller.drainFrames();
 for (let i = 0; i < 100; i++) {
   controller.win.fire('scroll', { target: controller.list });
@@ -268,6 +274,9 @@ for (let i = 0; i < 100; i++) {
 }
 assert.equal(controller.frames.size, 0, 'sidebar recycling never schedules controller scans or rendering');
 controller.observers[0].callback(controller.mixedDetailsRecords);
+assert.equal(controller.frames.size, 0, 'unrelated details changes no longer scan or rebuild the controller');
+const removedController = new Element(); removedController.id = 'gdl-controller-section';
+controller.observers[0].callback([{ target: controllerColumn, addedNodes: [], removedNodes: [removedController] }]);
 assert.equal(controller.frames.size, 1);
 disposeController();
 assert.equal(controller.frames.size, 0);
@@ -277,7 +286,7 @@ let achievementReads = 0;
 const achievementModule = load('frontend/features/achievements/lifecycle.ts', {
   '../../api/backend': { backendLog() {} }, '../../core/dom': domSignals, './cache': {},
   './context': { achievementRuntimeHost: () => ({ getCurrentInjectedShortcutAppId: () => '3000000000' }) },
-  './modal': {}, './navigation': {
+  './modal': { disposeLocalAchievementsModal() {}, disposeAllLocalAchievementsModals() {} }, './navigation': {
     detectLinkedSteamAppId: () => '10',
     linkedAchievementTarget: () => ({ steamAppId: '10', shortcutAppId: '3000000000' }),
     isCurrentAchievementTarget: () => true, ownsAchievementSidebar: () => false,
@@ -301,36 +310,72 @@ assert.equal(achievements.timers.size, 1, 'details updates still synchronize ach
 achievementModule.disposeLocalAchievementUI(achievements.doc);
 assert.equal(achievements.timers.size + achievements.intervals.size, 0);
 
-// Exercise the application's actual observer body without loading its settings
-// UI or running Steam startup. Native navigation must precede mutation filtering.
-const app = scope(), appScans = [], appRuns = [];
+// Exercise the real injection body and every desktop navigation signal without
+// loading the settings UI or running Steam startup. Stubbing runInjection itself
+// would hide repeated synchronous early-playbar work after a route change.
+const app = scope(), appScans = [], copiedScans = [], appRuns = [], appInjections = [], playtimeRefreshes = [];
 const appSource = ts.createSourceFile('app.tsx', fs.readFileSync('frontend/runtime/app.tsx', 'utf8'),
   ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-let appObserver;
-const findObserver = node => {
+let appObserver, appInjection, visibilityListener, navigationInterval;
+const findApplicationSignals = node => {
+  if (ts.isVariableDeclaration(node) && node.name.getText(appSource) === 'runInjection' && node.initializer) {
+    appInjection = node.initializer.getText(appSource);
+  }
   if (ts.isVariableDeclaration(node) && node.name.getText(appSource) === 'observer'
     && node.initializer && ts.isNewExpression(node.initializer)
     && node.initializer.expression.getText(appSource) === 'MutationObserver') appObserver = node.initializer.getText(appSource);
-  ts.forEachChild(node, findObserver);
+  if (ts.isCallExpression(node) && node.expression.getText(appSource) === 'lifecycle.listen'
+    && node.arguments[1] && ts.isStringLiteral(node.arguments[1]) && node.arguments[1].text === 'visibilitychange') {
+    visibilityListener = node.getText(appSource);
+  }
+  if (ts.isCallExpression(node) && node.expression.getText(appSource) === 'lifecycle.interval'
+    && node.arguments[1]?.getText(appSource) === '2500'
+    && node.arguments[0].getText(appSource).includes('libraryRouteIdentity(popupDoc)')) {
+    navigationInterval = node.getText(appSource);
+  }
+  ts.forEachChild(node, findApplicationSignals);
 };
-findObserver(appSource);
+findApplicationSignals(appSource);
 assert(appObserver, 'the main application observer fixture loads its real source');
-let navigations = 0, earlySyncs = 0;
+assert(appInjection, 'the fixture loads the real injection body so duplicate early synchronization remains observable');
+assert(visibilityListener, 'the fixture loads the real visibility listener');
+assert(navigationInterval, 'the fixture loads the real navigation watchdog');
+let navigations = 0, earlySyncs = 0, cancelledPaints = 0;
 const appContext = vm.createContext({ exports: {}, ...app.globals, Date,
   popupDoc: app.doc, isMainWindow: true, routePath: '/library/app/3000000000', lastNavUrl: '/library/app/3000000000',
-  mutationTimer: null, lastMutationInjectionAt: 0,
+  mutationTimer: null, lastMutationInjectionAt: 0, wasBigPictureSurface: false, hasHadBigPictureSession: false,
+  publicRoute: false, ownedChrome: false,
   libraryRouteIdentity: () => appContext.routePath,
   handleLibraryNavigation: () => navigations++, earlyPlaybar: { sync: () => earlySyncs++ },
-  runInjection: reason => appRuns.push(reason),
+  cancelPendingLibraryPaint: doc => { assert.equal(doc, app.doc); cancelledPaints++; },
+  recordInjection: reason => appRuns.push(reason),
+  tryInjectLibraryData: doc => { assert.equal(doc, app.doc); appInjections.push(appContext.routePath); return Promise.resolve(); },
+  syncLinkedFirstContent: doc => assert.equal(doc, app.doc),
+  schedulePlaytimeRefresh: immediate => playtimeRefreshes.push(immediate),
+  hasOwnedLibraryChrome: () => appContext.ownedChrome,
+  getBigPictureDocument: () => null, handleBigPictureExit() {}, activateBigPicture() {},
+  refreshBigPicture: () => Promise.resolve(), backendLog() {},
+  tryInjectPropertiesField() { assert.fail('desktop navigation must not scan Properties popup fields'); },
+  tryInjectCustomizationArtwork() { assert.fail('desktop navigation must not scan customization popup fields'); },
+  lifecycle: {
+    listen: (target, type, callback) => target.addEventListener(type, callback),
+    interval: (callback, delay) => { assert.equal(delay, 2500); app.win.setInterval(callback); },
+  },
   withoutLibrarySidebarMutations: signals.withoutLibrarySidebarMutations,
   isGdlOnlyMutation: record => domSignals.mutationIsWithinSelector(record, '[id^="gdl-"]'),
-  isPublicSteamLibraryRoute: () => false, isBigPictureSurface: () => false,
+  isPublicSteamLibraryRoute: () => appContext.publicRoute, isBigPictureSurface: () => false,
   mutationMayContainDesktopPlaytime: roots => { appScans.push([...roots]); return false; },
-  syncDesktopLibraryHomePlaytimeDom() {}, scheduleCopiedFeedbackCleanup: (_doc, roots) => appScans.push([...roots]),
+  syncDesktopLibraryHomePlaytimeDom() {}, scheduleCopiedFeedbackCleanup: (_doc, roots) => copiedScans.push([...roots]),
   mutationMayContainNonSteamNotice: roots => { appScans.push([...roots]); return false; },
   mutationMayContainProperties: roots => { appScans.push([...roots]); return false; },
 });
-vm.runInContext(ts.transpileModule(`exports.observer = ${appObserver};`, {
+vm.runInContext(ts.transpileModule(`
+  const realRunInjection = ${appInjection};
+  const runInjection = (...args) => { recordInjection(args[0]); return realRunInjection(...args); };
+  exports.observer = ${appObserver};
+  ${visibilityListener};
+  ${navigationInterval};
+`, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
 }).outputText, appContext);
 const applicationObserver = appContext.exports.observer;
@@ -347,5 +392,105 @@ applicationObserver.callback(app.mixedOwnedRecords);
 assert.equal(navigations, 1, 'real route changes are processed even when the delivered batch is sidebar/GDL only');
 assert.equal(earlySyncs, 1);
 assert.deepEqual(appRuns, ['navigation']);
+assert.deepEqual(appInjections, ['/library/app/3000000001'], 'actual A-to-B navigation performs one metadata injection');
+assert.deepEqual(playtimeRefreshes, [true]);
 assert.equal(app.timers.size, 0, 'real navigation cancels the previous details debounce');
-console.log('Sidebar observer integration passed: 100 native and mixed sidebar/owned cycles schedule zero Info, controller or achievement work; mixed detail mutations still update each surface.');
+
+function applicationSnapshot() {
+  return { navigations, earlySyncs, runs: appRuns.length, injections: appInjections.length, playtime: playtimeRefreshes.length };
+}
+function assertApplicationDelta(before, expected, label) {
+  const after = applicationSnapshot();
+  for (const key of Object.keys(before)) assert.equal(after[key] - before[key], expected[key] ?? 0, `${label}: ${key}`);
+}
+const watchdog = [...app.intervals.values()][0];
+assert.equal(app.intervals.size, 1, 'only the extracted real navigation watchdog is installed');
+
+let beforeApp = applicationSnapshot();
+for (let index = 0; index < 100; index++) {
+  applicationObserver.callback(app.mixedOwnedRecords);
+  watchdog();
+}
+assertApplicationDelta(beforeApp, {}, 'same-route owned/sidebar signals and watchdog polls perform no injection or early sync');
+assert.equal(app.timers.size, 0);
+
+applicationObserver.callback(app.detailsRecords);
+assert.equal(app.timers.size, 1, 'ordinary same-route details mutations retain their debounce');
+beforeApp = applicationSnapshot();
+for (const [id, callback] of [...app.timers]) { app.timers.delete(id); callback(); }
+assertApplicationDelta(beforeApp, { earlySyncs: 1, runs: 1, injections: 1, playtime: 1 },
+  'ordinary metadata mutations still synchronize the early playbar exactly once');
+assert.equal(appRuns.at(-1), 'mutation');
+assert.equal(playtimeRefreshes.at(-1), false, 'mutation work preserves the non-immediate playtime refresh policy');
+
+beforeApp = applicationSnapshot();
+app.doc.fire('visibilitychange');
+assertApplicationDelta(beforeApp, { earlySyncs: 1, runs: 1, injections: 1, playtime: 1 },
+  'visibility on the same linked route synchronizes once within the real injection body');
+assert.equal(appRuns.at(-1), 'visibility');
+
+beforeApp = applicationSnapshot();
+appContext.routePath = '/library/app/3000000002';
+app.doc.fire('visibilitychange');
+assertApplicationDelta(beforeApp, { navigations: 1, earlySyncs: 1, runs: 1, injections: 1, playtime: 1 },
+  'visibility detecting a new linked route reuses its completed early synchronization');
+assert.equal(appRuns.at(-1), 'visibility');
+
+beforeApp = applicationSnapshot();
+appContext.routePath = '/library/app/3000000003';
+watchdog();
+assertApplicationDelta(beforeApp, { navigations: 1, earlySyncs: 1, runs: 1, injections: 1, playtime: 1 },
+  'the navigation watchdog performs one early synchronization when it discovers a new route');
+assert.equal(appRuns.at(-1), 'navigation');
+beforeApp = applicationSnapshot();
+applicationObserver.callback(app.ownedRecords);
+watchdog();
+assertApplicationDelta(beforeApp, {}, 'observer delivery after watchdog navigation cannot repeat the same route work');
+
+beforeApp = applicationSnapshot();
+app.doc.hidden = true;
+appContext.routePath = '/library/app/3000000004';
+app.doc.fire('visibilitychange');
+watchdog();
+assertApplicationDelta(beforeApp, {}, 'hidden documents retain the existing visibility/watchdog no-work guard');
+assert.equal(cancelledPaints, 1, 'hiding Steam cancels the native artwork wait instead of leaving a shared pending promise');
+app.doc.hidden = false;
+app.doc.fire('visibilitychange');
+assertApplicationDelta(beforeApp, { navigations: 1, earlySyncs: 1, runs: 1, injections: 1, playtime: 1 },
+  'revealing the hidden document processes its pending linked route exactly once');
+
+beforeApp = applicationSnapshot();
+appContext.publicRoute = true;
+appContext.routePath = '/library/app/570';
+applicationObserver.callback(app.mixedOwnedRecords);
+assertApplicationDelta(beforeApp, { navigations: 1, earlySyncs: 1, runs: 1 },
+  'navigation to a native Steam route retires early linked UI once without metadata work when no owned chrome remains');
+beforeApp = applicationSnapshot();
+applicationObserver.callback(app.detailsRecords);
+app.doc.fire('visibilitychange');
+watchdog();
+assertApplicationDelta(beforeApp, { runs: 2 }, 'native same-route signals without owned chrome never start metadata injection or early sync');
+assert.equal(app.timers.size, 0, 'native cleanup retains its immediate path without a metadata debounce');
+
+beforeApp = applicationSnapshot();
+appContext.ownedChrome = true;
+appContext.routePath = '/library/app/730';
+applicationObserver.callback(app.mixedOwnedRecords);
+assertApplicationDelta(beforeApp, { navigations: 1, earlySyncs: 1, runs: 1, injections: 1 },
+  'native navigation still performs one retirement injection when stale owned chrome exists');
+assert.equal(playtimeRefreshes.at(-1), true);
+
+// Body portals must be processed before both native-route and navigation exits.
+const copiedPortal = new Element('_3cXgxM5dBuTxGOOYw0lxsP');
+const copiedRecord = { target: app.doc.body, addedNodes: [copiedPortal], removedNodes: [] };
+let copiedBefore = copiedScans.length;
+appContext.routePath = '/library/app/105600';
+applicationObserver.callback([copiedRecord]);
+assert.equal(copiedScans.length, copiedBefore + 1, 'a copied portal is checked even in the route-change batch');
+assert.equal(copiedScans.at(-1)[0], copiedPortal);
+copiedBefore = copiedScans.length;
+applicationObserver.callback([copiedRecord]);
+assert.equal(copiedScans.length, copiedBefore + 1, 'a copied portal is checked on an already active native game');
+assert.equal(app.timers.size, 0, 'copied portal cleanup on native games does not start metadata timers');
+
+console.log('Sidebar observer integration passed: 100 native and mixed sidebar/owned cycles schedule zero Info, controller or achievement work; real navigation, visibility, watchdog and mutation injection synchronize the early playbar once and preserve native-route retirement.');

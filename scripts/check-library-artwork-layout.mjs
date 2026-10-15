@@ -14,7 +14,8 @@ class Element {
   text = '';
   attrs = {};
   children = [];
-  style = { setProperty(key, value) { this[key] = value; }, removeProperty(key) { delete this[key]; } };
+  style = { getPropertyValue(key) { return this[key] || this[key.replace(/-([a-z])/g, (_match, letter) => letter.toUpperCase())] || ''; },
+    getPropertyPriority() { return ''; }, setProperty(key, value) { this[key] = value; }, removeProperty(key) { delete this[key]; } };
   constructor(doc, className = '') { this.ownerDocument = doc; this.className = className; }
   get classList() { return { contains: token => this.className.split(/\s+/).includes(token) }; }
   get textContent() { return this.text + this.children.map(child => child.textContent).join(''); }
@@ -70,7 +71,7 @@ function byClass(root, css) {
   const visit = element => { if (tokens.every(token => element.classList.contains(token))) found.push(element); for (const child of element.children) visit(child); };
   visit(root.body || root); return found;
 }
-const css = { PLAYBAR_CLASSES: () => ({ Container: PLAYBAR, GameStatsSection: STATS }) };
+const css = { PLAYBAR_CLASSES: () => ({ Container: PLAYBAR, GameStatsSection: STATS, InPage: 'native-in-page' }) };
 const nativeDom = { elementsWithCssModuleClass: byClass, hasCssModuleClass: (element, css) => Boolean(css && element.classList.contains(css)) };
 function load(file, dependencies) {
   const context = vm.createContext({ exports: {}, Document, HTMLElement: Element, Element, document: new Document(), NodeFilter: { SHOW_TEXT: 4 }, Date: { now: () => now }, require: name => {
@@ -84,6 +85,10 @@ const header = load('frontend/steam/library-header.ts', {
 });
 const layout = load('frontend/features/library/layout.ts', {
   '../../steam/localization': { loc: (_key, fallback) => fallback },
+  '../../steam/css': { ...css, resolveClassModule: (predicate, fallback) => ({ classes: resolvedModules.find(predicate) || fallback }) },
+  '../../steam/native-dom': nativeDom,
+  '../../steam/library-details': { committedHeaderAppId: element => Number(element.attrs['data-native-appid']) || null,
+    isPaintedLibraryElement: (_doc, element) => element.isConnected },
   '../../steam/playbar-visibility': { restoreLinkedPlaybarVisibility() {} }, '../../steam/library-header': header,
 });
 function fixture(noticeInsideHeader = false) {
@@ -115,6 +120,46 @@ assert.equal(injected.parentElement, regular.content, 'ordinary linked content s
 assert.equal(regular.notice.style.display, 'none', 'only the original content/notice is concealed');
 assert.deepEqual([regular.background.getAttribute('src'), regular.logo.getAttribute('src')], sources, 'hero/logo sources retain identity');
 assert.equal(regular.art.parentElement, regular.shell); assert.equal(regular.hero.parentElement, regular.art);
+
+const noNotes = fixture();
+noNotes.region.children[0].textContent = 'DLC';
+noNotes.notice.setAttribute('data-native-appid', '3000000001');
+noNotes.sidebar.setAttribute('data-native-appid', '3000000001');
+noNotes.region.setAttribute('data-native-appid', '3000000001');
+const ownedWrapper = new Element(noNotes.doc); ownedWrapper.id = 'gdl-achievements-section';
+const ownedRegion = new Element(noNotes.doc); ownedRegion.setAttribute('role', 'region');
+ownedWrapper.appendChild(ownedRegion); noNotes.sidebar.insertBefore(ownedWrapper, noNotes.region);
+assert.equal(layout.discoverNativeLibraryLayout(noNotes.doc, noNotes.notice).anchorRegion, noNotes.region,
+  'DLC alone supplies the native shell when Notes/Media are disabled; an earlier owned region cannot become its template');
+noNotes.sidebar.setAttribute('data-native-appid', '3000000002');
+assert.equal(layout.discoverNativeLibraryLayout(noNotes.doc, noNotes.notice).sidebarColumn, null,
+  'A pending sidebar committed for another shortcut is not adopted');
+noNotes.sidebar.setAttribute('data-native-appid', '3000000001');
+noNotes.region.setAttribute('data-native-appid', '3000000002');
+assert.equal(layout.discoverNativeLibraryLayout(noNotes.doc, noNotes.notice).anchorRegion, null,
+  'A mismatched native region cannot authorize a column just because its wrapper already changed games');
+
+const noNotice = fixture();
+noNotice.shell.className = '_27RcNu8aXKBpYkHcNNrt-X';
+noNotice.row.className = 'OhSdLYuggDtBcWjYP0j_9';
+noNotice.content.className = '_1sZgBDTw5NH-yuVDZK1SUU';
+noNotice.sidebar.className = '_2aor4XVOYzN1PBSREk0UbO';
+noNotice.playbar.className += ' native-in-page';
+noNotice.notice.remove();
+for (const node of [noNotice.playbar, noNotice.shell, noNotice.row, noNotice.content, noNotice.sidebar, noNotice.region]) {
+  node.setAttribute('data-native-appid', '3000000001');
+}
+const withoutNotice = layout.discoverNativeLibraryLayoutForShortcut(noNotice.doc, '3000000001');
+assert.equal(withoutNotice.contentColumn, noNotice.content, 'The exact committed native columns resolve before the shortcut notice exists');
+assert.equal(withoutNotice.anchorRegion, noNotice.region);
+assert.equal(withoutNotice.noticeParent, null, 'The pre-notice helper never synthesizes or later hides a native notice');
+assert.equal(layout.discoverNativeLibraryLayoutForShortcut(noNotice.doc, 570).contentColumn, null, 'A native AppID never authorizes pre-notice linked content');
+assert.equal(layout.discoverNativeLibraryLayoutForShortcut(noNotice.doc, '3000000002').contentColumn, null, 'Another shortcut cannot adopt an earlier committed in-page header');
+noNotice.content.setAttribute('data-native-appid', '3000000002');
+assert.equal(layout.discoverNativeLibraryLayoutForShortcut(noNotice.doc, '3000000001').contentColumn, null, 'An older committed main column must wait for the current shortcut');
+noNotice.content.setAttribute('data-native-appid', '3000000001');
+noNotice.playbar.className = PLAYBAR;
+assert.equal(layout.discoverNativeLibraryLayoutForShortcut(noNotice.doc, '3000000001').contentColumn, null, 'A compact header cannot authorize pre-notice columns');
 
 const incomplete = fixture(true);
 const partialLayout = { anchorRegion: incomplete.region, sidebarColumn: incomplete.sidebar, twoColumnRow: incomplete.shell, contentColumn: incomplete.shell, noticeParent: incomplete.hero };

@@ -1,5 +1,4 @@
 import React, { Component, type ReactNode } from 'react';
-import { DialogButton, Focusable, IconsModule, ModalRoot, ProgressBar, Spinner, showModal } from '@steambrew/client';
 import { backendLog } from '../../api/backend';
 import type { CommunityContentItem } from '../../domain/types';
 import { gdlText, loc } from '../../steam/localization';
@@ -9,41 +8,49 @@ import {
 	type NativeAppDetailsClasses,
 } from '../../steam/gamepad/components/AppDetailsNativeClasses';
 import { steamWebpackRuntime } from '../../steam/modules/SteamWebpackRuntime';
-import { AppStoreAdapter } from '../../steam/gamepad/stores/AppStoreAdapter';
 import {
-	resolveNativeTradingCardComponent,
 	resolveNativeDLCComponent,
 	resolveNativeScreenshotsComponent,
-	resolveNativeReviewComponent,
 	resolveNativeNotesComponent,
 	resolveNativeWorkshopComponent,
 	resolveNativeAppDetails,
 	resolveNativeConfigContext,
 	getNavContext,
 	resolveSteamNav,
+	resolveNativeCommunityComponent,
 } from '../../steam/gamepad/components/AppDetailsNativeComponents';
 import { FriendsSection, FallbackActivitySection } from './activity-section';
 import { NativeBigPictureAchievements } from './NativeBigPictureAchievements';
 import { openSteamNavigationUrl, extractCommunityYoutubeId } from '../../steam/navigation';
-import { installBigPictureGamepadNavigation, disposeBigPictureGamepadNavigation, dismissBigPictureFocusRing } from './gamepad-nav';
+import { installBigPictureGamepadNavigation, returnBigPictureFocusToTabs, performBigPictureSemanticAction, switchBigPictureNativeTab } from './gamepad-nav';
 import { findBigPictureTabStrip } from './tabs';
 import { ensureBigPictureDetailStyles } from './details-styles';
 import type { BigPictureDetailData, BigPictureTab, MappedShortcut } from './types';
+import { showNativeImageModal, showNativeVideoModal } from './media-modals';
+import { isBigPictureActionCurrent } from './detail-target';
+import { createBigPictureDetailViews } from './detail-views';
+import { InformationTab } from './information-tab';
+import { NativeFocusable, NativeButton, NativeProgress, NativeSpinner, NativeIcons, BigPictureUIProvider } from './document-primitives';
+import { getDocumentReact, getDocumentRenderer, resolveNativeFocusable } from '../../steam/gamepad/document-ui-runtime';
+import { getMountedBigPictureNavNode } from './native-focus';
 
-type NativeComponent = React.ComponentType<any>;
-
-const NativeFocusable = Focusable as NativeComponent;
-const NativeButton = DialogButton as NativeComponent;
-const NativeProgress = ProgressBar as NativeComponent;
-const NativeSpinner = Spinner as NativeComponent;
-const NativeIcons = IconsModule as Record<string, NativeComponent>;
-
-interface NativeDetailsProps {
+export interface NativeDetailsProps {
 	tab: BigPictureTab;
 	shortcut: MappedShortcut;
 	data: BigPictureDetailData;
 	hydrating: boolean;
 	document: Document;
+	generation?: number;
+	panel?: HTMLElement | null;
+	onCommitted?: () => void;
+	onRuntimeInvalidated?: () => void;
+	renderSession?: NativeDetailsRenderSession;
+}
+
+interface NativeDetailsRenderSession {
+	react: typeof React;
+	isCurrent(): boolean;
+	invalidate(): void;
 }
 
 interface BoundaryState {
@@ -94,61 +101,7 @@ function clickProps(action: () => void): { onClick: () => void } {
 	return { onClick: action };
 }
 
-function showNativeImageModal(doc: Document, title: string, imageUrl: string, classes: NativeAppDetailsClasses): void {
-	if (!imageUrl) return;
-	dismissBigPictureFocusRing(doc);
-	let handle: { Close(): void } | undefined;
-	const close = () => {
-		dismissBigPictureFocusRing(doc);
-		handle?.Close();
-	};
-	try {
-		handle = showModal(
-			<ModalRoot onCancel={close} closeModal={close} bAllowFullSize bDisableBackgroundDismiss>
-				<img className={classes.Media?.ScreenshotModal} width="100%" src={imageUrl} alt={title} />
-				<NativeButton {...clickProps(close)}>{loc('Button_Close', 'Cerrar')}</NativeButton>
-			</ModalRoot>,
-			(doc.defaultView || doc.body) as EventTarget,
-			{ strTitle: title, bNeverPopOut: true, bHideMainWindowForPopouts: false },
-		);
-	} catch {
-		openSteamNavigationUrl(doc, imageUrl);
-	}
-}
-
-function showNativeVideoModal(doc: Document, title: string, youtubeId: string, _classes: NativeAppDetailsClasses): void {
-	if (!youtubeId) return;
-	dismissBigPictureFocusRing(doc);
-	let handle: { Close(): void } | undefined;
-	const close = () => {
-		dismissBigPictureFocusRing(doc);
-		handle?.Close();
-	};
-	try {
-		handle = showModal(
-			<ModalRoot onCancel={close} closeModal={close} bAllowFullSize bDisableBackgroundDismiss>
-				<div className={nativeClasses('gdl-bp-video-modal-wrap')}>
-					<iframe
-						src={`https://www.youtube-nocookie.com/embed/${encodeURIComponent(youtubeId)}?autoplay=1&enablejsapi=1&rel=0`}
-						className={nativeClasses('gdl-bp-video-modal-frame')}
-						allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-						allowFullScreen
-					/>
-				</div>
-				<div className={nativeClasses('gdl-bp-video-modal-footer')}>
-					<NativeButton {...clickProps(close)}>{loc('Button_Close', 'Cerrar')}</NativeButton>
-				</div>
-			</ModalRoot>,
-			(doc.defaultView || doc.body) as EventTarget,
-			{ strTitle: title, bNeverPopOut: true, bHideMainWindowForPopouts: false },
-		);
-	} catch {
-		openSteamNavigationUrl(doc, `https://www.youtube.com/watch?v=${youtubeId}`);
-	}
-}
-
-
-function Section({ classes, label, children, highlight, className, bodyClassName, headerClassName, rightColumn = false }: {
+interface SectionProps {
 	classes: NativeAppDetailsClasses;
 	label?: ReactNode;
 	children: ReactNode;
@@ -157,8 +110,13 @@ function Section({ classes, label, children, highlight, className, bodyClassName
 	bodyClassName?: string;
 	headerClassName?: string;
 	rightColumn?: boolean;
-}): React.ReactElement {
-	const labelId = React.useId();
+}
+let sectionSequence = 0;
+class Section extends React.Component<SectionProps> {
+	private labelId = `gdl-bp-section-${++sectionSequence}`;
+	render(): React.ReactElement {
+	const { classes, label, children, highlight, className, bodyClassName, headerClassName, rightColumn = false } = this.props;
+	const labelId = this.labelId;
 	const section = classes.Section;
 	const header = classes.SectionHeader;
 	return (
@@ -179,9 +137,10 @@ function Section({ classes, label, children, highlight, className, bodyClassName
 		</div>
 	);
 }
+}
 
-function NativeStrip({ name, children, className }: { name: string; children: ReactNode; className?: string }): React.ReactElement {
-	const NativeCarousel = resolveNativeSummaryCarousel();
+function NativeStrip({ name, children, className, document }: { name: string; children: ReactNode; className?: string; document?: Document }): React.ReactElement {
+	const NativeCarousel = resolveNativeSummaryCarousel(document);
 	const fallback = <NativeFocusable flow-children="row" className={className}>{children}</NativeFocusable>;
 	if (!NativeCarousel) return fallback;
 	return (
@@ -216,7 +175,7 @@ function ActivityTab(props: NativeDetailsProps): React.ReactElement {
 	);
 	const friendsNode = (
 		<NativeDetailsBoundary name="friends" fallback={null}>
-			<FriendsSection data={props.data} shortcut={props.shortcut} classes={classes} SectionComponent={Section} document={props.document} />
+			<FriendsSection data={props.data} shortcut={props.shortcut} classes={classes} SectionComponent={Section} document={props.document} generation={props.generation} />
 		</NativeDetailsBoundary>
 	);
 	const activityNode = (
@@ -228,6 +187,7 @@ function ActivityTab(props: NativeDetailsProps): React.ReactElement {
 				classes={classes}
 				hydrating={props.hydrating}
 				document={props.document}
+				generation={props.generation}
 				SectionComponent={Section}
 				LoadingComponent={LoadingContent}
 			/>
@@ -261,78 +221,30 @@ function TradingCardsSection(props: NativeDetailsProps & { classes: NativeAppDet
 	const cards = catalog?.cards || [];
 	if (cards.length === 0) return null;
 
-	const badge = catalog?.foil_badge
-		|| catalog?.badges?.find(b => b.foil)
-		|| (catalog?.badges && catalog.badges.length > 0 ? catalog.badges[catalog.badges.length - 1] : null);
-	const badgeImage = badge?.image || cards[0]?.image || `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${props.shortcut.steamAppId}/library_600x900.jpg`;
-	const badgeTitle = badge?.title || gdlText('cards_found', 'Cards found');
-	const maxLevel = badge?.level || (catalog?.badges && catalog.badges.length > 0 ? Math.max(...catalog.badges.map(b => Number(b.level || 0))) : 5);
-	const lvl = maxLevel || 5;
-	const xp = lvl * 100;
-	const badgeLevelLabel = loc('AppDetails_BadgeLevel', `Nivel ${lvl} (${xp} EXP)`).replace('%1$s', String(lvl)).replace('%2$s', String(xp));
 	const native = props.classes.TradingCard;
-	const NativeTradingCard = resolveNativeTradingCardComponent(props.document);
 
 	return (
 		<Section classes={props.classes} label={loc('AppDetails_SectionTitle_TradingCards', gdlText('trading_cards', 'Trading cards'))} bodyClassName={native?.Container} rightColumn>
-			<NativeFocusable
-				focusable
-				role="button"
-				className={nativeClasses(native?.BadgeSection, 'gdl-bp-badge-action')}
-				onActivate={() => openSteamNavigationUrl(props.document, `https://steamcommunity.com/my/gamecards/${props.shortcut.steamAppId}`)}
-				{...clickProps(() => openSteamNavigationUrl(props.document, `https://steamcommunity.com/my/gamecards/${props.shortcut.steamAppId}`))}
-			>
-				<div className={native?.Badge}>
-					{badgeImage ? <img className={nativeClasses(native?.BadgeImage, native?.CardImage)} src={badgeImage} alt={badgeTitle} /> : null}
-				</div>
-				<div className={native?.BadgeInfo}>
-					<div className={native?.BadgeName}>{badgeTitle}</div>
-					<div className={native?.BadgeLevel}>{badgeLevelLabel}</div>
-				</div>
-			</NativeFocusable>
+			<NativeButton {...clickProps(() => { if (isBigPictureActionCurrent(props)) openSteamNavigationUrl(props.document, `https://steamcommunity.com/my/gamecards/${props.shortcut.steamAppId}`); })}>
+				{loc('AppDetails_TradingCards_ViewBadgeProgress', 'Ver progreso de la insignia')}
+			</NativeButton>
 			<div className={native?.CardsSection}>
-				<div className={nativeClasses(native?.CardsLeft, native?.BadgeMaxed)}>
-					{loc('AppDetails_TradingCardsMaxed', 'INSIGNIA DE NIVEL MÁXIMO')}
-				</div>
-				<NativeStrip name="NativeGameLink Trading Cards" className={native?.SummaryCarouselContainer}>
+				<NativeStrip name="NativeGameLink Trading Cards" document={props.document} className={native?.SummaryCarouselContainer}>
 					{cards.slice(0, 18).map((card, index) => {
-						const openCard = (): void => showNativeImageModal(props.document, card.title, card.artwork || card.image, props.classes);
-						if (NativeTradingCard) {
-							return (
-								<NativeFocusable
-									key={`${card.title}-${index}`}
-									focusable
-									role="button"
-									onActivate={openCard}
-									{...clickProps(openCard)}
-									className={nativeClasses(native?.TradingCardCarouselItem, native?.Owned, native?.Clickable, 'gdl-bp-trading-card')}
-								>
-									<NativeTradingCard
-										data={{
-											strTitle: card.title,
-											strImgURL: card.image,
-											strArtworkURL: card.artwork || card.image,
-											nOwned: 1,
-											strMarketHash: card.title,
-										}}
-										bMaxed
-										bClickable
-										animateHover
-										cardScale={1.0}
-									/>
-								</NativeFocusable>
-							);
-						}
+						const openCard = (): void => showNativeImageModal(props, card.title, card.artwork || card.image, props.classes);
+						// Steam's inventory tile interprets an absent count as Unowned.
+						// A public catalog has no inventory evidence, so retain a neutral
+						// native-style tile with one owner-managed focus target.
 						return (
 							<NativeFocusable
 								key={`${card.title}-${index}`}
 								focusable
 								onActivate={openCard}
 								{...clickProps(openCard)}
-								className={nativeClasses(native?.TradingCardCarouselItem, native?.Clickable, native?.Owned, 'gdl-bp-trading-card')}
+								className={nativeClasses(native?.TradingCardCarouselItem, native?.Clickable, 'gdl-bp-trading-card')}
 							>
-								<div className={nativeClasses(native?.CardWrapper, native?.Owned)}>
-									<div className={nativeClasses(native?.Card, native?.Owned, native?.Clickable)}>
+								<div className={native?.CardWrapper}>
+									<div className={nativeClasses(native?.Card, native?.Clickable)}>
 										<div className={native?.CardContainer}>
 											<img className={nativeClasses(native?.CardImage, native?.Loaded)} src={card.image} alt={card.title} width="100" height="130" />
 										</div>
@@ -353,21 +265,23 @@ function communityItems(data: BigPictureDetailData): CommunityContentItem[] {
 	return raw.filter(item => Boolean(item && item.image));
 }
 
-function CommunityCard({ item, index, classes, document }: { item: CommunityContentItem; index: number; classes: NativeAppDetailsClasses; document: Document }): React.ReactElement {
+function CommunityCard({ item, index, classes, owner }: { item: CommunityContentItem; index: number; classes: NativeAppDetailsClasses; owner: NativeDetailsProps }): React.ReactElement {
+	const document = owner.document;
 	const native = classes.Community;
 	const title = item.title || item.label || loc('AppDetails_Community_Screenshot', 'Contenido de la comunidad');
 	const author = item.author_name ? <div className={native?.AuthorSection}>{item.author_avatar ? <img className={native?.Avatar} src={item.author_avatar} alt="" /> : null}<div className={native?.AuthorName}>{item.author_name}</div></div> : null;
 	const youtubeId = extractCommunityYoutubeId(item);
 
 	const onActivate = (): void => {
+		if (!isBigPictureActionCurrent(owner)) return;
 		if (item.type === 'video' || youtubeId) {
 			if (youtubeId) {
-				showNativeVideoModal(document, title, youtubeId, classes);
+				showNativeVideoModal(owner, title, youtubeId);
 				return;
 			}
 		}
 		if (item.type === 'screenshot' && item.image) {
-			showNativeImageModal(document, title, item.image, classes);
+			showNativeImageModal(owner, title, item.image, classes);
 			return;
 		}
 		if (item.link) {
@@ -426,54 +340,33 @@ function CommunityCard({ item, index, classes, document }: { item: CommunityCont
 	);
 }
 
-function CommunityGrid({ items, classes, document }: { items: CommunityContentItem[]; classes: NativeAppDetailsClasses; document: Document }): React.ReactElement {
+function CommunityGrid({ items, classes, owner }: { items: CommunityContentItem[]; classes: NativeAppDetailsClasses; owner: NativeDetailsProps }): React.ReactElement {
 	const native = classes.Community;
 	return (
 		<NativeFocusable role="grid" aria-readonly flow-children="geometric" className={nativeClasses(native?.InnerContainer, 'gdl-bp-community-grid')}>
 			{items.slice(0, 24).map((item, index) => (
-				<CommunityCard key={`${item.type}-${item.title}-${index}`} item={item} index={index} classes={classes} document={document} />
+				<CommunityCard key={`${item.type}-${item.title}-${index}`} item={item} index={index} classes={classes} owner={owner} />
 			))}
 		</NativeFocusable>
 	);
 }
 
 function ScreenshotsSection(props: NativeDetailsProps & { classes: NativeAppDetailsClasses }): React.ReactElement | null {
-	const screenshots = props.data.game?.screenshots || [];
-	if (screenshots.length === 0) return null;
-	const mediaClasses = props.classes.Media;
-
-	return (
-		<Section
-			classes={props.classes}
-			label={loc('AppDetails_SectionTitle_Screenshots', 'Capturas y archivos multimedia')}
-			rightColumn
-		>
-			<NativeStrip name="Screenshots" className={mediaClasses?.Screenshots}>
-				{screenshots.slice(0, 12).map((shot, index) => {
-					const imgUrl = shot.path_full || shot.path_thumbnail;
-					const title = `${loc('AppDetails_Community_Screenshot', 'Captura')} ${index + 1}`;
-					const open = (): void => showNativeImageModal(props.document, title, imgUrl, props.classes);
-					return (
-						<NativeFocusable
-							key={index}
-							focusable
-							onActivate={open}
-							{...clickProps(open)}
-							className={nativeClasses(mediaClasses?.Thumbnail)}
-						>
-							<img className={nativeClasses(mediaClasses?.Thumbnail)} src={imgUrl} alt={title} width="280" height="160" />
-						</NativeFocusable>
-					);
-				})}
-			</NativeStrip>
-		</Section>
-	);
+	// Store promotional images are public metadata, not the user's captures.
+	const screenshots = (props.document.defaultView as any)?.SteamClient?.Screenshots;
+	if (typeof screenshots?.ShowScreenshotsOnDisk !== 'function') return null;
+	return <Section classes={props.classes} label={loc('AppDetails_SectionTitle_Screenshots', 'Capturas y archivos multimedia')} rightColumn>
+		<NativeButton {...clickProps(() => {
+			if (isBigPictureActionCurrent(props)) screenshots.ShowScreenshotsOnDisk(String(props.shortcut.id >>> 0));
+		})}>{loc('ScreenshotManager_ShowOnDisk', 'Mostrar en disco')}</NativeButton>
+	</Section>;
 }
 
 function NotesSection(props: NativeDetailsProps & { classes: NativeAppDetailsClasses }): React.ReactElement {
 	const openNotes = (): void => {
+		if (!isBigPictureActionCurrent(props)) return;
 		try {
-			const client = (window as any).SteamClient;
+			const client = (props.document.defaultView as any)?.SteamClient;
 			if (client?.GameNotes?.OpenGameNotes) {
 				client.GameNotes.OpenGameNotes(props.shortcut.id);
 			}
@@ -495,13 +388,12 @@ function NotesSection(props: NativeDetailsProps & { classes: NativeAppDetailsCla
 
 function StuffTab(props: NativeDetailsProps): React.ReactElement {
 	const classes = resolveNativeAppDetailsClasses(props.document);
-	const appid = Number(props.shortcut.steamAppId || 0);
-	const overview = AppStoreAdapter.getAppOverview(appid) || { appid, display_name: props.shortcut.title };
-	const details = React.useMemo(() => resolveNativeAppDetails(props.document, appid) || { unAppID: appid, vecDLC: [] }, [props.document, appid]);
+	const appid = props.shortcut.id >>> 0;
+	const { overview, details } = createBigPictureDetailViews(props.document, props.shortcut, props.data.game);
+	const publicDetails = resolveNativeAppDetails(props.document, Number(props.shortcut.steamAppId));
 
 	const NativeDLC = appid > 0 ? resolveNativeDLCComponent(props.document) : null;
 	const NativeScreenshots = appid > 0 ? resolveNativeScreenshotsComponent(props.document) : null;
-	const NativeReview = appid > 0 ? resolveNativeReviewComponent(props.document) : null;
 	const NativeNotes = appid > 0 ? resolveNativeNotesComponent(props.document) : null;
 	const NativeWorkshop = appid > 0 ? resolveNativeWorkshopComponent(props.document) : null;
 
@@ -523,19 +415,14 @@ function StuffTab(props: NativeDetailsProps): React.ReactElement {
 			) : (
 				<NotesSection {...props} classes={classes} />
 			)}
-			{NativeDLC ? (
+			{NativeDLC && publicDetails && props.data.game?.dlc?.length ? (
 				<NativeDetailsBoundary name="dlc" fallback={null}>
-					<NativeDLC details={details} showRemainder />
+					<NativeDLC details={publicDetails} showRemainder />
 				</NativeDetailsBoundary>
-			) : null}
-			{NativeWorkshop ? (
+			) : props.data.game?.dlc?.length ? <Section classes={classes} label={loc('AppDetails_SectionTitle_DLC', 'Contenido descargable')}><NativeButton {...clickProps(() => { if (isBigPictureActionCurrent(props)) openSteamNavigationUrl(props.document, `https://store.steampowered.com/dlc/${props.shortcut.steamAppId}/`); })}>{loc('AppDetails_ViewAllDLC', 'Ver contenido descargable')}</NativeButton></Section> : null}
+			{NativeWorkshop && publicDetails && props.data.game?.categories?.some(category => category.id === 30) ? (
 				<NativeDetailsBoundary name="workshop" fallback={null}>
-					<NativeWorkshop details={details} />
-				</NativeDetailsBoundary>
-			) : null}
-			{NativeReview ? (
-				<NativeDetailsBoundary name="review" fallback={null}>
-					<NativeReview details={details} overview={overview} />
+					<NativeWorkshop details={publicDetails} />
 				</NativeDetailsBoundary>
 			) : null}
 		</>
@@ -548,7 +435,7 @@ function FallbackCommunitySection({ props, classes }: { props: NativeDetailsProp
 	return (
 		<Section classes={classes} label={loc('AppDetails_SectionTitle_Community', gdlText('community_content', 'Community content'))} className={classes.Community?.CommunityContentContainer} headerClassName={classes.Community?.HeaderStyles}>
 			{items.length > 0 ? (
-				<CommunityGrid items={items} classes={classes} document={props.document} />
+				<CommunityGrid items={items} classes={classes} owner={props} />
 			) : (
 				<div className={nativeClasses(classes.Community?.NoContent, 'gdl-bp-community-empty')}>
 					<LoadingContent hydrating={props.hydrating} empty={loc('AppDetails_Community_NoContent', 'No hay contenido de la comunidad disponible.')} />
@@ -563,7 +450,9 @@ function FallbackCommunitySection({ props, classes }: { props: NativeDetailsProp
 
 function CommunityTab(props: NativeDetailsProps): React.ReactElement {
 	const classes = resolveNativeAppDetailsClasses(props.document);
-	return <FallbackCommunitySection props={props} classes={classes} />;
+	const NativeCommunity = resolveNativeCommunityComponent(props.document);
+	const fallback = <FallbackCommunitySection props={props} classes={classes} />;
+	return NativeCommunity ? <NativeDetailsBoundary name="community" fallback={fallback}><NativeCommunity appid={Number(props.shortcut.steamAppId)} /></NativeDetailsBoundary> : fallback;
 }
 
 function SafeTabFallback(props: NativeDetailsProps): React.ReactElement {
@@ -571,68 +460,138 @@ function SafeTabFallback(props: NativeDetailsProps): React.ReactElement {
 	return <Section classes={classes} label={props.shortcut.title}><LoadingContent hydrating={props.hydrating} empty={loc('Loading', 'Cargando…')} /></Section>;
 }
 
-export function NativeBigPictureDetails(props: NativeDetailsProps): React.ReactElement {
-	const classes = resolveNativeAppDetailsClasses(props.document);
+export function NativeBigPictureDetails(props: NativeDetailsProps): React.ReactElement | null {
+	// A self-update can occur after Steam replaces its runtime. Its hooks must
+	// still use the React instance paired with the renderer that owns this root.
+	const React = props.renderSession?.react || getDocumentReact(props.document);
+	if (!React) return null;
+	const runtimeCurrent = props.renderSession?.isCurrent() !== false;
+	const classes = runtimeCurrent ? resolveNativeAppDetailsClasses(props.document) : null;
+	const [, refreshNavigation] = React.useState(0);
+	const [nativeNavHandle, setNativeNavHandle] = React.useState<any>(null);
+	const receiveNativeNavHandle = React.useCallback((handle: any) => setNativeNavHandle(handle), []);
+	// Providers and navigation nodes belong to a live Steam tree, not merely to
+	// its document. Re-resolve after a panel/runtime/session replacement.
+	const runtimeIdentity = steamWebpackRuntime.getRuntimeIdentity(props.document);
+	const nav = runtimeCurrent ? resolveSteamNav(props.document) : null;
+	const NavContext = nav?.navContext || (runtimeCurrent ? getNavContext(props.document) : null);
+	const parentNavNode = nav?.navNode;
+	const ConfigContext = runtimeCurrent ? resolveNativeConfigContext(props.document) : null;
+	const NativeNavigationFocusable = runtimeCurrent ? resolveNativeFocusable(props.document) : null;
+	const canRegisterNativeNavigation = Boolean(NavContext?.Provider && typeof parentNavNode?.Tree?.CreateNode === 'function' && NativeNavigationFocusable);
+	const NavigationFocusable = (canRegisterNativeNavigation ? NativeNavigationFocusable! : 'div') as React.ElementType<any>;
+	const panel = props.panel || props.document.getElementById('gdl-bp-detail-root')?.parentElement || null;
+	const panelConnected = Boolean(panel?.isConnected);
+	const tabs = findBigPictureTabStrip(props.document);
+	const strip = tabs?.strip || props.document.querySelector<HTMLElement>('[role="tablist"], [class*="TabsRow"], [class*="tabsRow"], [class*="TabsStrip"]');
+	const controls = tabs?.controls || new Map<BigPictureTab, HTMLElement>();
+	const detailRoot = props.document.getElementById('gdl-bp-detail-root');
+	const nativeNavigation = Boolean(canRegisterNativeNavigation && detailRoot
+		&& getMountedBigPictureNavNode(props.document, detailRoot, parentNavNode, nativeNavHandle));
+
+	React.useLayoutEffect(() => {
+		const doc = props.document;
+		const root = doc.getElementById('gdl-bp-detail-root');
+		if (!runtimeCurrent || !root || !strip) return undefined;
+		backendLog(`[NGL][Gamepad][FocusMount] candidate=${canRegisterNativeNavigation} handle=${Boolean(nativeNavHandle)} ready=${nativeNavigation} tab=${props.tab}`);
+		return installBigPictureGamepadNavigation(doc, root, strip, controls, {
+			authority: panelConnected ? nativeNavigation ? 'native' : canRegisterNativeNavigation ? 'none' : 'fallback' : 'none',
+			generation: props.generation, panel, nativeNavNode: parentNavNode, nativeNavHandle,
+		});
+	}, [props.document, props.tab, props.shortcut.id, props.shortcut.steamAppId, props.generation, panel, panelConnected,
+			runtimeIdentity, runtimeCurrent, parentNavNode, NavContext, nativeNavigation, canRegisterNativeNavigation, nativeNavHandle, strip,
+		controls.get('activity'), controls.get('stuff'), controls.get('community'), controls.get('info')]);
+	React.useLayoutEffect(() => {
+		if (!runtimeCurrent) props.renderSession?.invalidate();
+		else props.onCommitted?.();
+	});
+	React.useEffect(() => {
+		const view = props.document.defaultView, tree = parentNavNode?.Tree;
+		if (!view || !tree || !runtimeCurrent) return undefined;
+		let frame = 0, disposed = false;
+		const refresh = (): void => {
+			if (disposed || frame) return;
+			frame = view.requestAnimationFrame(() => { frame = 0; if (!disposed) refreshNavigation(value => value + 1); });
+		};
+		const registration = tree.OnActiveStateChangedCallbacks?.Register?.(refresh);
+		const source = tree.Controller?.NavigationSourceSupportsFocus?.Subscribe?.(refresh);
+		return () => {
+			disposed = true; if (frame) view.cancelAnimationFrame(frame);
+			registration?.Unregister?.();
+			if (typeof source === 'function') source(); else if (source?.Unsubscribe) source.Unsubscribe(); else source?.Unregister?.();
+		};
+	}, [props.document, parentNavNode?.Tree, runtimeCurrent]);
 
 	React.useEffect(() => {
-		const doc = props.document;
-		return () => {
-			disposeBigPictureGamepadNavigation(doc);
+		const doc = props.document, view = doc.defaultView;
+		if (!view || !runtimeCurrent) return undefined;
+		let disposed = false;
+		const probe = (): void => {
+			if (disposed || view.closed) return;
+			if (props.renderSession && !props.renderSession.isCurrent()) { props.renderSession.invalidate(); return; }
+			refreshNavigation(value => value + 1);
 		};
-	}, [props.document, props.shortcut.id]);
-
-	React.useEffect(() => {
-		const doc = props.document;
-		let timer: ReturnType<typeof setTimeout> | null = null;
-		const setup = () => {
-			const root = doc.getElementById('gdl-bp-detail-root');
-			const tabStrip = findBigPictureTabStrip(doc);
-			const strip = tabStrip?.strip || doc.querySelector<HTMLElement>(
-				'[role="tablist"], [class*="TabsRow"], [class*="tabsRow"], [class*="TabsStrip"]'
-			);
-			if (root && strip) {
-				installBigPictureGamepadNavigation(doc, root, strip, tabStrip?.controls || new Map());
-				return true;
-			}
-			return false;
-		};
-		if (!setup()) {
-			timer = setTimeout(setup, 80);
-		}
-		return () => {
-			if (timer != null) clearTimeout(timer);
-		};
-	}, [props.document, props.tab, props.shortcut.id]);
+		const timers = [80, 250, 750].map(delay => view.setTimeout(probe, delay));
+		const observer = new view.MutationObserver(records => {
+			if (records.some(record => [...Array.from(record.addedNodes), ...Array.from(record.removedNodes)]
+				.some(node => node.nodeType === 1 && !(node as HTMLElement).id?.startsWith('gdl-')))) probe();
+		});
+		if (panel) observer.observe(panel, { childList: true });
+		if (panel?.parentElement) observer.observe(panel.parentElement, { childList: true });
+		if (strip) observer.observe(strip, { childList: true, subtree: true });
+		if (strip?.parentElement) observer.observe(strip.parentElement, { childList: true });
+		return () => { disposed = true; for (const timer of timers) view.clearTimeout(timer); observer.disconnect(); };
+	}, [props.document, panel, strip, props.generation, props.shortcut.id, props.shortcut.steamAppId, runtimeCurrent]);
+	if (!runtimeCurrent) return null;
 
 	let content: React.ReactElement;
 	switch (props.tab) {
 		case 'stuff': content = <StuffTab {...props} />; break;
 		case 'community': content = <CommunityTab {...props} />; break;
-		case 'info': content = <SafeTabFallback {...props} />; break;
+		case 'info': content = <InformationTab {...props} Boundary={NativeDetailsBoundary} />; break;
 		default: content = <ActivityTab {...props} />; break;
 	}
 
-	const nav = React.useMemo(() => resolveSteamNav(props.document), [props.document]);
-	const NavContext = nav?.navContext || getNavContext(props.document);
-	const parentNavNode = nav?.navNode;
-	const ConfigContext = React.useMemo(() => resolveNativeConfigContext(props.document), [props.document]);
+	const nativeAction = (action: 'back' | 'x' | 'y', event: any): boolean => {
+		if (!nativeNavigation || !isBigPictureActionCurrent(props) || event?.defaultPrevented || event?.detail?.is_repeat) return false;
+		const handled = action === 'back' ? returnBigPictureFocusToTabs(props.document) : performBigPictureSemanticAction(props.document, action);
+		if (handled) { event?.preventDefault?.(); event?.stopPropagation?.(); }
+		return handled;
+	};
+	const nativeInputProps = nativeNavigation ? {
+		onCancelButton: (event: any) => nativeAction('back', event),
+		onSecondaryButton: (event: any) => nativeAction('x', event),
+		onOptionsButton: (event: any) => nativeAction('y', event),
+		onButtonDown: (event: any) => {
+			if (!isBigPictureActionCurrent(props) || event.defaultPrevented || event.detail?.is_repeat) return;
+			if ((event.detail?.button === 5 || event.detail?.button === 6)
+				&& switchBigPictureNativeTab(props.document, event.detail.button === 5 ? -1 : 1)) {
+				event.preventDefault?.(); event.stopPropagation?.();
+			}
+		},
+	} : {};
 
 	const rootElement = (
 		<NativeDetailsBoundary key={`${props.tab}-${props.shortcut.id}-${props.shortcut.steamAppId}`} name={props.tab} fallback={<SafeTabFallback {...props} />}>
-			<NativeFocusable flow-children="column" focusable={false} className={nativeClasses(classes.Section?.AppDetailsSectionContainer)}>
+			<NavigationFocusable flow-children="column" focusable={false} navRef={canRegisterNativeNavigation ? receiveNativeNavHandle : undefined}
+				className={nativeClasses(classes?.Section?.AppDetailsSectionContainer)}
+				{...nativeInputProps}>
 				{content}
-			</NativeFocusable>
+			</NavigationFocusable>
 		</NativeDetailsBoundary>
 	);
 
 	let element = rootElement;
-	if (NavContext && parentNavNode) {
+	if (canRegisterNativeNavigation && NavContext && parentNavNode) {
 		element = <NavContext.Provider value={parentNavNode}>{element}</NavContext.Provider>;
+	}
+	for (const provider of nav?.providers || []) {
+		element = <provider.context.Provider value={provider.value}>{element}</provider.context.Provider>;
 	}
 	if (ConfigContext) {
 		element = <ConfigContext.Provider value={{ IN_GAMEPADUI: true }}>{element}</ConfigContext.Provider>;
 	}
-	return element;
+	return <BigPictureUIProvider document={props.document}>{element}</BigPictureUIProvider>;
 }
 
 export interface ReactRootHandle {
@@ -640,37 +599,88 @@ export interface ReactRootHandle {
 	unmount(): void;
 }
 
-const nativeRoots = new WeakMap<HTMLElement, ReactRootHandle>();
+type NativeRootState = { handle: ReactRootHandle; reactDom: any; react: unknown; runtime: object | null;
+	owner?: NativeDetailsProps; committedOwner?: NativeDetailsProps; session: NativeDetailsRenderSession;
+	invalidated: boolean; remountTimer: number | null; release: () => void };
+const nativeRoots = new WeakMap<HTMLElement, NativeRootState>();
+const rendererReactOwners = new WeakMap<object, typeof React>();
+
+function isOwnerRenderer(candidate: any, react: typeof React | null): boolean {
+	if (!candidate || !react || (typeof candidate !== 'object' && typeof candidate !== 'function')) return false;
+	const owner = rendererReactOwners.get(candidate);
+	return (!owner || owner === react) && (typeof candidate.createRoot === 'function'
+		|| (typeof candidate.render === 'function' && typeof candidate.unmountComponentAtNode === 'function'));
+}
+
+export function isNativeBigPictureDetailsRuntimeCurrent(container: HTMLElement): boolean {
+	return nativeRoots.get(container)?.session.isCurrent() === true;
+}
 
 export function findReactDom(doc: Document): any | null {
-	const docWindow = doc.defaultView as any;
-	const globalWindow = typeof window !== 'undefined' ? (window as any) : null;
-	const candidates = [docWindow?.SP_REACTDOM, docWindow?.ReactDOM];
-	if (globalWindow === docWindow) candidates.push(globalWindow?.SP_REACTDOM, globalWindow?.ReactDOM);
-	for (const candidate of candidates) {
-		if (candidate && (typeof candidate.createRoot === 'function' || (typeof candidate.render === 'function' && typeof candidate.unmountComponentAtNode === 'function'))) return candidate;
-	}
-	steamWebpackRuntime.captureRuntime(doc);
-	for (const module of steamWebpackRuntime.getAllModules(doc)) {
-		const candidates = [module.exports, module.exports?.default, ...Object.values(module.exports || {})];
-		for (const candidate of candidates) {
-			if (candidate && (typeof (candidate as any).createRoot === 'function' || (typeof (candidate as any).render === 'function' && typeof (candidate as any).unmountComponentAtNode === 'function'))) return candidate;
-		}
-	}
-	return null;
+	const ownerReact = getDocumentReact(doc);
+	const renderer = getDocumentRenderer(doc);
+	return isOwnerRenderer(renderer, ownerReact) ? renderer : null;
 }
 
 export function mountNativeBigPictureDetails(container: HTMLElement, props: NativeDetailsProps): boolean {
+	if (container.ownerDocument !== props.document || !isBigPictureActionCurrent(props)) return false;
 	ensureBigPictureDetailStyles(container.ownerDocument);
-	let root = nativeRoots.get(container);
-	if (!root) {
-		const reactDom = findReactDom(container.ownerDocument);
-		if (!reactDom) return false;
-		if (typeof reactDom.createRoot === 'function') root = reactDom.createRoot(container) as ReactRootHandle;
-		else root = { render: node => reactDom.render(node, container), unmount: () => reactDom.unmountComponentAtNode?.(container) };
-		nativeRoots.set(container, root);
+	const reactDom = findReactDom(props.document), react = getDocumentReact(props.document);
+	const runtime = steamWebpackRuntime.getRuntimeIdentity(props.document);
+	let state = nativeRoots.get(container);
+	if (!reactDom || !react) { if (state) unmountNativeBigPictureDetails(container); return false; }
+	if (state && (state.invalidated || state.reactDom !== reactDom || state.react !== react || state.runtime !== runtime)) {
+		unmountNativeBigPictureDetails(container); state = undefined;
 	}
-	root.render(<NativeBigPictureDetails {...props} />);
+	if (!state) {
+		rendererReactOwners.set(reactDom, react);
+		const handle: ReactRootHandle = typeof reactDom.createRoot === 'function' ? reactDom.createRoot(container)
+			: { render: node => reactDom.render(node, container), unmount: () => reactDom.unmountComponentAtNode?.(container) };
+		const guard = (event: Event) => {
+			const live = nativeRoots.get(container);
+			if (live?.owner && live.committedOwner === live.owner && live.session.isCurrent()) return;
+			if (live?.owner && !live.session.isCurrent()) live.session.invalidate();
+			event.preventDefault(); event.stopImmediatePropagation();
+		};
+		const inputs = ['click', 'keydown', 'vgp_onbuttondown', 'vgp_onbuttonup', 'vgp_oncancel'];
+		for (const type of inputs) container.addEventListener(type, guard, true);
+		const mounted: NativeRootState = { handle, reactDom, react, runtime, invalidated: false, remountTimer: null,
+			session: { react, isCurrent: () => false, invalidate: () => {} }, release: () => {
+			for (const type of inputs) container.removeEventListener(type, guard, true);
+			if (mounted.remountTimer !== null) props.document.defaultView?.clearTimeout(mounted.remountTimer);
+			mounted.remountTimer = null;
+		} };
+		mounted.session = {
+			react,
+			isCurrent: () => !mounted.invalidated && nativeRoots.get(container) === mounted && Boolean(mounted.owner && isBigPictureActionCurrent(mounted.owner))
+				&& getDocumentReact(props.document) === react && findReactDom(props.document) === reactDom
+				&& steamWebpackRuntime.getRuntimeIdentity(props.document) === runtime,
+			invalidate: () => {
+				if (mounted.invalidated || nativeRoots.get(container) !== mounted) return;
+				mounted.invalidated = true;
+				mounted.owner?.onRuntimeInvalidated?.();
+				const view = props.document.defaultView;
+				if (!view || view.closed || view.document !== props.document) return;
+				// Never unmount synchronously inside the old renderer's commit.
+				mounted.remountTimer = view.setTimeout(() => {
+					mounted.remountTimer = null;
+					if (nativeRoots.get(container) !== mounted) return;
+					const owner = mounted.owner;
+					if (owner && isBigPictureActionCurrent(owner)) mountNativeBigPictureDetails(container, owner);
+					else unmountNativeBigPictureDetails(container);
+				}, 0);
+			},
+		};
+		state = mounted; nativeRoots.set(container, state);
+	}
+	state.owner = props;
+	const expected = state;
+	container.hidden = false;
+	state.handle.render(react.createElement(NativeBigPictureDetails, { ...props, renderSession: state.session, onCommitted: () => {
+		if (nativeRoots.get(container) !== expected || expected.owner !== props || !expected.session.isCurrent()) return;
+		expected.committedOwner = props;
+		props.onCommitted?.();
+	} }));
 	return true;
 }
 
@@ -678,6 +688,7 @@ export function unmountNativeBigPictureDetails(container: HTMLElement | null): v
 	if (!container) return;
 	const root = nativeRoots.get(container);
 	if (!root) return;
-	try { root.unmount(); } catch {}
 	nativeRoots.delete(container);
+	root.release();
+	try { root.handle.unmount(); } catch {}
 }

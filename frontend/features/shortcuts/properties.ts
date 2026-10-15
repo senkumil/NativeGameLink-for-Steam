@@ -14,7 +14,7 @@ import { undismissShortcut } from './dismissed';
 import { rememberedShortcutSteamAppId } from './link-history';
 import { bindShortcutAchievementSettings, shortcutAchievementSettingsHtml } from './achievement-properties';
 import { bindShortcutPlaytimeProperties, shortcutPlaytimePropertiesHtml } from './playtime-properties';
-import { tryInjectNativePropertiesField } from './native-properties';
+import { findNativePropertiesPage, tryInjectNativePropertiesField } from './native-properties';
 import { tryInjectCustomizationArtwork } from './customization-artwork';
 import { cancelPendingLinkJobs, enqueueLinkJob, hasPendingLinkJob, stageLinkJobForRecovery } from './link-job-queue';
 import { SHORTCUT_PROPERTIES_STYLE } from './properties-style';
@@ -37,8 +37,13 @@ export function mutationMayContainProperties(roots: Iterable<Node>): boolean {
 
 export function tryInjectPropertiesField(doc: Document, popupTitle: string): void {
 	if (!doc || !doc.body) return;
+	const searchRoot = findNativePropertiesPage(doc);
+	for (const node of doc.querySelectorAll(`.${GDL_PROP}, .gdl-native-properties-injected`)) {
+		if (!searchRoot?.contains(node)) node.remove();
+	}
+	if (!searchRoot) return;
 	setLocalizationDocumentProvider(() => doc);
-	if (doc.querySelector(`.${GDL_PROP}`) || doc.querySelector('.gdl-native-properties-injected')) return;
+	if (searchRoot.querySelector(`.${GDL_PROP}, .gdl-native-properties-injected`)) return;
 
 	const vrPhrases = [
 		loc('AppProperties_Shortcut_InVR', 'Include in VR Library').toLowerCase(),
@@ -61,7 +66,6 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 		'steam cloud', 'habilitar la interfaz superpuesta', 'ativar a sobreposição steam', 'activer la superposition steam', 'enable the steam overlay',
 	];
 
-	const searchRoot = doc.querySelector<HTMLElement>('.DialogContent, [class*="PagedSettingsDialog"], [class*="ModalDialog"], [class*="pagedsettings"], [class*="DialogBody"], [role="dialog"], [aria-modal="true"]') || doc.body || doc.documentElement;
 	const walker = doc.createTreeWalker(searchRoot, NodeFilter.SHOW_TEXT, null);
 	let tn: Text | null;
 	let anchor: Element | null = null;
@@ -91,11 +95,12 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 	// Keep the scrollable-container preference, but retain the nearest useful
 	// ancestor as the backup behavior used by the original working build.
 	let container: Element | null = null;
-	let fallbackContainer: Element | null = anchor.parentElement;
+	let fallbackContainer: Element | null = searchRoot;
 	let cur: Element | null = anchor;
 	for (let i = 0; i < 15 && cur && cur.parentElement && cur !== doc.body; i++) {
+		if (cur === searchRoot) { container = searchRoot; break; }
 		const parent = cur.parentElement;
-		if (parent === doc.body) break;
+		if (parent === doc.body || !searchRoot.contains(parent)) break;
 		cur = parent;
 		fallbackContainer = cur;
 		try {

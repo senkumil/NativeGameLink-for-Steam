@@ -16,6 +16,24 @@ import { steamSyncFailureMessage } from './achievement-sync-errors';
 
 const GDL_NATIVE_PROP = 'gdl-native-properties-injected';
 
+/** Launch dialogs reuse Properties wording. Only the application's paged
+ * settings shell and its visible content page authorize these controls. */
+export function findNativePropertiesPage(doc: Document): HTMLElement | null {
+	const shells = doc.querySelectorAll<HTMLElement>('[class~="AppProperties"], [class*="properties_AppProperties"], ._1FyBL6obxHQ2Z2CsaV2Gbz');
+	for (const shell of shells) {
+		if (!shell.querySelector('[class*="PagedSettingsDialog_PageList"]')) continue;
+		for (const page of shell.querySelectorAll<HTMLElement>('[class*="PagedSettingsDialog_PageContent"]')) {
+			let visible = page.isConnected;
+			for (let node: HTMLElement | null = page; visible && node; node = node.parentElement) {
+				const style = doc.defaultView?.getComputedStyle(node);
+				if (node.hidden || node.getAttribute('aria-hidden') === 'true' || style?.display === 'none' || style?.visibility === 'hidden') visible = false;
+			}
+			if (visible) return page;
+		}
+	}
+	return null;
+}
+
 function parseIpcObject<T>(raw: unknown): T | null {
 	try {
 		let value: unknown = raw;
@@ -111,7 +129,9 @@ function cardsSvg(): string {
 }
 
 export function tryInjectNativePropertiesField(doc: Document, gameTitle: string, container: Element): void {
-	if (!doc || !container || container.querySelector(`.${GDL_NATIVE_PROP}`)) return;
+	if (!doc || !container || container.ownerDocument !== doc) return;
+	const page = findNativePropertiesPage(doc);
+	if (!page || (page !== container && !page.contains(container)) || container.querySelector(`.${GDL_NATIVE_PROP}`)) return;
 
 	const section = doc.createElement('div');
 	section.className = GDL_NATIVE_PROP;

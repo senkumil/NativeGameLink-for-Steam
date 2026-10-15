@@ -19,7 +19,11 @@ const source = ts.transpileModule(fs.readFileSync('frontend/features/shortcuts/n
 }).outputText;
 async function fixture(status, syncResult = { ok: true }, items = [{ name: 'FIRST', earned: false }, { name: 'SECOND', earned: true }]) {
   const nodes = new Map(); let picker, statusReads = 0; const writes = [];
-  const doc = { createElement: () => element(), defaultView: { location: { href: 'https://steamloopback.host/properties/550' } } };
+  const page = { isConnected: true, getAttribute: () => null, contains: () => true };
+  const shell = { querySelector: () => ({}), querySelectorAll: () => [page] };
+  const doc = { createElement: () => element(), querySelectorAll: () => [shell], defaultView: {
+    location: { href: 'https://steamloopback.host/properties/550' }, getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
+  } };
   function element() { return { style: {}, ownerDocument: doc, isConnected: true, listeners: new Map(),
     addEventListener(k, v) { this.listeners.set(k, v); }, querySelector(k) { if (!nodes.has(k)) nodes.set(k, element()); return nodes.get(k); },
   }; }
@@ -39,7 +43,7 @@ async function fixture(status, syncResult = { ok: true }, items = [{ name: 'FIRS
   const context = vm.createContext({ exports: {}, require: key => { if (!imports[key]) throw Error(key); return imports[key]; },
     window: { clearInterval() {}, setInterval() { throw Error('Unexpected timer'); } }, document: doc, console, Date });
   vm.runInContext(source, context);
-  context.exports.tryInjectNativePropertiesField(doc, 'Left 4 Dead 2', { querySelector: () => null, appendChild() {} });
+  context.exports.tryInjectNativePropertiesField(doc, 'Left 4 Dead 2', { ownerDocument: doc, querySelector: () => null, appendChild() {} });
   await nodes.get('.gdl-native-open-picker-btn').listeners.get('click')();
   return { picker, writes, get statusReads() { return statusReads; }, get statusText() { return nodes.get('.gdl-native-status').textContent; } };
 }

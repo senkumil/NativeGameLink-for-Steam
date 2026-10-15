@@ -217,6 +217,14 @@ La información del juego utiliza componentes locales y enlaces nativos con URL
 explícita. Se excluyen helpers que mezclan esa presentación con consultas de
 cuenta del AppID oficial. Las colecciones conservan sus objetos y destinos reales.
 
+La ficha, los enlaces y las tarjetas de colecciones se resuelven por los contratos
+del bundle instalado cuando cambian los identificadores de módulo. La vista conserva
+los métodos de artwork del shortcut incluso en ventanas sin stores globales. Las
+categorías oficiales alimentan los iconos y textos localizados del componente nativo;
+no se enumeran como etiquetas inglesas ni se duplican las variantes del control.
+`check-bp-information-components.mjs` verifica esos contratos, la identidad del
+artwork y la ausencia de escrituras en los registros reales.
+
 Quedan por comprobar en Steam real: geometría 1:1, pie de acciones y glyphs de
 cada dispositivo, hotplug, teclado virtual, overlays y consumo sostenido de RAM.
 La suite prueba limpieza de recursos, pero no equivale a una medición de memoria

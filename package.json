@@ -85,7 +85,7 @@
 		"check:achievement-state-ownership": "node scripts/check-achievement-state-ownership.mjs",
 		"check:achievement-native-schema": "node scripts/check-achievement-native-schema.mjs",
 		"check:achievement-metadata": "node scripts/check-achievement-metadata.mjs",
-		"check:achievement-sync": "node scripts/check-achievement-sync.mjs && node scripts/check-achievement-picker-runtime-browser.mjs",
+		"check:achievement-sync": "node scripts/check-achievement-sync.mjs && node scripts/check-achievement-picker-runtime-browser.mjs && node scripts/check-properties-isolation-browser.mjs",
 		"check:achievement-visual-isolation": "node scripts/check-achievement-visual-isolation.mjs",
 		"check:achievement-style-isolation-browser": "node scripts/check-achievement-style-isolation-browser.mjs",
 		"check:controller-runtime": "node scripts/check-controller-runtime.mjs && node scripts/check-controller-navigation-browser.mjs",

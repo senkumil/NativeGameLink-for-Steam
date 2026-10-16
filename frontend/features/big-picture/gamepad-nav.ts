@@ -136,6 +136,7 @@ export function installBigPictureGamepadNavigation(
 	let activeFocusRingEl: HTMLElement | null = null;
 	let activeFocusRingRoot: HTMLElement | null = null;
 	let currentRingTarget: HTMLElement | null = null;
+	let ringResizeObserver: ResizeObserver | null = null;
 
 	const getActiveModal = (): HTMLElement | null => ownedModal(doc);
 	const hasForeignModal = (): boolean => foreignModalVisible(doc);
@@ -148,6 +149,7 @@ export function installBigPictureGamepadNavigation(
 	};
 
 	const hideFocusRing = (): void => {
+		ringResizeObserver?.disconnect(); ringResizeObserver = null;
 		currentRingTarget = null;
 		if (activeFocusRingEl) {
 			activeFocusRingEl.remove();
@@ -172,10 +174,12 @@ export function installBigPictureGamepadNavigation(
 		ring.style.display = '';
 
 		const rootRect = ringRoot.getBoundingClientRect();
-		const left = targetRect.left - rootRect.left;
-		const top = targetRect.top - rootRect.top;
-		const width = targetRect.width;
-		const height = targetRect.height;
+		const scaleX = ringRoot.offsetWidth > 0 ? rootRect.width / ringRoot.offsetWidth : 1;
+		const scaleY = ringRoot.offsetHeight > 0 ? rootRect.height / ringRoot.offsetHeight : 1;
+		const left = (targetRect.left - rootRect.left) / (scaleX || 1);
+		const top = (targetRect.top - rootRect.top) / (scaleY || 1);
+		const width = targetRect.width / (scaleX || 1);
+		const height = targetRect.height / (scaleY || 1);
 		ring.style.left = `${left}px`;
 		ring.style.top = `${top}px`;
 		ring.style.width = `${width}px`;
@@ -205,6 +209,7 @@ export function installBigPictureGamepadNavigation(
 			activeFocusRingRoot.id = 'gdl-bp-focus-ring-root';
 			activeFocusRingRoot.className = focusClasses.FocusRingRoot;
 			activeFocusRingRoot.style.zIndex = '50';
+			Object.assign(activeFocusRingRoot.style, { position: 'fixed', inset: '0', pointerEvents: 'none' });
 			if (activeFocusRingRoot.parentElement !== doc.body) doc.body.appendChild(activeFocusRingRoot);
 		}
 		activeFocusRingRoot.style.display = '';
@@ -215,7 +220,15 @@ export function installBigPictureGamepadNavigation(
 			activeFocusRingEl.id = 'gdl-bp-focus-ring';
 			activeFocusRingEl.className = focusClasses.FocusRing;
 			activeFocusRingEl.style.pointerEvents = 'none';
+			activeFocusRingEl.style.position = 'absolute';
 			activeFocusRingRoot.appendChild(activeFocusRingEl);
+			ringResizeObserver?.disconnect();
+			if (win.ResizeObserver) {
+				ringResizeObserver = new win.ResizeObserver(() => {
+					if (currentRingTarget && activeFocusRingEl && activeFocusRingRoot) updateFocusRingPosition(currentRingTarget, activeFocusRingEl, activeFocusRingRoot);
+				});
+				ringResizeObserver.observe(target);
+			}
 		}
 		if (activeFocusRingEl) updateFocusRingPosition(target, activeFocusRingEl, activeFocusRingRoot);
 	};

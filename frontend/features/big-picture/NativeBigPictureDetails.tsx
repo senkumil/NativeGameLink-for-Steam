@@ -9,10 +9,6 @@ import {
 } from '../../steam/gamepad/components/AppDetailsNativeClasses';
 import { steamWebpackRuntime } from '../../steam/modules/SteamWebpackRuntime';
 import {
-	resolveNativeDLCComponent,
-	resolveNativeScreenshotsComponent,
-	resolveNativeNotesComponent,
-	resolveNativeWorkshopComponent,
 	resolveNativeAppDetails,
 	resolveNativeConfigContext,
 	getNavContext,
@@ -21,6 +17,9 @@ import {
 } from '../../steam/gamepad/components/AppDetailsNativeComponents';
 import { FriendsSection, FallbackActivitySection } from './activity-section';
 import { NativeBigPictureAchievements } from './NativeBigPictureAchievements';
+import { getInstantPlaytimeStats } from '../playtime/service';
+import { isShortcutPlaytimeTrackingEnabled } from '../playtime/playtime-settings';
+import { NativeBigPictureCarousel } from './NativeBigPictureCarousel';
 import { openSteamNavigationUrl, extractCommunityYoutubeId } from '../../steam/navigation';
 import { installBigPictureGamepadNavigation, returnBigPictureFocusToTabs, performBigPictureSemanticAction, switchBigPictureNativeTab } from './gamepad-nav';
 import { findBigPictureTabStrip } from './tabs';
@@ -33,6 +32,7 @@ import { InformationTab } from './information-tab';
 import { NativeFocusable, NativeButton, NativeProgress, NativeSpinner, NativeIcons, BigPictureUIProvider } from './document-primitives';
 import { getDocumentReact, getDocumentRenderer, resolveNativeFocusable } from '../../steam/gamepad/document-ui-runtime';
 import { getMountedBigPictureNavNode } from './native-focus';
+import { resolveNativeStuffComponents } from '../../steam/gamepad/components/NativeStuffComponents';
 
 export interface NativeDetailsProps {
 	tab: BigPictureTab;
@@ -127,6 +127,7 @@ class Section extends React.Component<SectionProps> {
 				</div>
 			) : null}
 			<NativeFocusable
+				focusable={false}
 				flow-children="column"
 				className={nativeClasses(section?.AppDetailsSectionContainer, Boolean(label) && section?.AppDetailsSectionHasLabel, rightColumn && section?.RightColumnSection)}
 				scrollIntoViewWhenChildFocused
@@ -140,15 +141,11 @@ class Section extends React.Component<SectionProps> {
 }
 
 function NativeStrip({ name, children, className, document }: { name: string; children: ReactNode; className?: string; document?: Document }): React.ReactElement {
-	const NativeCarousel = resolveNativeSummaryCarousel(document);
-	const fallback = <NativeFocusable flow-children="row" className={className}>{children}</NativeFocusable>;
-	if (!NativeCarousel) return fallback;
+	const fallback = <NativeFocusable focusable={false} flow-children="row" className={className}>{children}</NativeFocusable>;
+	if (!document) return fallback;
 	return (
 		<NativeDetailsBoundary name={`${name} carousel`} fallback={fallback}>
-			<NativeCarousel aria-label={name} className={className} leftMargin={32} edgeMask="none" fnUpdateArrows={() => {}}>
-				{children}
-				<div data-carousel="ignore" />
-			</NativeCarousel>
+			<NativeBigPictureCarousel document={document} name={name} className={className}>{children}</NativeBigPictureCarousel>
 		</NativeDetailsBoundary>
 	);
 }
@@ -388,33 +385,39 @@ function NotesSection(props: NativeDetailsProps & { classes: NativeAppDetailsCla
 
 function StuffTab(props: NativeDetailsProps): React.ReactElement {
 	const classes = resolveNativeAppDetailsClasses(props.document);
-	const appid = props.shortcut.id >>> 0;
 	const { overview, details } = createBigPictureDetailViews(props.document, props.shortcut, props.data.game);
 	const publicDetails = resolveNativeAppDetails(props.document, Number(props.shortcut.steamAppId));
 
-	const NativeDLC = appid > 0 ? resolveNativeDLCComponent(props.document) : null;
-	const NativeScreenshots = appid > 0 ? resolveNativeScreenshotsComponent(props.document) : null;
-	const NativeNotes = appid > 0 ? resolveNativeNotesComponent(props.document) : null;
-	const NativeWorkshop = appid > 0 ? resolveNativeWorkshopComponent(props.document) : null;
+	const sections = resolveNativeStuffComponents(props.document);
+	const NativeScreenshots = sections.Media;
+	const NativeNotes = sections.Notes;
+	const NativeCards = sections.Cards;
+	const NativeReview = sections.Review;
+	const publicView = createBigPictureDetailViews(props.document, { ...props.shortcut, id: Number(props.shortcut.steamAppId) }, props.data.game);
+	const NativeDLC = sections.DLC;
+	const NativeWorkshop = sections.Workshop;
+	// Review actions retain the public AppID, while the displayed duration is
+	// this shortcut's measured playtime. These views never replace Steam records.
+	const measured = isShortcutPlaytimeTrackingEnabled(props.shortcut.id) ? getInstantPlaytimeStats(props.shortcut.id, props.shortcut.steamAppId) : null;
+	const minutes = Math.max(0, measured ? (measured.totalSeconds > 0 ? measured.totalSeconds / 60 : measured.minutesForever)
+		: Number(overview.minutes_playtime_forever ?? details.nPlaytimeForever) || 0);
+	const reviewOverview = new Proxy(publicView.overview, { get: (target, key) => key === 'minutes_playtime_forever' ? minutes : target[key] });
+	const reviewDetails = { ...publicDetails, unAppID: Number(props.shortcut.steamAppId), nPlaytimeForever: minutes };
+	const duration = loc(minutes >= 60 ? 'Played_Hours' : 'Played_Minutes', minutes >= 60 ? '%s horas' : '%s minutos')
+		.replace(/%\d*\$?[sd]/, minutes >= 60 ? (minutes / 60).toLocaleString(undefined, { maximumFractionDigits: 1 }) : String(Math.round(minutes)));
+	const reviewFallback = minutes < 10 ? null : <Section classes={classes} label={loc('AppDetails_Review_YourReview', 'Mi reseña')} rightColumn>
+		<div className={classes.Review?.ReviewMetadata}>{loc('AppDetails_Review_PlayedForTime', 'Has jugado durante %1$s').replace(/%\d*\$?[s]/, duration)}</div>
+		<NativeButton {...clickProps(() => {
+			if (isBigPictureActionCurrent(props)) openSteamNavigationUrl(props.document, 'https://steamcommunity.com/my/recommended/');
+		})}>{loc('AppDetails_Review_ViewAllReviews', 'Ver todas mis reseñas')}</NativeButton>
+	</Section>;
 
 	return (
 		<>
 			<AchievementsSection {...props} classes={classes} />
-			<TradingCardsSection {...props} classes={classes} />
-			{NativeScreenshots ? (
-				<NativeDetailsBoundary name="screenshots" fallback={<ScreenshotsSection {...props} classes={classes} />}>
-					<NativeScreenshots overview={overview} details={details} />
-				</NativeDetailsBoundary>
-			) : (
-				<ScreenshotsSection {...props} classes={classes} />
-			)}
-			{NativeNotes ? (
-				<NativeDetailsBoundary name="notes" fallback={<NotesSection {...props} classes={classes} />}>
-					<NativeNotes overview={overview} details={details} />
-				</NativeDetailsBoundary>
-			) : (
-				<NotesSection {...props} classes={classes} />
-			)}
+			{NativeCards ? <NativeDetailsBoundary name="cards" fallback={<TradingCardsSection {...props} classes={classes} />}>
+				<NativeCards details={{ unAppID: Number(props.shortcut.steamAppId) }} />
+			</NativeDetailsBoundary> : <TradingCardsSection {...props} classes={classes} />}
 			{NativeDLC && publicDetails && props.data.game?.dlc?.length ? (
 				<NativeDetailsBoundary name="dlc" fallback={null}>
 					<NativeDLC details={publicDetails} showRemainder />
@@ -425,6 +428,24 @@ function StuffTab(props: NativeDetailsProps): React.ReactElement {
 					<NativeWorkshop details={publicDetails} />
 				</NativeDetailsBoundary>
 			) : null}
+			{NativeScreenshots ? (
+				<NativeDetailsBoundary name="screenshots" fallback={<ScreenshotsSection {...props} classes={classes} />}>
+					<NativeScreenshots overview={overview} details={details} />
+				</NativeDetailsBoundary>
+			) : (
+				<ScreenshotsSection {...props} classes={classes} />
+			)}
+			{NativeReview && publicDetails ? <NativeDetailsBoundary name="review" fallback={reviewFallback}>
+				<NativeReview overview={reviewOverview} details={reviewDetails} />
+			</NativeDetailsBoundary> : reviewFallback}
+			{NativeNotes ? (
+				<NativeDetailsBoundary name="notes" fallback={<NotesSection {...props} classes={classes} />}>
+					<NativeNotes overview={overview} details={details} />
+				</NativeDetailsBoundary>
+			) : (
+				<NotesSection {...props} classes={classes} />
+			)}
+
 		</>
 	);
 }

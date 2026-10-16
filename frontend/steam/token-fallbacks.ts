@@ -46,6 +46,7 @@ export const SPANISH_TOKEN_FALLBACKS: Record<string, string> = {
 	AppDetails_Link_Guides: 'Guías',
 	AppDetails_Link_Workshop: 'Steam Workshop',
 	AppDetails_Link_Support: 'Soporte',
+	ActionButtonLabelBack: 'Volver',
 	Button_Close: 'Cerrar',
 	Button_Cancel: 'Cancelar',
 	Button_Continue: 'Continuar',

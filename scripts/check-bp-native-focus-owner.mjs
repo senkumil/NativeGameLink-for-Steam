@@ -147,6 +147,84 @@ check(resolved.providers.map(item => item.kind).join(',') === 'active-tree,focus
 check(resolved.providers[0].value === a.active && resolved.providers[1].value === a.ring && resolved.providers[2].value === a.focus
   && resolved.providers[3].value === a.tree.Controller && resolved.providers[4].value === a.instance,
   'Raw provider values retain exact native identities instead of constructing another tree or manager');
+const queryContext = React.createContext(undefined), queryCalls = [];
+const queryClient = Object.fromEntries(['getQueryCache', 'getMutationCache', 'defaultQueryOptions', 'mount', 'unmount']
+  .map(key => [key, () => { queryCalls.push(key); throw Error('Provider discovery must never execute a QueryClient method'); }]));
+const outerQueryClient = { ...queryClient };
+const unrelatedContext = React.createContext(null);
+attach(a, a.panel, [[queryContext, outerQueryClient], [unrelatedContext, { getQueryCache() {}, getMutationCache() {} }],
+  [queryContext, queryClient], [navContext, a.navNode]]);
+const queryProviders = resolveSteamNav(a.doc)?.providers;
+check(queryProviders?.length === 1 && queryProviders[0].kind === 'query-client'
+  && queryProviders[0].context === queryContext && queryProviders[0].value === queryClient,
+  'Native media and notes inherit the nearest exact committed QueryClient provider, without copying arbitrary contexts');
+check(queryCalls.length === 0, 'Discovering an owner QueryClient neither reads its caches nor mounts another client');
+const queryFork = attach(a, a.panel, [[queryContext, queryClient], [navContext, a.navNode]], true);
+queryFork.other[1].memoizedProps.value = outerQueryClient;
+check(resolveSteamNav(a.doc)?.providers[0].value === queryClient,
+  'A pending QueryClient provider value cannot replace the committed owner cache');
+queryFork.hostRoot.stateNode.current = queryFork.other[0];
+check(resolveSteamNav(a.doc)?.providers[0].value === outerQueryClient,
+  'A newly committed owner QueryClient replaces its predecessor by identity');
+attach(a, a.panel, [[queryContext, queryClient]]);
+check(resolveSteamNav(a.doc) === null, 'A QueryClient without a proven native panel/navigation owner is never borrowed');
+const historyContext = React.createContext(undefined), historyCalls = [];
+const history = { location: { pathname: `/library/app/${a.doc.routeId}` },
+  ...Object.fromEntries(['push', 'replace', 'go', 'goBack', 'goForward', 'listen', 'createHref']
+    .map(key => [key, () => { historyCalls.push(key); throw Error('Provider discovery must not execute history methods'); }])) };
+const outerHistory = { ...history, location: { pathname: '/library' } };
+attach(a, a.panel, [[historyContext, outerHistory], [queryContext, queryClient], [historyContext, history],
+  [unrelatedContext, { push() {}, replace() {}, location: history.location }], [navContext, a.navNode]]);
+const contentProviders = resolveSteamNav(a.doc)?.providers;
+check(contentProviders?.length === 2 && contentProviders[0].kind === 'router-history'
+  && contentProviders[0].context === historyContext && contentProviders[0].value === history
+  && contentProviders[1].kind === 'query-client' && contentProviders[1].value === queryClient,
+  'Native media and notes reuse the nearest complete router history and QueryClient from their exact owner chain');
+check(historyCalls.length === 0 && queryCalls.length === 0,
+  'Inheriting native content providers performs no route changes, subscriptions or cache calls');
+const historyFork = attach(a, a.panel, [[historyContext, history], [navContext, a.navNode]], true);
+historyFork.other[1].memoizedProps.value = outerHistory;
+check(resolveSteamNav(a.doc)?.providers[0].value === history,
+  'A pending history provider does not replace the currently committed native navigation history');
+historyFork.hostRoot.stateNode.current = historyFork.other[0];
+check(resolveSteamNav(a.doc)?.providers[0].value === outerHistory,
+  'A history provider replacement becomes visible only after the owner commits it');
+attach(a, a.panel, [[historyContext, history]]);
+check(resolveSteamNav(a.doc) === null, 'A history-shaped value without a proven native owner grants no navigation authority');
+const installedLibrarySource = fs.readFileSync(path.join(steam, 'library.js'), 'utf8');
+check(installedLibrarySource.includes('called useActiveServiceTransportContext outside of ServiceTransportProvider')
+  && /useActiveSteamInterface:[\w$]+,useActiveCMInterface:[\w$]+,useStorage:[\w$]+/.test(installedLibrarySource),
+  'The installed media service Provider publishes the exact interface/storage hook contract');
+check(installedLibrarySource.includes('called useActiveAccount outside of ActiveAccountProvider')
+  && installedLibrarySource.includes('return w.useActiveAccount()'),
+  'The installed media account consumer reads the existing active-account hook Provider');
+const serviceContext = React.createContext(undefined), accountContext = React.createContext(undefined), serviceCalls = [];
+const service = Object.fromEntries(['useActiveSteamInterface', 'useActiveCMInterface', 'useStorage']
+  .map(key => [key, () => { serviceCalls.push(key); throw Error('Provider discovery must never execute service hooks'); }]));
+const account = { useActiveAccount() { serviceCalls.push('useActiveAccount'); throw Error('Provider discovery must never read an account'); } };
+const outerService = { ...service }, outerAccount = { ...account };
+const mediaOwnerRecords = [[serviceContext, outerService], [accountContext, outerAccount], [serviceContext, service],
+  [accountContext, account], [unrelatedContext, { useActiveSteamInterface() {} }], [navContext, a.navNode]];
+attach(a, a.panel, mediaOwnerRecords);
+const mediaProviders = resolveSteamNav(a.doc)?.providers;
+check(mediaProviders?.length === 2 && mediaProviders[0].kind === 'active-account' && mediaProviders[0].value === account
+  && mediaProviders[0].context === accountContext && mediaProviders[1].kind === 'service-transport'
+  && mediaProviders[1].value === service && mediaProviders[1].context === serviceContext,
+  'Native media receives the nearest exact active-account and complete service/storage Providers, without arbitrary context copying');
+check(serviceCalls.length === 0, 'Resolving media Providers never executes hooks, reads account data or creates a service transport');
+const serviceFork = attach(a, a.panel, [[serviceContext, service], [accountContext, account], [navContext, a.navNode]], true);
+serviceFork.other[1].memoizedProps.value = outerService;
+serviceFork.other[2].memoizedProps.value = outerAccount;
+check(resolveSteamNav(a.doc)?.providers[0].value === account && resolveSteamNav(a.doc)?.providers[1].value === service,
+  'Pending service/account hooks cannot replace the committed native owner values');
+serviceFork.hostRoot.stateNode.current = serviceFork.other[0];
+check(resolveSteamNav(a.doc)?.providers[0].value === outerAccount && resolveSteamNav(a.doc)?.providers[1].value === outerService,
+  'Committing the owner branch replaces service/account Providers by exact identity');
+attach(a, a.panel, [[serviceContext, service], [accountContext, account]]);
+check(resolveSteamNav(a.doc) === null, 'Service/account-shaped values cannot be borrowed without a proven native panel owner');
+attach(a, a.panel, mediaOwnerRecords); a.doc.routeId = 550;
+check(resolveSteamNav(a.doc) === null, 'A native game destination cannot inherit linked-page service/account Providers');
+a.doc.routeId = 3000000001;
 const deep = attach(a), nativeProvider = deep.host.return;
 let deepParent = nativeProvider.return;
 for (let index = 0; index < 180; index++) {

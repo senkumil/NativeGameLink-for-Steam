@@ -20,7 +20,7 @@ try {
   await page.setContent('<style>body{background:#151b23;color:white}button,input{display:block;width:220px;height:44px;margin:12px}'
     + '#tabs{display:flex}#gdl-bp-detail-root{padding:20px}#gdl-bp-focus-ring-root{position:fixed;inset:0;pointer-events:none}</style>'
     + '<nav id="tabs"></nav><main id="panel"><div id="gdl-bp-detail-root"></div></main>');
-  const report = await page.evaluate(sources => {
+  const report = await page.evaluate(async sources => {
     let checks = 0, now = 1000, hiddenKeyboards = 0, native = true, route = 3000000001, metadata = 1790600;
     const check = (condition, message) => { if (!condition) throw Error(message); checks++; };
     const originalDateNow = Date.now, originalSet = window.setTimeout, originalClear = window.clearTimeout;
@@ -149,6 +149,20 @@ try {
       xAction.setAttribute('aria-disabled', 'true'); press(2);
       check(xClicks === 1, 'Disabled semantic actions cannot be triggered through X');
       xAction.removeAttribute('aria-disabled');
+
+      document.body.style.zoom = '1.25'; first.focus();
+      await new Promise(resolve => originalSet(resolve, 40));
+      const alignedRing = () => {
+        const ring = document.getElementById('gdl-bp-focus-ring');
+        if (!ring) return false;
+        const a = first.getBoundingClientRect(), b = ring.getBoundingClientRect();
+        return Math.abs(a.left - b.left) < 2 && Math.abs(a.top - b.top) < 2 && Math.abs(a.width - b.width) < 2;
+      };
+      check(alignedRing(), 'Fallback focus frame uses owner CSS coordinates under Steam UI scaling');
+      first.style.width = '500px';
+      await new Promise(resolve => originalSet(resolve, 40));
+      check(alignedRing(), 'Focus frame follows an expanded achievement without another navigation event');
+      first.style.width = ''; document.body.style.zoom = ''; now += 600;
 
       const editor = document.createElement('input'); root.appendChild(editor);
       document.addEventListener(editable.EXIT_TEXT_EDITOR_EVENT, () => first.focus());

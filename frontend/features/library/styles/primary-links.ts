@@ -86,9 +86,9 @@ export function ensurePrimaryLinksStyles(doc: Document): void {
 		#gdl-link-bar .gdl-primary-more summary { list-style:none;display:flex;align-items:center;justify-content:center;width:34px;height:26px;border-radius:3px;color:rgba(255,255,255,0.35);font-size:18px;letter-spacing:1px;cursor:pointer;user-select:none; }
 		#gdl-link-bar .gdl-primary-more summary::-webkit-details-marker { display:none; }
 		#gdl-link-bar .gdl-primary-more[open] summary,#gdl-link-bar .gdl-primary-more summary:hover { color:#fff;background:rgba(255,255,255,.08); }
-		#gdl-link-bar .gdl-primary-more-menu { position:absolute;right:0;top:32px;min-width:172px;padding:5px;background:#202a36;border:1px solid rgba(255,255,255,.12);box-shadow:0 8px 22px rgba(0,0,0,.48); }
-		#gdl-link-bar .gdl-primary-overflow-link { display:block;padding:7px 10px;color:#a0abb8;text-decoration:none;font-size:13px;white-space:nowrap; }
-		#gdl-link-bar .gdl-primary-overflow-link:hover { color:#fff;background:rgba(102,192,244,.16); }
+		#gdl-link-bar .gdl-primary-more-menu { position:fixed;inset:auto;margin:0;min-width:115px;padding:4px 0;background:#3d4450;border:0;border-radius:0;box-shadow:0 5px 12px rgba(0,0,0,.5);width:max-content; }
+		#gdl-link-bar .gdl-primary-overflow-link { display:block;padding:8px 16px;color:#dcdedf;text-decoration:none;font-family:"Motiva Sans",Arial,sans-serif;font-size:14px;line-height:18px;white-space:nowrap;box-sizing:border-box; }
+		#gdl-link-bar .gdl-primary-overflow-link:hover,#gdl-link-bar .gdl-primary-overflow-link:focus-visible { color:#fff;background:#4b5361;outline:none; }
 
 	`);
 }

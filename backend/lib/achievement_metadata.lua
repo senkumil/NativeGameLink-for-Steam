@@ -6,6 +6,20 @@ local state = deps.achievement_state
 local M = {}
 local VERSION, TTL, STALE_TTL = 3, 1800, 30 * 86400
 
+function M.icon_url(appid, icon)
+    icon = tostring(icon or "")
+    if icon == "" then return "" end
+    if icon:match("^https?://") then
+        local legacy_app, file = icon:match("^https?://[^/]+/steamcommunity/public/images/apps/(%d+)/([^/?]+)$")
+        if not legacy_app then return icon end
+        appid, icon = legacy_app, file
+    end
+    local base = icon:match("([^/\\]+)$") or icon
+    if base == "" then return "" end
+    if not base:match("%.[%w]+$") then base = base .. ".jpg" end
+    return "https://shared.fastly.steamstatic.com/community_assets/images/apps/" .. tostring(appid) .. "/" .. base
+end
+
 local function read_native_schema(appid)
     if not millennium or type(millennium.steam_path) ~= "function"
         or not util or type(util.parse_binary_vdf_object) ~= "function" then return nil end
@@ -65,6 +79,12 @@ function M.read_cached(path, appid, language, allow_stale)
         or entry.language ~= language or type(entry.by_name) ~= "table" then return nil end
     local age = os.time() - (tonumber(entry.fetched_at) or 0)
     if age < 0 or age > (allow_stale and STALE_TTL or TTL) then return nil end
+    for _, row in pairs(entry.by_name) do
+        if type(row) == "table" then
+            row.icon = M.icon_url(appid, row.icon)
+            row.icongray = M.icon_url(appid, row.icongray)
+        end
+    end
     return entry.by_name
 end
 
@@ -83,8 +103,8 @@ function M.normalize_rows(appid, rows)
                 if count > 2000 then return {} end
                 result[name] = { name = name, title = tostring(row.strName or row.title or name),
                     description = tostring(row.strDescription or row.description or ""),
-                    icon = tostring(row.strImage or row.icon or ""),
-                    icongray = tostring(row.strImageGray or row.icongray or row.strImage or row.icon or ""),
+                    icon = M.icon_url(appid, row.strImage or row.icon),
+                    icongray = M.icon_url(appid, row.strImageGray or row.icongray or row.strImage or row.icon),
                     hidden = row.bHidden == true or row.hidden == true,
                     global_percent = tonumber(row.flAchieved or row.global_percent) }
             end

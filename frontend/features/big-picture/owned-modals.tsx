@@ -6,6 +6,7 @@ import { steamUIModeService } from '../../steam/ui/SteamUIModeService';
 import { captureBigPictureReturnFocus, dismissBigPictureFocusRing } from './gamepad-nav';
 import { BigPictureUIProvider } from './document-primitives';
 import { registerBigPictureModalClose } from './modal-actions';
+import { resolveSteamNav } from '../../steam/gamepad/components/AppDetailsNativeComponents';
 
 type OwnedModal = { close: (restoreFocus?: boolean) => void; isCurrent: () => boolean };
 const modalsByDocument = new Map<Document, Set<OwnedModal>>();
@@ -14,6 +15,7 @@ export interface BigPictureModalLease {
 	isCurrent: () => boolean;
 	invalidate: () => void;
 }
+export interface BigPictureModalOptions { fullScreen?: boolean }
 
 export function disposeBigPictureModals(doc: Document): void {
 	for (const modal of [...(modalsByDocument.get(doc) || [])]) modal.close(false);
@@ -23,9 +25,9 @@ export function disposeBigPictureModals(doc: Document): void {
 /** Every modal belongs to one linked-detail mount. Steam's other dialogs and
  * routing remain untouched, including when a pending callback closes a modal. */
 export function showBigPictureModal(doc: Document, id: string, title: string,
-	render: (close: () => void, lease: BigPictureModalLease) => ReactNode): boolean {
+	render: (close: () => void, lease: BigPictureModalLease) => ReactNode, options: BigPictureModalOptions = {}): boolean {
 	const root = doc.getElementById('gdl-bp-detail-root');
-	if (!root || !id.startsWith('gdl-bp-')) return false;
+	if (!root || !/^gdl-bp-[a-z0-9-]+$/.test(id)) return false;
 	const shortcutId = root.dataset.gdlShortcutAppId, steamId = root.dataset.gdlSteamAppId;
 	const generation = root.dataset.gdlBpGeneration;
 	const ownsRoute = () => root.isConnected && doc.getElementById(root.id) === root
@@ -36,6 +38,14 @@ export function showBigPictureModal(doc: Document, id: string, title: string,
 	const modalRuntime = getDocumentModalRuntime(doc), ownerReact = getDocumentReact(doc);
 	if (!modalRuntime || !ownerReact) return false;
 	const { ModalRoot, showModal } = modalRuntime;
+	const fullScreen = options.fullScreen === true;
+	const modalClass = `gdl-bp-fullscreen-modal-${id}`, bodyClass = `gdl-bp-fullscreen-body-${id}`;
+	// Steam creates the modal's navigation tree, focus ring and window context.
+	// Only the committed owner's data/router providers cross into its content;
+	// borrowing the details tree here would leave B/Back on the wrong screen.
+	let providers: Array<{ context: any; value: any }> = [];
+	try { providers = (resolveSteamNav?.(doc)?.providers || []).filter(provider =>
+		['query-client', 'router-history', 'service-transport', 'active-account'].includes(provider.kind)); } catch {}
 	const renderer = getDocumentRenderer(doc), runtime = steamWebpackRuntime.getRuntimeIdentity(doc);
 	const isCurrent = () => {
 		if (!ownsRoute() || getDocumentReact(doc) !== ownerReact || getDocumentRenderer(doc) !== renderer
@@ -79,14 +89,27 @@ export function showBigPictureModal(doc: Document, id: string, title: string,
 		}, []);
 		ownerReact!.useLayoutEffect(() => { if (!isCurrent()) close(false); });
 		if (!isCurrent()) return null;
-		return ownerReact!.createElement('div', { id, 'data-gdl-bp-modal-owner': shortcutId, ref: element }, props.children);
+		let content = props.children;
+		for (const provider of providers) content = ownerReact!.createElement(provider.context.Provider, { value: provider.value }, content);
+		return ownerReact!.createElement('div', { id, 'data-gdl-bp-modal-owner': shortcutId,
+			...(fullScreen ? { 'data-gdl-bp-fullscreen': '1' } : {}), ref: element },
+			fullScreen ? ownerReact!.createElement('style', { 'data-gdl-bp-fullscreen-styles': id }, `
+.${modalClass}{padding:0!important;overflow:hidden!important}
+.${modalClass} .ModalPosition_Content{width:100%!important;height:100%!important;max-width:none!important;max-height:none!important;margin:0!important;padding:0!important}
+.${modalClass} .ModalPosition_TopBar,.${modalClass} .ModalPosition_Dismiss{display:none!important}
+.${bodyClass}{position:fixed!important;inset:var(--basicui-header-height,56px) 0 var(--gamepadui-current-footer-height,56px)!important;width:100%!important;height:auto!important;max-width:none!important;max-height:none!important;min-width:0!important;min-height:0!important;margin:0!important;padding:0!important;border:0!important;border-radius:0!important;box-sizing:border-box!important;animation:none!important;transform:none!important;background:transparent!important;overflow:hidden!important}
+.${bodyClass} .DialogContent_InnerWidth,.${bodyClass} .DialogBody{width:100%!important;height:100%!important;max-width:none!important;max-height:none!important;min-width:0!important;min-height:0!important;margin:0!important;padding:0!important;box-sizing:border-box!important}
+.${bodyClass}>.DialogContent_InnerWidth>form,.${bodyClass}>form{width:100%!important;height:100%!important;min-height:0!important;margin:0!important;padding:0!important;box-sizing:border-box!important}
+#${id}[data-gdl-bp-fullscreen="1"]{position:relative!important;width:100%!important;height:100%!important;max-width:none!important;max-height:none!important;min-width:0!important;min-height:0!important;overflow:hidden!important;box-sizing:border-box!important}
+`) : null, content);
 	}
 	let active = modalsByDocument.get(doc);
 	if (!active) modalsByDocument.set(doc, active = new Set());
 	active.add(state);
 	try {
 		handle = showModal(
-			<ModalRoot onCancel={() => close()} closeModal={() => close()} bAllowFullSize bDisableBackgroundDismiss>
+			<ModalRoot onCancel={() => close()} closeModal={() => close()} bAllowFullSize bDisableBackgroundDismiss
+				{...(fullScreen ? { className: bodyClass, modalClassName: modalClass, bHideCloseIcon: true } : {})}>
 				<Lifecycle><BigPictureUIProvider document={doc}>{render(() => close(), lease)}</BigPictureUIProvider></Lifecycle>
 			</ModalRoot>, view as EventTarget,
 			{ strTitle: title, bNeverPopOut: true, bHideMainWindowForPopouts: false },

@@ -137,8 +137,10 @@ await runBPBrowserScenario(sources, async fixture => {
     React.createElement(RingContext.Provider, { value: nativeRing }, React.createElement(NavContext.Provider, { value: parent },
     React.createElement(NativeFocusable, { 'flow-children': 'column', focusable: false, navRef: handle => { ownHandle = handle; },
       onCancelButton: () => nav.returnBigPictureFocusToTabs(document) },
+    React.createElement(NativeFocusable, { 'flow-children': 'row', focusable: false, style: { display: 'flex', gap: '12px' } },
     React.createElement(OwnerFocusable, { id: 'owned-native-card-1', focusable: true,
       onClick: () => { if (!load('context').isCurrentLinkedGamepadTarget(document, A, '550')) return false; actions.push('first'); return true; } }, 'First linked card'),
+    React.createElement(OwnerFocusable, { id: 'owned-native-card-right', focusable: true }, 'Next achievement')),
     React.createElement(NativeFocusable, { id: 'owned-native-card-2', focusable: true,
       onActivate: () => { if (!load('context').isCurrentLinkedGamepadTarget(document, A, '550')) return false; actions.push('second'); return true; } }, 'Second linked card')))))));
   await frame();
@@ -161,6 +163,10 @@ await runBPBrowserScenario(sources, async fixture => {
     && nativeParentEscapes === 0, 'Controller Down enters the added content through the installed native handle exactly once');
   const select = emit(document.activeElement, 'vgp_onok', 1);
   check(select.defaultPrevented && actions.join(',') === 'first', 'Installed native logical OK activates the focused linked card once');
+  const right = emit(document.activeElement, 'vgp_ondirection', 12); await frame();
+  check(right.defaultPrevented && document.activeElement.id === 'owned-native-card-right', 'Native horizontal group moves Right to the next achievement');
+  const left = emit(document.activeElement, 'vgp_ondirection', 11); await frame();
+  check(left.defaultPrevented && document.activeElement.id === 'owned-native-card-1', 'Native horizontal group moves Left back to the previous achievement');
   const secondDown = emit(document.activeElement, 'vgp_ondirection', 10); await frame();
   check(secondDown.defaultPrevented && document.activeElement.id === 'owned-native-card-2',
     'Steam native node navigation continues from the first added card to the second card');

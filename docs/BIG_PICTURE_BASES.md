@@ -264,8 +264,9 @@ autorización falla, el registro indica el vínculo, la verificación y las ruta
 sin parámetros de URL, en lugar de un mensaje genérico de espera.
 
 Usar un acceso directo vinculado A, uno B con el mismo AppID oficial pero distinto
-estado, otro sin vínculo y un juego Steam nativo. Comparar plugin apagado/encendido
-y mejoras apagadas/encendidas, sin modificar logros oficiales durante las pruebas.
+estado, otro sin vínculo y un juego Steam nativo. Comparar plugin apagado/encendido,
+sin modificar logros oficiales durante las pruebas. La integración de juegos
+vinculados no depende de un interruptor experimental.
 
 - 100 cambios A → nativo → B → Home; incluir respuestas de red fuera de orden,
   pérdida temporal de contexto, re-vinculación y recursos ausentes.
@@ -294,6 +295,28 @@ npm run check:dist
 `check:big-picture-integration` reúne los nuevos flujos de navegador, realms y
 propiedad; `check:big-picture` ejecuta ambas. La suite general incluye estos
 flujos. Ningún comando constituye una certificación visual.
+
+«Tus cosas» mantiene el orden nativo: logros, tarjetas, DLC, Workshop,
+multimedia, reseña y notas. Multimedia y notas usan la identidad del acceso
+directo; tarjetas, reseñas y enlaces públicos mantienen el AppID oficial.
+El QueryClient, historial, ServiceTransport y cuenta activa se heredan únicamente
+de Providers confirmados del árbol del propietario. No se crean servicios
+paralelos ni se sustituyen registros globales de Steam. Los modales conservan
+el árbol de navegación que crea Steam para ellos; solo heredan esos datos.
+
+Cada carrusel utiliza el BoxCarousel, el espaciado y el foco local de su
+runtime. El desplazamiento acompaña la expansión del logro y respeta la escala
+de la interfaz. `check-bp-stuff-carousel-browser.mjs` comprueba estos componentes
+y su limpieza; la prueba del árbol nativo cubre los movimientos laterales.
+
+La ventana general de logros abre en el logro seleccionado y ocupa el espacio
+entre la cabecera y el pie de Steam. Usa las clases nativas de la portada,
+estadísticas, pestañas y filas, con datos locales del acceso directo y metadatos
+del AppID vinculado. La búsqueda y posición de desplazamiento pertenecen a cada
+pestaña. La comparación consulta los logros del amigo elegido sin escribir en
+la cuenta; una respuesta privada o desconocida nunca se presenta como cero logros.
+El selector alternativo permanece dentro de la misma ventana para conservar
+su propietario y foco. Los estilos se limitan al modal del plugin.
 
 Millennium permite ampliar el cliente con plugins, pero sus componentes pueden
 cambiar con una actualización de Steam, como indica su

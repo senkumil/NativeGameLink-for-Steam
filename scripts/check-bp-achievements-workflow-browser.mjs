@@ -32,7 +32,7 @@ function nativeFactory(id, nextId) {
 const nativeFactories = {
   36000: nativeFactory('36e3', '83326'), 24124: nativeFactory('24124', '36e3'),
   3270: nativeFactory('3270', '14181'), 83097: nativeFactory('83097', '18980'),
-  18980: nativeFactory('18980', '19579'), 62645: nativeFactory('62645', '92821'),
+  18980: nativeFactory('18980', '19579'), 19579: nativeFactory('19579', '17076'), 62645: nativeFactory('62645', '92821'),
 };
 // The icon class module has no dependencies; obtain its exact object too.
 const iconStart = sp.indexOf(',33175:('), iconEnd = sp.indexOf('}),', iconStart) + 2;
@@ -41,6 +41,9 @@ nativeFactories[33175] = String(vm.runInNewContext(`({${sp.slice(iconStart + 1, 
 const sources = Object.fromEntries([
   ['context', 'frontend/steam/gamepad/GamepadContext.ts'], ['cache', 'frontend/features/achievements/cache.ts'],
   ['screen', 'frontend/features/big-picture/NativeBigPictureAchievementScreen.tsx'],
+  ['achievement-screen-parts', 'frontend/features/big-picture/achievement-screen-parts.ts'],
+  ['pure-class-factory', 'frontend/steam/gamepad/components/pure-class-factory.ts'],
+  ['achievement-comparison', 'frontend/features/big-picture/achievement-comparison.tsx'],
   ['summary', 'frontend/features/big-picture/NativeBigPictureAchievements.tsx'],
   ['owned', 'frontend/features/big-picture/owned-modals.tsx'],
   ['navigation', 'frontend/features/big-picture/gamepad-nav.ts'],
@@ -124,7 +127,8 @@ try {
     let modalMounts = 0;
     const externalModalClosers = new Set();
     const client = { Focusable, DialogButton, TextField, ProgressBar, GamepadButton: { BUMPER_LEFT: 5, BUMPER_RIGHT: 6 },
-      IconsModule: {}, ModalRoot: props => React.createElement('div', { role: 'dialog', 'aria-modal': 'true' }, props.children),
+      IconsModule: {}, ModalRoot: props => React.createElement('div', { role: 'dialog', 'aria-modal': 'true', className: props.className },
+        React.createElement('div', { className: 'DialogContent_InnerWidth' }, React.createElement('form', { onSubmit: event => event.preventDefault() }, props.children))),
       showModal(node) {
         modalMounts++;
         const host = document.createElement('div'); host.className = 'fixture-modal'; document.body.appendChild(host);
@@ -146,6 +150,7 @@ try {
       Yp: (key, value) => `${key} ${value}`, pf: { GetPreferredLocales: () => ['en-US'] } };
     const nativeDeps = { 63696: React, 62540: req(62540), 38850: { Z: Focusable }, 50158: { z2: ProgressBar },
       50777: { pd: TextField }, 8658: { A: (...values) => values.filter(Boolean).join(' ') },
+      59894: { Tv: () => React.createElement('span', null, '?'), Qv: () => false },
       7727: locale, 54661: { Ms: () => ({ year: 'numeric', month: 'short', day: 'numeric' }) } };
     const nativeRequire = id => {
       if (id in nativeDeps) return nativeDeps[id];
@@ -176,6 +181,13 @@ try {
         getAllModules: () => [], getRuntimeIdentity: () => nativeRequire, getModuleFactoryCount: () => 0, getModuleFactories: () => [] } },
       '../achievements/service': { subscribeLocalAchievementData(callback) { listeners.add(callback); return () => listeners.delete(callback); } },
       '../achievements/format': { formatLocalUnlockDate: value => String(value) },
+      '../library/artwork': { linkedShortcutPortrait: id => 'https://images.test/' + id + 'p.jpg' },
+      '../playtime/service': { getInstantPlaytimeStats: () => ({ minutesForever: 2058, minutesLastTwoWeeks: 1 }),
+        fetchPlaytimeStats: () => Promise.resolve({ minutesForever: 2058, minutesLastTwoWeeks: 1 }) },
+      '../playtime/playtime-settings': { isShortcutPlaytimeTrackingEnabled: () => true },
+      '../playtime/format': { formatPlaytimeMinutes: minutes => minutes >= 60 ? (minutes / 60).toFixed(1) + ' h' : minutes + ' min' },
+      './detail-views': { createBigPictureDetailViews: () => ({ overview: {}, details: {} }) },
+      '../achievements/comparison': { getAchievementComparisonFriends: () => Promise.resolve([]), getFriendAchievementState: () => Promise.resolve(new Map()) },
       '../achievements/rarity': { isRareAchievement: item => item.global_percent_known !== false && item.global_percent < 10,
         compareEarnedAchievementsForDisplay: (a, b) => b.earned_time - a.earned_time,
         compareLockedAchievementsForDisplay: (a, b) => b.global_percent - a.global_percent, highlightedAchievementNames: () => new Set() },
@@ -227,7 +239,7 @@ try {
       SectionComponent: section, LoadingComponent: () => null, NativeButton: DialogButton, NativeFocusable: Focusable,
       NativeProgress: ProgressBar, NativeIcons: {}, NativeStrip: section,
     })));
-    const opener = root.querySelector('.gdl-bp-view-all-achievements');
+    const opener = root.querySelector('[data-gdl-focus-key^="achievement-summary-"]');
     const strip = document.getElementById('tabs');
     nav.installBigPictureGamepadNavigation(document, root, strip, new Map([['stuff', strip.firstElementChild]]), { authority: 'fallback', generation: 1 });
     await frame();
@@ -243,8 +255,9 @@ try {
       input.dispatchEvent(new Event('input', { bubbles: true }));
     };
     check(modal() && modalMounts === 1, 'Tus cosas opens exactly one owned achievement screen');
+    check(!modal().querySelector('.gdl-bp-ach-close-trigger,.gdl-bp-ach-footer'), 'Back remains owned by the native Steam footer with no extra focusable close button');
     check(modal().textContent.includes('5 of 42') && modal().querySelector('[role=progressbar]').getAttribute('aria-valuenow') === '12', 'The personal header uses A local state, not B or official account progress');
-    check(rows().length === 42 && rows()[0].dataset.gdlAchievementName === 'ACH_4', 'The complete personal list orders earned rows by local unlock time');
+    check(rows().length === 41 && modal().querySelector('[data-gdl-achievements-hidden]') && rows()[0].dataset.gdlAchievementName === 'ACH_4', 'The complete personal list orders earned rows by local unlock time');
     check(rows()[0].classList.contains(nativeRequire(18980).AchievementListItemBase), 'Personal rows execute the installed Steam presentational component');
     rows()[0].focus();
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }));
@@ -288,10 +301,10 @@ try {
         nativeNavHandle: { Node: () => nativeOwnNode, NavTree: () => nativeTree } });
     opener.focus(); opener.click(); await frame();
     const nativeButton = new CustomEvent('fixture-native-button', { detail: { button: 6 }, bubbles: true, cancelable: true });
-    modal().firstElementChild.dispatchEvent(nativeButton); await frame();
+    modal().querySelector('.gdl-bp-ach-screen').dispatchEvent(nativeButton); await frame();
     check(tab('global').getAttribute('aria-selected') === 'true' && nativeButton.defaultPrevented, 'The native Focusable shoulder event selects one modal tab with native authority');
     search().focus();
-    modal().firstElementChild.dispatchEvent(new CustomEvent('fixture-native-button', { detail: { button: 5 }, bubbles: true, cancelable: true }));
+    modal().querySelector('.gdl-bp-ach-screen').dispatchEvent(new CustomEvent('fixture-native-button', { detail: { button: 5 }, bubbles: true, cancelable: true }));
     await frame(); check(tab('global').getAttribute('aria-selected') === 'true', 'Native shoulders preserve text editor ownership while search is active');
     tab('global').focus();
     tab('global').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
@@ -301,10 +314,11 @@ try {
     for (let cycle = 0; cycle < 100; cycle++) {
       opener.focus(); opener.click();
       check(Boolean(modal()), 'Repeated opening retains owner authority');
-      owned.disposeBigPictureModals(document);
+      check(load('modal-actions').closeRegisteredBigPictureModal(modal()), 'The exact owned modal registers its real native close action');
+      check(!modal(), 'Repeated native Back or registered close retires the screen without a hidden button');
     }
     await frame(); check(listeners.size === 0 && observerCount === baselineObservers && document.querySelectorAll('.fixture-modal').length === 0,
-      'One hundred open/dispose cycles leave no subscriptions, modal roots or observers');
+      'One hundred open/native-close cycles leave no subscriptions, modal roots or observers');
     opener.focus(); opener.click(); await frame();
     const oldCallbacks = [...listeners];
     window.g_Router.history.location.pathname = '/routes/library/app/550';

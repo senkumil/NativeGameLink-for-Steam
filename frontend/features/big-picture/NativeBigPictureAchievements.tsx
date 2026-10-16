@@ -192,7 +192,7 @@ function FallbackAchievementsSection(props: AchievementsSectionProps): ReactElem
 	const achievements = props.data.achievements;
 	const total = Math.max(0, Number(achievements?.total || props.data.game?.achievements?.total || 0));
 	const unlocked = Math.max(0, Math.min(total, Number(achievements?.unlocked || 0)));
-	const percent = total > 0 ? Math.round((unlocked / total) * 100) : 0;
+	const percent = total > 0 ? Math.floor((unlocked / total) * 100) : 0;
 	const native = props.classes.Achievement;
 	const items = achievements?.achievements || [];
 	if (props.hideIfEmpty && items.length === 0 && !props.hydrating) return null;
@@ -200,14 +200,13 @@ function FallbackAchievementsSection(props: AchievementsSectionProps): ReactElem
 	const earned = items.filter(item => item.earned).sort(compareEarnedAchievementsForDisplay);
 	const locked = items.filter(item => !item.earned).sort(compareLockedAchievementsForDisplay);
 	const highlightedNames = highlightedAchievementNames(earned);
-	const carouselItems = earned.length > 0 ? earned : locked.slice(0, 16);
 
 	const [prioritizedRow, setPrioritizedRow] = ownerReact.useState<'earned' | 'locked'>(
 		earned.length > 0 ? 'earned' : 'locked',
 	);
 
-	const onOpenAchievements = () => {
-		if (achievements) openBigPictureAchievementsScreen(props.document, props.shortcut, achievements);
+	const onOpenAchievements = (item?: LocalAchievementItem) => {
+		if (achievements) openBigPictureAchievementsScreen(props.document, props.shortcut, achievements, props.shortcut.title, item?.name);
 	};
 
 	const highlight = total > 0 ? (
@@ -236,12 +235,12 @@ function FallbackAchievementsSection(props: AchievementsSectionProps): ReactElem
 			label={loc('AppDetails_SectionTitle_Achievements', gdlText('achievements_label', 'Achievements'))}
 			highlight={highlight}
 			className={native?.BasicAppDetailsAchievementsSection}
-			bodyClassName={native?.BasicAppDetailsAchievementsSectionBody}
+			bodyClassName={[native?.BasicAppDetailsAchievementsSectionBody, earned.length > 0 && locked.length > 0 && native?.BodyStopJiggle].filter(Boolean).join(' ')}
 			rightColumn
 		>
-			<FallbackAchievementCarousel
+			{earned.length > 0 ? <FallbackAchievementCarousel
 				document={props.document}
-				items={carouselItems}
+				items={earned}
 				classes={props.classes}
 				name="NativeGameLink Achievements"
 				highlightedNames={highlightedNames}
@@ -250,8 +249,8 @@ function FallbackAchievementsSection(props: AchievementsSectionProps): ReactElem
 				onSelect={onOpenAchievements}
 				NativeFocusable={props.NativeFocusable}
 				NativeStrip={props.NativeStrip}
-			/>
-			{earned.length > 0 && locked.length > 0 ? (
+			/> : null}
+			{locked.length > 0 ? (
 				<>
 					<div className={native?.LockedAchievementsLabel}>
 						{loc('AppDetails_Achievements_Locked', 'Logros bloqueados')}
@@ -269,9 +268,9 @@ function FallbackAchievementsSection(props: AchievementsSectionProps): ReactElem
 					/>
 				</>
 			) : null}
-			{total > 0 ? (
+			{total > 0 && items.length === 0 ? (
 				<props.NativeButton
-					{...clickProps(onOpenAchievements)}
+					{...clickProps(() => onOpenAchievements())}
 					className={[native?.ViewAllAchievementsButton, 'gdl-bp-view-all-achievements'].filter(Boolean).join(' ')}
 					data-gdl-focus-key={`achievement-open-${props.shortcut.id}`}
 					style={{ marginTop: '12px', display: 'inline-flex' }}
@@ -319,8 +318,8 @@ function FallbackAchievementCarousel({
 	if (items.length === 0) return null;
 
 	return (
-		<NativeStrip name={name} className={achievement?.SummaryCarouselContainer}>
-			{items.slice(0, 32).map((item, index) => {
+		<NativeStrip document={doc} name={name} className={achievement?.SummaryCarouselContainer}>
+			{items.map((item, index) => {
 				const isHighlighted = highlightedNames ? highlightedNames.has(String(item.name)) : false;
 				const isDetailed = isPrioritized && focused === index;
 
@@ -350,7 +349,7 @@ function FallbackAchievementCarousel({
 							]
 								.filter(Boolean)
 								.join(' ')}
-							src={item.icon}
+							src={item.earned ? item.icon : (item.icon_gray || item.icon)}
 							alt={isDetailed ? '' : (item.display_name || item.name)}
 						/>
 						{isDetailed ? (

@@ -8,18 +8,14 @@ import { steamUIModeService } from '../../ui/SteamUIModeService';
 import { clearAppDetailsGuards, ensureAppDetailsStoreGuarded, releaseAppDetailsGuards, restoreNativeAchievementState } from './NativeAchievementOwnership';
 export { ensureAppDetailsStoreGuarded, registerNativeAchievementStateRestore, restoreNativeAchievementState } from './NativeAchievementOwnership';
 
-export interface NativeFriendsProps {
-	details: { unAppID: number };
-}
+export interface NativeFriendsProps { details: { unAppID: number } }
 
 export interface NativeActivityFeedProps {
 	appid: number;
 	showTextBox?: boolean;
 }
 
-export interface NativeCommunityProps {
-	appid: number;
-}
+export interface NativeCommunityProps { appid: number }
 
 interface NativeComponentsRuntimeState {
 	document: Document | null;
@@ -329,19 +325,11 @@ export interface NativeScreenshotsProps {
 	details: any;
 }
 
-export interface NativeReviewProps {
-	details: any;
-	overview: any;
-}
+export interface NativeReviewProps { details: any; overview: any }
 
-export interface NativeNotesProps {
-	overview: any;
-	details: any;
-}
+export interface NativeNotesProps { overview: any; details: any }
 
-export interface NativeWorkshopProps {
-	details: any;
-}
+export interface NativeWorkshopProps { details: any }
 
 export function resolveNativeDLCComponent(doc?: Document): ComponentType<NativeDLCProps> | null {
 	const state = ensureNativeComponentsRuntime(doc);
@@ -616,7 +604,7 @@ function committedNavFiber(fiber: any): any | null {
 		} if (a.alternate !== b) return null;
 	} return null;
 }
-export interface NativeNavigationProvider { kind: 'active-tree' | 'manager' | 'focus-window' | 'window-instance' | 'focus-ring'; context: any; value: any }
+export interface NativeNavigationProvider { kind: 'active-tree' | 'manager' | 'focus-window' | 'window-instance' | 'focus-ring' | 'query-client' | 'router-history' | 'service-transport' | 'active-account'; context: any; value: any }
 function inheritedNavKind(value: any, tree: any, instance: any, context: any, ring: any): NativeNavigationProvider['kind'] | null {
 	if (!value || typeof value !== 'object') return null;
 	if (context === ring && ['OnFocus', 'OnBlur', 'OnFocusChange', 'OnForceMeasureFocusRing'].every(key => typeof value[key] === 'function')) return 'focus-ring';
@@ -624,6 +612,18 @@ function inheritedNavKind(value: any, tree: any, instance: any, context: any, ri
 		.every(key => typeof value[key] === 'function')) return 'manager';
 	if (value === instance && value.BrowserWindow === tree.Window) return 'window-instance';
 	if (value.focusNavWindow === tree.WindowContext && typeof value.bSupportsFocus === 'boolean') return 'focus-window';
+	// Native notes/media must reuse the owner's committed QueryClient; another
+	// client would split account caches and duplicate subscriptions.
+	if (['getQueryCache', 'getMutationCache', 'defaultQueryOptions', 'mount', 'unmount']
+		.every(key => typeof value[key] === 'function')) return 'query-client';
+	// useHistory also needs the proven owner's exact committed Provider.
+	if (typeof value.location?.pathname === 'string'
+		&& ['push', 'replace', 'go', 'goBack', 'goForward', 'listen', 'createHref']
+			.every(key => typeof value[key] === 'function')) return 'router-history';
+	// Native media hooks also consume the owner's service/account Providers.
+	if (typeof value.useActiveSteamInterface === 'function' && 'useActiveCMInterface' in value && 'useStorage' in value
+		&& ['useActiveCMInterface', 'useStorage'].every(key => value[key] === undefined || typeof value[key] === 'function')) return 'service-transport';
+	if (typeof value.useActiveAccount === 'function') return 'active-account';
 	return ['bActiveTree', 'bActiveTreeWithinContext', 'bDisableFocusClasses', 'bIsMounted'].every(key => typeof value[key] === 'boolean') ? 'active-tree' : null;
 }
 export function resolveSteamNav(doc: Document): { navNode: any; navContext: any; providers: NativeNavigationProvider[] } | null {

@@ -7,6 +7,7 @@ import { nativeWindowOracle } from './helpers/native-window-oracle.mjs';
 
 const files = {
   NativeBigPictureDetails: 'frontend/features/big-picture/NativeBigPictureDetails.tsx',
+  NativeBigPictureCarousel: 'frontend/features/big-picture/NativeBigPictureCarousel.tsx',
   details: 'frontend/features/big-picture/details.ts',
   'detail-views': 'frontend/features/big-picture/detail-views.ts',
   'detail-target': 'frontend/features/big-picture/detail-target.ts',
@@ -21,6 +22,7 @@ const files = {
   'pure-class-factory': 'frontend/steam/gamepad/components/pure-class-factory.ts',
   NativeAchievementOwnership: 'frontend/steam/gamepad/components/NativeAchievementOwnership.ts',
   NativeInformationComponents: 'frontend/steam/gamepad/components/NativeInformationComponents.ts',
+  NativeStuffComponents: 'frontend/steam/gamepad/components/NativeStuffComponents.ts',
   SteamWebpackRuntime: 'frontend/steam/modules/SteamWebpackRuntime.ts',
   SteamUIModeService: 'frontend/steam/ui/SteamUIModeService.ts',
   tabs: 'frontend/features/big-picture/tabs.ts',
@@ -189,6 +191,15 @@ await runBPBrowserScenario(sources, async fixture => {
   nativeModules[28869] = { exports: { TJ: navContext } };
   nativeModules[72476] = { exports: { t: configContext } };
   const native = load('AppDetailsNativeComponents');
+  delete dependencies['./detail-views']; // Integration exercises the production identity projections.
+  dependencies['../playtime/service'] = { getInstantPlaytimeStats: (id, metadata) => id === A && metadata === '550'
+    ? { totalSeconds: 4440, minutesForever: 74, minutesLastTwoWeeks: 0, lastPlayedAt: null } : null,
+    fetchPlaytimeStats: async () => ({ totalSeconds: 4440, minutesForever: 74, minutesLastTwoWeeks: 0, lastPlayedAt: null }) };
+  dependencies['../playtime/playtime-settings'] = { isShortcutPlaytimeTrackingEnabled: () => true };
+  dependencies['../../steam/gamepad/components/NativeStuffComponents'] = { resolveNativeStuffComponents: doc => ({
+    Media: native.resolveNativeScreenshotsComponent(doc), Notes: native.resolveNativeNotesComponent(doc), Review: NativeProbe('review'), Cards: null,
+    DLC: native.resolveNativeDLCComponent(doc), Workshop: native.resolveNativeWorkshopComponent(doc),
+  }) };
   dependencies['./NativeBigPictureAchievements'] = load('summary');
   dependencies['./visibility-lease'] = load('visibility-lease');
   const leases = load('panel-mount');
@@ -362,6 +373,12 @@ await runBPBrowserScenario(sources, async fixture => {
     const props = nativeProps.filter(([kind]) => kind === name).at(-1)?.[1];
     check(props?.overview.appid === A && props?.details.unAppID === A, `${name} uses the real shortcut for personal operations`);
   }
+  const review = nativeProps.filter(([kind]) => kind === 'review').at(-1)?.[1];
+  check(review?.overview.appid === 550 && review.details.unAppID === 550 && review.details.nPlaytimeForever === 74
+    && review.overview.minutes_playtime_forever === 74 && publicDetails.nPlaytimeForever === undefined,
+    'Review uses public action identity with exact linked playtime through local views and no native record writes');
+  check([...root.querySelectorAll('[data-native-probe]')].map(node => node.dataset.nativeProbe).join(',') === 'dlc,workshop,screenshots,review,notes',
+    'Tus cosas keeps native DLC, Workshop, Media, Review and Notes section order');
   const nativeNotesButton = document.querySelector('[data-native-probe=notes] button'); nativeNotesButton.click();
   check(actions.at(-1)?.[0] === 'notes' && actions.at(-1)?.[1] === A, 'Native notes destination remains the shortcut AppID');
   const actionCount = actions.length;
@@ -386,7 +403,7 @@ await runBPBrowserScenario(sources, async fixture => {
   queuedNotesButton.removeEventListener('vgp_onbuttondown', nativeGamepadCallback);
   for (const name of ['dlc', 'workshop']) check(nativeProps.filter(([kind]) => kind === name).at(-1)?.[1].details.unAppID === 550,
     `${name} reads official metadata without borrowing personal progress`);
-  const achievementOpener = root.querySelector('.gdl-bp-view-all-achievements'); achievementOpener.focus(); achievementOpener.click(); await frame();
+  const achievementOpener = root.querySelector('[data-gdl-focus-key^="achievement-summary-"]'); achievementOpener.focus(); achievementOpener.click(); await frame();
   check(document.getElementById('gdl-bp-achievements-screen')?.textContent.includes('1 of 2'), 'Tus cosas opens the complete production shortcut achievement screen');
   owned.disposeBigPictureModals(document);
   nativeModules[9066].exports = {}; nativeModules[57150].exports = {};

@@ -5,6 +5,9 @@ import { runBPBrowserScenario } from './check-bp-achievements-workflow-browser.m
 const sources = Object.fromEntries(Object.entries({
   'media-modals': 'frontend/features/big-picture/media-modals.tsx',
   'detail-target': 'frontend/features/big-picture/detail-target.ts',
+  'achievement-screen-parts': 'frontend/features/big-picture/achievement-screen-parts.ts',
+  'achievement-comparison': 'frontend/features/big-picture/achievement-comparison.tsx',
+  'pure-class-factory': 'frontend/steam/gamepad/components/pure-class-factory.ts',
 }).map(([name, file]) => [name, ts.transpileModule(fs.readFileSync(file, 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, jsx: ts.JsxEmit.React },
 }).outputText]));
@@ -40,6 +43,12 @@ await runBPBrowserScenario(sources, async fixture => {
     Object.assign(dependencies[path].steamWebpackRuntime, { getRuntimeIdentity: () => runtimeIdentity, getRequire: () => documentRequire });
   }
   window.SP_REACTDOM = fixture.ReactDOM;
+  dependencies['../library/artwork'] = { linkedShortcutPortrait: () => 'https://example.invalid/portrait.png' };
+  dependencies['../playtime/service'] = { getInstantPlaytimeStats: () => null, fetchPlaytimeStats: async () => null };
+  dependencies['../playtime/playtime-settings'] = { isShortcutPlaytimeTrackingEnabled: () => false };
+  dependencies['../playtime/format'] = { formatPlaytimeMinutes: value => `${value} min` };
+  dependencies['./detail-views'] = { createBigPictureDetailViews: () => ({ overview: {}, details: {} }) };
+  dependencies['../achievements/comparison'] = { getAchievementComparisonFriends: async () => [], getFriendAchievementState: async () => new Map() };
   dependencies['../../steam/navigation'] = { openSteamNavigationUrl: () => { throw Error('A working owned modal must not fall back to external navigation'); } };
   const nav = load('navigation'), owned = load('owned'), media = load('media-modals'), actions = load('modal-actions');
   const strip = document.getElementById('tabs'), tab = strip.querySelector('button');

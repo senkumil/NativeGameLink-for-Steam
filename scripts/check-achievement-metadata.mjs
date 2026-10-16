@@ -56,6 +56,15 @@ local deps = { fs=fs, logger={info=function() end,warn=function() end}, millenni
  end} }
 deps.util=factories.util(deps);deps.util.get_active_account_id=function()return nil end
 deps.achievement_metadata=factories.metadata(deps)
+local icons=deps.achievement_metadata
+local current='https://shared.fastly.steamstatic.com/community_assets/images/apps/4080220/example.jpg'
+check(icons.icon_url('4080220','example.jpg')==current,'bare Steam icon uses current community assets path')
+check(icons.icon_url('4080220','')=='','missing icon remains missing')
+check(icons.icon_url('4080220',current)==current,'current full URL is preserved')
+check(icons.icon_url('4080220','https://example.com/image.png')=='https://example.com/image.png','unrelated full URL is preserved')
+files['icon-migration.json']=icons.cache_record('4080220','english',{A={name='A',icon='https://cdn.cloudflare.steamstatic.com/steamcommunity/public/images/apps/4080220/example.jpg',icongray='gray.jpg'}})
+local migrated=icons.read_cached('icon-migration.json','4080220','english',false)
+check(migrated.A.icon==current and migrated.A.icongray:match('/4080220/gray.jpg$'),'fresh cache repairs both icon variants without deleting achievement metadata')
 local req=encode({steam_app_id='123',state_app_id='3000000001',language='english'})
 local function fetch(module) return decode(module.fetch_local_achievement_data(req)) end
 files['metadata_cache/123_english.json']={ACH_ALPHA={name='ACH_ALPHA',title='Wrong legacy title'}}

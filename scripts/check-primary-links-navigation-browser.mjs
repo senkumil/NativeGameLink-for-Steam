@@ -457,6 +457,27 @@ async function browserChecks(sources) {
     check(painted(final) && backendCalls === 0 && synchronousReads > 0,
       'Final external route remains fully painted using synchronous reads and zero backend calls');
     assertResponsive(final, 'The final screenshot retains the narrow overflow layout');
+    const summary = final.querySelector('summary'), popup = final.querySelector('.gdl-primary-more-menu');
+    summary.click();
+    check(popup.matches(':popover-open') && summary.getAttribute('aria-expanded') === 'true', 'Overflow opens in the browser top layer');
+    const popupRect = popup.getBoundingClientRect(), triggerRect = summary.getBoundingClientRect();
+    check(Math.abs(popupRect.right - triggerRect.right) < 2 && popupRect.top >= triggerRect.bottom,
+      'Overflow aligns with its native-size trigger without covering the links row');
+    const cover = document.createElement('div');
+    cover.style.cssText = `position:fixed;inset:0;z-index:2147483647;background:#23262e`;
+    document.body.appendChild(cover);
+    check(popup.contains(document.elementFromPoint(popupRect.left + 20, popupRect.top + 12)),
+      'Achievement and sidebar stacking contexts cannot cover the top-layer menu');
+    cover.remove();
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }));
+    check(popup.contains(document.activeElement), 'Keyboard navigation enters a visible overflow item');
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    check(!popup.matches(':popover-open') && document.activeElement === summary, 'Escape closes overflow and restores its trigger focus');
+    summary.click(); document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    check(!popup.matches(':popover-open'), 'Clicking outside dismisses overflow');
+    summary.click(); links.disposePrimaryLinksBar(document);
+    check(!popup.matches(':popover-open') && !popup.isConnected, 'Route teardown retires an open top-layer menu');
+    sync();
     await auditScrollLayout();
     const output = document.createElement('pre'); output.id = 'primary-links-navigation-result';
     output.textContent = JSON.stringify({ ok: true, checks: results.length, results, backendCalls, synchronousReads, scrollMeasurements });

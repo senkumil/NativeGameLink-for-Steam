@@ -2,13 +2,20 @@ import React, { Component, type ReactNode } from 'react';
 import { GamepadButton } from '@steambrew/client';
 import type { LocalAchievementData, LocalAchievementItem } from '../../domain/types';
 import { loc } from '../../steam/localization';
-import { steamWebpackRuntime } from '../../steam/modules/SteamWebpackRuntime';
 import { isCurrentLinkedGamepadTarget } from '../../steam/gamepad/GamepadContext';
 import { steamUIModeService } from '../../steam/ui/SteamUIModeService';
 import { getDocumentReact, getDocumentUIComponents } from '../../steam/gamepad/document-ui-runtime';
 import { getCachedLocalAchievementsForShortcut, cacheLocalAchievements } from '../achievements/cache';
 import { subscribeLocalAchievementData } from '../achievements/service';
 import { formatLocalUnlockDate } from '../achievements/format';
+import { linkedShortcutPortrait } from '../library/artwork';
+import { getInstantPlaytimeStats, fetchPlaytimeStats } from '../playtime/service';
+import { isShortcutPlaytimeTrackingEnabled } from '../playtime/playtime-settings';
+import { formatPlaytimeMinutes } from '../playtime/format';
+import { createBigPictureDetailViews } from './detail-views';
+import { resolveBigPictureAchievementScreenParts, type NativeAchievementScreenParts } from './achievement-screen-parts';
+import { BigPictureAchievementComparison, type BigPictureAchievementComparisonSelection } from './achievement-comparison';
+import { focusBigPictureNativeElement } from './native-focus';
 import { isRareAchievement } from '../achievements/rarity';
 import { getCurrentSteamUser } from '../library/social/feed';
 import { EXIT_TEXT_EDITOR_EVENT, isEditableTextTarget } from './editable-target';
@@ -17,7 +24,6 @@ import { showBigPictureModal, type BigPictureModalLease } from './owned-modals';
 import type { MappedShortcut } from './types';
 
 type NativeComponent = React.ComponentType<any>;
-type Classes = Record<string, string>;
 export type BigPictureAchievementTab = 'mine' | 'global';
 const clickProps = (action: () => void) => ({ onClick: action });
 
@@ -78,43 +84,7 @@ export function bigPictureAchievementRows(data: LocalAchievementData, tab: BigPi
 	});
 }
 
-interface NativeAchievementScreenParts {
-	PersonalRow: NativeComponent | null;
-	Image: NativeComponent | null;
-	Search: NativeComponent | null;
-	row: Classes;
-	header: Classes;
-	tabs: Classes;
-}
-
-function component(value: any): value is NativeComponent {
-	return typeof value === 'function' || Boolean(value && typeof value === 'object' && value.$$typeof);
-}
-
-/** These are presentational exports from the installed Steam achievement
- * screen, not the AppID-backed screen that fetches a Steam account's progress. */
-export function resolveBigPictureAchievementScreenParts(doc: Document): NativeAchievementScreenParts {
-	const result: NativeAchievementScreenParts = { PersonalRow: null, Image: null, Search: null, row: {}, header: {}, tabs: {} };
-	if (!doc.defaultView || doc.defaultView.document !== doc || doc.defaultView.closed) return result;
-	steamWebpackRuntime.captureRuntime(doc);
-	const req = steamWebpackRuntime.getRequire(doc);
-	if (!req) return result;
-	const read = (id: number): any => { try { return req(id); } catch { return null; } };
-	const rows = read(18980);
-	if (rows && ['AchievementListItemBase', 'GlobalAchievementListItem', 'UnlockContainer', 'ProgressFill']
-		.every(key => typeof rows[key] === 'string')) result.row = rows;
-	const header = read(83097);
-	if (header && ['StatsBlock', 'BigStat', 'ProgressLabel', 'AchievementSearchHeader'].every(key => typeof header[key] === 'string')) result.header = header;
-	const tabs = read(62645);
-	if (tabs && ['Tab', 'Selected', 'TabRow', 'TabTitle'].every(key => typeof tabs[key] === 'string')) result.tabs = tabs;
-	const rowComponent = read(36000)?.fm;
-	if (component(rowComponent) && ['unlockDate', 'percentGlobalUnlocked', 'imgUrl'].every(key => String(rowComponent).includes(key))) result.PersonalRow = rowComponent;
-	const image = read(3270)?._;
-	if (component(image) && ['imgURL', 'hidden', 'glow'].every(key => String(image).includes(key))) result.Image = image;
-	const search = read(24124)?.zp;
-	if (component(search) && ['strFilter', 'onChangeFilter', 'leftContent'].every(key => String(search).includes(key))) result.Search = search;
-	return result;
-}
+export { resolveBigPictureAchievementScreenParts } from './achievement-screen-parts';
 
 class NativeScreenPartBoundary extends Component<{ children: ReactNode; fallback: ReactNode }, { failed: boolean }> {
 	state = { failed: false };
@@ -127,36 +97,49 @@ function ensureScreenStyles(doc: Document): void {
 	const style = doc.createElement('style');
 	style.id = 'gdl-bp-achievement-screen-styles';
 	style.textContent = `
-#gdl-bp-achievements-screen{width:min(90vw,1200px);max-width:100%;color:var(--gpSystemLightestGrey,#dcdedf)}
-#gdl-bp-achievements-screen .gdl-bp-ach-screen{display:flex;flex-direction:column;max-height:82vh;min-height:420px;gap:16px}
-#gdl-bp-achievements-screen .gdl-bp-ach-head{flex:none;display:flex;align-items:center;gap:16px}
-#gdl-bp-achievements-screen .gdl-bp-ach-head>div{flex:1;min-width:0}
-#gdl-bp-achievements-screen .gdl-bp-ach-progress-label{display:flex;justify-content:space-between;gap:16px;margin-bottom:8px}
-#gdl-bp-achievements-screen .gdl-bp-ach-ribbon{width:40px;height:40px;flex:none}
-#gdl-bp-achievements-screen .gdl-bp-ach-tabs{display:flex;flex:none;gap:12px}
-#gdl-bp-achievements-screen .gdl-bp-ach-tab{cursor:pointer;padding:12px 20px;border-bottom:3px solid transparent}
-#gdl-bp-achievements-screen .gdl-bp-ach-tab[aria-selected=true]{border-color:var(--gpColor-Blue,#1a9fff)}
-#gdl-bp-achievements-screen .gdl-bp-ach-scroll{min-height:0;overflow-y:auto;overscroll-behavior:contain;scroll-padding:12px;flex:1;padding:4px 8px 8px 4px}
-#gdl-bp-achievements-screen .gdl-bp-ach-search{display:flex;align-items:center;gap:16px;margin-bottom:12px}
-#gdl-bp-achievements-screen .gdl-bp-ach-search>div{flex:1}
-#gdl-bp-achievements-screen .gdl-bp-ach-avatar{width:36px;height:36px}
-#gdl-bp-achievements-screen .gdl-bp-ach-global-label{white-space:nowrap;font-size:14px;font-weight:600}
-#gdl-bp-achievements-screen .gdl-bp-ach-row{position:relative;min-height:68px;margin-bottom:8px;scroll-margin:12px}
-#gdl-bp-achievements-screen .gdl-bp-ach-row:focus-visible,#gdl-bp-achievements-screen .gdl-bp-ach-row.gpfocus{outline:3px solid var(--gpSystemLightestGrey,#fff);outline-offset:1px}
-#gdl-bp-achievements-screen .gdl-bp-ach-fallback-row{display:flex;align-items:center;gap:12px;background:var(--gpBackground-LightSoft,#242830);padding:10px;box-sizing:border-box}
-#gdl-bp-achievements-screen .gdl-bp-ach-fallback-row img{width:60px;height:60px;object-fit:contain;flex:none}
+#gdl-bp-achievements-screen{width:100%;height:100%;min-height:0;color:var(--gpSystemLightestGrey,#dcdedf)}
+#gdl-bp-achievements-screen .gdl-bp-ach-screen{display:flex;flex-direction:column;width:100%;height:100%;min-height:0;isolation:isolate;position:relative;overflow:clip;background:#0e141b}
+#gdl-bp-achievements-screen .gdl-bp-ach-body{flex:1;display:flex;flex-direction:column;min-height:0;z-index:1;padding-top:24px;box-sizing:border-box}
+#gdl-bp-achievements-screen .gdl-bp-ach-head{flex:none;margin-bottom:18px}
+#gdl-bp-achievements-screen .gdl-bp-ach-portrait{display:block;width:145px;aspect-ratio:2/3;object-fit:cover;max-width:100%}
+#gdl-bp-achievements-screen .gdl-bp-ach-header-content{min-width:0;flex:1}
+#gdl-bp-achievements-screen .gdl-bp-ach-head-fallback{display:flex;align-items:center;gap:14px;padding:0 24px}
+#gdl-bp-achievements-screen .gdl-bp-ach-head-fallback .gdl-bp-ach-header-content{display:flex;flex-direction:column;gap:14px}
+#gdl-bp-achievements-screen .gdl-bp-ach-header-content>.gdl-bp-ach-fallback-title{font-size:22px;font-weight:400;color:#fff}
+#gdl-bp-achievements-screen .gdl-bp-ach-stats-fallback{padding:14px;display:flex;gap:14px;background:rgba(103,112,123,.2)}
+#gdl-bp-achievements-screen .gdl-bp-ach-stat-fallback{display:flex;gap:6px;align-items:center}
+#gdl-bp-achievements-screen .gdl-bp-ach-big-stat-fallback{flex:1;align-items:flex-start}
+#gdl-bp-achievements-screen .gdl-bp-ach-stat-value-fallback{flex:1;display:flex;flex-direction:column}
+#gdl-bp-achievements-screen .gdl-bp-ach-label-fallback{font-size:12px;font-weight:700;letter-spacing:.5px;text-transform:uppercase}
+#gdl-bp-achievements-screen .gdl-bp-ach-progress-label{display:flex;justify-content:space-between;gap:16px}
+#gdl-bp-achievements-screen .gdl-bp-ach-progress{min-width:0}
+#gdl-bp-achievements-screen .gdl-bp-ach-progress>div{width:100%}
+#gdl-bp-achievements-screen .gdl-bp-ach-tabs{display:flex;justify-content:center;flex:none;gap:4px;padding:0 20px 12px}
+#gdl-bp-achievements-screen .gdl-bp-ach-tab{cursor:pointer;display:flex;align-items:center;justify-content:center;padding:10px 16px;border-radius:40px;font-size:12px;font-weight:700;text-transform:uppercase;color:inherit;outline-offset:2px}
+#gdl-bp-achievements-screen .gdl-bp-ach-tab[aria-selected=true]{background:rgba(255,255,255,.14)}
+#gdl-bp-achievements-screen .gdl-bp-ach-scroll{min-height:0;overflow-y:auto;overscroll-behavior:contain;scroll-padding:8px;flex:1;background:#0e141b}
+#gdl-bp-achievements-screen .gdl-bp-ach-search{display:flex;align-items:center;justify-content:flex-end;gap:10px}
+#gdl-bp-achievements-screen .gdl-bp-ach-search>div:first-child{flex:1}
+#gdl-bp-achievements-screen .gdl-bp-ach-search input{min-width:220px}
+#gdl-bp-achievements-screen .gdl-bp-ach-avatar{width:32px;height:32px;object-fit:cover}
+#gdl-bp-achievements-screen .gdl-bp-ach-global-label{white-space:nowrap;font-size:12px;font-weight:600;text-transform:uppercase}
+#gdl-bp-achievements-screen .gdl-bp-ach-row{position:relative;scroll-margin:8px;flex-shrink:0}
+#gdl-bp-achievements-screen .gdl-bp-ach-fallback-row{display:flex;align-items:center;gap:8px;min-height:80px;background:#23262e;padding:8px;box-sizing:border-box}
+#gdl-bp-achievements-screen .gdl-bp-ach-fallback-row img{width:64px;height:64px;object-fit:contain;flex:none}
 #gdl-bp-achievements-screen .gdl-bp-ach-fallback-copy{flex:1;min-width:0}
-#gdl-bp-achievements-screen .gdl-bp-ach-fallback-title{font-size:18px;font-weight:600}
+#gdl-bp-achievements-screen .gdl-bp-ach-fallback-title{font-size:16px;font-weight:600}
 #gdl-bp-achievements-screen .gdl-bp-ach-fallback-description{font-size:14px;color:var(--gpSystemLighterGrey,#b8bcbf)}
-#gdl-bp-achievements-screen .gdl-bp-ach-fallback-detail{color:var(--gpSystemLightGrey,#8f98a0);font-size:13px}
+#gdl-bp-achievements-screen .gdl-bp-ach-fallback-detail{color:var(--gpSystemLightGrey,#8f98a0);font-size:12px}
 #gdl-bp-achievements-screen .gdl-bp-ach-global-content{display:flex;align-items:center;gap:12px;position:relative;min-height:68px;flex:1;padding:10px;box-sizing:border-box}
-#gdl-bp-achievements-screen .gdl-bp-ach-global-content img{width:60px;height:60px;object-fit:contain}
+#gdl-bp-achievements-screen .gdl-bp-ach-global-content img{width:48px;height:48px;object-fit:contain}
 #gdl-bp-achievements-screen .gdl-bp-ach-global-info{flex:1;min-width:0;z-index:1}
 #gdl-bp-achievements-screen .gdl-bp-ach-global-fill{position:absolute;inset:0 auto 0 0;background:rgba(255,255,255,.055);pointer-events:none}
 #gdl-bp-achievements-screen .gdl-bp-ach-percent{font-weight:700;white-space:nowrap;z-index:1}
 #gdl-bp-achievements-screen .gdl-bp-ach-check{width:30px;flex:none;text-align:center}
 #gdl-bp-achievements-screen .gdl-bp-ach-empty{padding:32px;text-align:center;color:var(--gpSystemLightGrey,#8f98a0)}
-#gdl-bp-achievements-screen .gdl-bp-ach-footer{display:flex;justify-content:flex-end;flex:none}
+#gdl-bp-achievements-screen .gdl-bp-ach-background{position:absolute;inset:0;pointer-events:none;z-index:0}
+#gdl-bp-achievements-screen .gdl-bp-ach-background img{width:100%;height:100%;object-fit:cover;filter:blur(24px) brightness(.38);opacity:.65}
+#gdl-bp-achievements-screen .gdl-bp-ach-background:after{content:"";position:absolute;inset:0;background:linear-gradient(transparent,#0e141b)}
 `;
 	(doc.head || doc.body).appendChild(style);
 }
@@ -166,7 +149,7 @@ function achievementText(token: string, fallback: string, ...values: number[]): 
 }
 
 interface ScreenProps { document: Document; shortcut: MappedShortcut; data: LocalAchievementData; close: () => void;
-	lease: BigPictureModalLease }
+	lease: BigPictureModalLease; initialAchievementName?: string }
 
 export function BigPictureAchievementScreen(props: ScreenProps): React.ReactElement {
 	const { document: doc, shortcut, close } = props;
@@ -179,17 +162,26 @@ export function BigPictureAchievementScreen(props: ScreenProps): React.ReactElem
 	const [data, setData] = ownerReact.useState(props.data);
 	const [tab, setTab] = ownerReact.useState<BigPictureAchievementTab>('mine');
 	const [filters, setFilters] = ownerReact.useState({ mine: '', global: '' });
-	const [revealed, setRevealed] = ownerReact.useState<Set<string>>(() => new Set());
+	const [revealed, setRevealed] = ownerReact.useState<Set<string>>(() => new Set(props.initialAchievementName ? [props.initialAchievementName] : []));
+	const [comparison, setComparison] = ownerReact.useState<BigPictureAchievementComparisonSelection | null>(null);
+	const [playtime, setPlaytime] = ownerReact.useState(() => isShortcutPlaytimeTrackingEnabled(shortcut.id)
+		? getInstantPlaytimeStats(shortcut.id, shortcut.steamAppId) : null);
 	const scroll = ownerReact.useRef<HTMLDivElement>(null);
 	const scrollPositions = ownerReact.useRef({ mine: 0, global: 0 });
 	const parts = ownerReact.useMemo(() => resolveBigPictureAchievementScreenParts(doc), [doc]);
 	const ownerRoot = ownerReact.useRef(doc.getElementById('gdl-bp-detail-root'));
 	const generation = ownerReact.useRef(ownerRoot.current?.dataset.gdlBpGeneration);
+	const initialFocusPending = ownerReact.useRef(Boolean(props.initialAchievementName));
 	const current = () => props.lease.isCurrent() && currentOwner(doc, shortcut) && ownerRoot.current?.isConnected
 		&& doc.getElementById('gdl-bp-detail-root') === ownerRoot.current
 		&& ownerRoot.current?.dataset.gdlBpGeneration === generation.current;
 	ownerReact.useEffect(() => {
 		let disposed = false;
+		if (isShortcutPlaytimeTrackingEnabled(shortcut.id)) {
+			void fetchPlaytimeStats(shortcut.id, shortcut.title, shortcut.steamAppId).then(value => {
+				if (!disposed && current() && value) setPlaytime(value);
+			}).catch(() => {});
+		}
 		const unsubscribe = subscribeLocalAchievementData(update => {
 			if (disposed) return;
 			if (!current()) { props.lease.invalidate(); return; }
@@ -208,6 +200,20 @@ export function BigPictureAchievementScreen(props: ScreenProps): React.ReactElem
 		return () => doc.removeEventListener(EXIT_TEXT_EDITOR_EVENT, exitEditor);
 	}, [doc, tab]);
 	ownerReact.useLayoutEffect(() => { if (scroll.current) scroll.current.scrollTop = scrollPositions.current[tab]; }, [tab]);
+	ownerReact.useLayoutEffect(() => {
+		if (!initialFocusPending.current || !current() || !props.initialAchievementName) return undefined;
+		const target = Array.from(scroll.current?.querySelectorAll<HTMLElement>('[data-gdl-achievement-name]') || [])
+			.find(element => element.dataset.gdlAchievementName === props.initialAchievementName);
+		if (!target) return undefined;
+		initialFocusPending.current = false;
+		const focus = () => {
+			if (!current() || !target.isConnected) return;
+			target.scrollIntoView({ block: 'center', inline: 'nearest' });
+			if (!focusBigPictureNativeElement(doc, target)) target.focus({ preventScroll: true });
+		};
+		const frame = doc.defaultView!.requestAnimationFrame(focus);
+		return () => doc.defaultView?.cancelAnimationFrame(frame);
+	}, [doc, props.initialAchievementName]);
 	const rows = ownerReact.useMemo(() => bigPictureAchievementRows(data, tab, filters[tab], revealed), [data, tab, filters, revealed]);
 	ownerReact.useLayoutEffect(() => { if (!runtimeCurrent) props.lease.invalidate(); }, [runtimeCurrent, props.lease]);
 	if (!runtimeCurrent) return <></>;
@@ -230,26 +236,58 @@ export function BigPictureAchievementScreen(props: ScreenProps): React.ReactElem
 	const percent = total ? Math.round(unlocked * 100 / total) : 0;
 	const complete = total > 0 && unlocked === total;
 	const user = getCurrentSteamUser(doc);
+	const view = createBigPictureDetailViews(doc, shortcut, null);
+	const minutes = playtime ? (playtime.totalSeconds && playtime.totalSeconds > 0 ? playtime.totalSeconds / 60 : playtime.minutesForever)
+		: Number(view.overview.minutes_playtime_forever ?? view.details.nPlaytimeForever) || 0;
+	const recent = playtime?.minutesLastTwoWeeks ?? (Number(view.overview.minutes_playtime_last_two_weeks ?? view.details.nPlaytimeLastTwoWeeks) || 0);
+	const percentLabel = percent === 0 && unlocked > 0 ? '(<1%)' : percent === 100 && unlocked < total ? '(>99%)' : '(' + percent + '%)';
+	const comparisonControl = <BigPictureAchievementComparison document={doc} shortcut={shortcut} data={data}
+		isCurrent={current} onSelection={setComparison} react={ownerReact} />;
+	const displayedRows = tab === 'mine' ? rows.filter(item => !item.hidden || item.earned || revealed.has(item.name)) : rows;
+	const hiddenItems = tab === 'mine' ? data.achievements.filter(item => item.hidden && !item.earned && !revealed.has(item.name)) : [];
+	const revealHidden = () => { if (current()) setRevealed(value => new Set([...value, ...hiddenItems.map(item => item.name)])); };
 	const globalLabel = loc('Achievements_GlobalAchievement_PercentUnlockedLabel', '% of all players');
+	const searchRight = <div className="gdl-bp-ach-toolbar-right"><div hidden={tab !== 'mine'}>{comparisonControl}</div>
+		<span hidden={tab !== 'global'} className="gdl-bp-ach-global-label">{globalLabel}</span></div>;
 	const searchFallback = <div className="gdl-bp-ach-search">
 		{tab === 'global' && user.avatar ? <img className="gdl-bp-ach-avatar" src={user.avatar} alt={user.name} /> : null}
 		<div><NativeTextField value={filters[tab]} onChange={onFilter} aria-label={loc('Achievements_Filter_Default', 'Search')}
 			placeholder={loc('Achievements_Filter_Default', 'Search')} /></div>
-		{tab === 'global' ? <span className="gdl-bp-ach-global-label">{globalLabel}</span> : null}
+		{searchRight}
 	</div>;
 	return <NativeFocusable className="gdl-bp-ach-screen" flow-children="column" focusable={false}
-		onCancel={close} onCancelActionDescription={loc('Button_Back', 'Back')}
+		onCancel={close} onCancelButton={close} onCancelActionDescription={loc('ActionButtonLabelBack', 'Back')}
 		onButtonDown={(event: any) => {
 			if (!current() || event.defaultPrevented || event.detail?.is_repeat || isEditableTextTarget(doc.activeElement)) return;
 			const offset = event.detail?.button === GamepadButton.BUMPER_LEFT ? -1 : event.detail?.button === GamepadButton.BUMPER_RIGHT ? 1 : 0;
 			if (offset && switchBigPictureOwnedModalTab(doc, offset)) { event.preventDefault(); event.stopPropagation(); }
 		}}>
-		<div className={`gdl-bp-ach-head ${parts.header.StatsBlock || ''}`}>
-			{complete && NativeIcons.Achievement ? <NativeIcons.Achievement fullcolor className={`gdl-bp-ach-ribbon ${parts.header.Ribbon || ''}`} /> : null}
-			<div className={parts.header.BigStat}><div className={`gdl-bp-ach-progress-label ${parts.header.ProgressLabel || ''}`}>
-				<span>{complete ? achievementText('AppDetails_PlayerUnlockedPercentAll', "You've unlocked all achievements! %1$s/%2$s", unlocked, total)
-					: achievementText('Achievements_HeaderStats_Earned_Label', '%1$s of %2$s achievements earned', unlocked, total)}</span><span>({percent}%)</span>
-			</div><NativeProgress nProgress={percent} /></div>
+		<div className="gdl-bp-ach-background" aria-hidden="true"><img src={linkedShortcutPortrait(shortcut.id, shortcut.steamAppId)} alt="" /></div>
+		<div className="gdl-bp-ach-body">
+		<div className={'gdl-bp-ach-head ' + (parts.page.HeaderContainer || '')}>
+			<div className={parts.header.Container || 'gdl-bp-ach-head-fallback'}>
+				<img className={'gdl-bp-ach-portrait ' + (parts.header.Portrait || '')} src={linkedShortcutPortrait(shortcut.id, shortcut.steamAppId)} alt="" />
+				<div className={'gdl-bp-ach-header-content ' + (parts.header.Content || '')}>
+					<div className={parts.header.Title || 'gdl-bp-ach-fallback-title'}>{shortcut.title}</div>
+					<div className={parts.header.StatsBlock || 'gdl-bp-ach-stats-fallback'}>
+						<div className={(parts.header.Stat || 'gdl-bp-ach-stat-fallback') + ' ' + (parts.header.BigStat || 'gdl-bp-ach-big-stat-fallback')}>
+							{complete && NativeIcons.Achievement ? <NativeIcons.Achievement fullcolor className={parts.header.Ribbon} /> : null}
+							<div className={parts.header.StatLabelAndValue || 'gdl-bp-ach-stat-value-fallback'}>
+								<div className={'gdl-bp-ach-progress-label ' + (parts.header.ProgressLabel || '')}>
+									<span className={parts.header.Label || 'gdl-bp-ach-label-fallback'}>{complete ? achievementText('AppDetails_PlayerUnlockedPercentAll', "You've unlocked all achievements! %1$s/%2$s", unlocked, total)
+										: achievementText('Achievements_HeaderStats_Earned_Label', '%1$s of %2$s achievements earned', unlocked, total)}</span>
+									<span className={parts.header.Label || 'gdl-bp-ach-label-fallback'}>{percentLabel}</span>
+								</div><div className={'gdl-bp-ach-progress ' + (parts.header.Progress || '')}><NativeProgress nProgress={percent} /></div>
+							</div>
+						</div>
+						{[[minutes, 'Achievements_HeaderStats_Playtime_Label', 'Play time'], [recent, 'Achievements_HeaderStats_PlaytimeRecent_Label', 'Last two weeks']].map(([value, token, fallback]) => Number(value) > 0
+							? <div key={String(token)} className={parts.header.Stat || 'gdl-bp-ach-stat-fallback'} data-gdl-achievement-playtime={String(token)}><div className={parts.header.StatLabelAndValue || 'gdl-bp-ach-stat-value-fallback'}>
+								<div className={parts.header.Label || 'gdl-bp-ach-label-fallback'}>{loc(String(token), String(fallback))}</div>
+								<div className={parts.header.TextValue}>{formatPlaytimeMinutes(Number(value))}</div>
+							</div></div> : null)}
+					</div>
+				</div>
+			</div>
 		</div>
 		<NativeFocusable flow-children="row" focusable={false} role="tablist" className={`gdl-bp-ach-tabs ${parts.tabs.TabRow || ''}`}>
 			{(['mine', 'global'] as const).map(value => <NativeFocusable key={value} focusable role="tab" tabIndex={0}
@@ -260,28 +298,40 @@ export function BigPictureAchievementScreen(props: ScreenProps): React.ReactElem
 			</NativeFocusable>)}
 		</NativeFocusable>
 		<div className="gdl-bp-ach-scroll" ref={scroll} role="tabpanel" aria-label={tab === 'mine' ? loc('Achievements_Tab_MyAchievements', 'My achievements') : loc('Achievements_Tab_GlobalAchievements', 'Global achievements')}>
+			<NativeFocusable flow-children="column" focusable={false} className={parts.row.AchievementList}>
 			{parts.Search ? <NativeScreenPartBoundary fallback={searchFallback}><parts.Search strFilter={filters[tab]} onChangeFilter={onFilter}
 				leftContent={tab === 'global' && user.avatar ? <img className="gdl-bp-ach-avatar" src={user.avatar} alt={user.name} /> : undefined}
-				rightContent={tab === 'global' ? <span className="gdl-bp-ach-global-label">{globalLabel}</span> : undefined} /></NativeScreenPartBoundary> : searchFallback}
-			<NativeFocusable flow-children="column" focusable={false} className={parts.row.AchievementList}>
-				{rows.map(item => <AchievementRow key={`${tab}:${item.name}`} item={item} tab={tab} parts={parts} ui={ui}
-					revealed={revealed.has(item.name)} onReveal={() => reveal(item)} />)}
-				{rows.length === 0 ? <div role="status" className="gdl-bp-ach-empty">{loc('Search_NoResults', 'No results')}</div> : null}
+				className={parts.page.MyAchievementsHeader}
+				rightContent={searchRight} /></NativeScreenPartBoundary> : searchFallback}
+				{comparison && tab === 'mine' && (comparison.loading || comparison.error) ? <div role="status">{comparison.loading ? loc('Loading', 'Loading...') : comparison.error}</div> : null}
+				{displayedRows.map((item, index) => <React.Fragment key={item.name}>
+					{tab === 'mine' && !item.earned && (index === 0 || displayedRows[index - 1].earned) ? <div className={parts.row.ListTitle}>{loc('Achievements_LockedList_Title', 'Locked achievements')}</div> : null}
+					<AchievementRow key={`${tab}:${item.name}`} item={item} tab={tab} parts={parts} ui={ui}
+					revealed={revealed.has(item.name)} onReveal={() => reveal(item)} comparison={tab === 'mine' ? comparison : null} userAvatar={user.avatar} /></React.Fragment>)}
+				{hiddenItems.length > 0 ? parts.HiddenRow ? <NativeScreenPartBoundary fallback={<NativeButton {...clickProps(revealHidden)} data-gdl-achievements-hidden="1">{hiddenItems.length} {loc('Achievements_HiddenAchievementItem_Individual_Title', 'Hidden achievements')}</NativeButton>}>
+					<parts.HiddenRow count={hiddenItems.length} onActivate={revealHidden} {...clickProps(revealHidden)} data-gdl-achievements-hidden="1" />
+				</NativeScreenPartBoundary> : <NativeButton {...clickProps(revealHidden)} data-gdl-achievements-hidden="1">{hiddenItems.length} {loc('Achievements_HiddenAchievementItem_Individual_Title', 'Hidden achievements')}</NativeButton> : null}
+				{displayedRows.length === 0 && hiddenItems.length === 0 ? <div role="status" className="gdl-bp-ach-empty">{loc('Search_NoResults', 'No results')}</div> : null}
 			</NativeFocusable>
 		</div>
-		<div className="gdl-bp-ach-footer"><NativeButton className="gdl-bp-ach-close-trigger" {...clickProps(close)}>
-			{loc('Button_Back', 'Back')}</NativeButton></div>
+		</div>
 	</NativeFocusable>;
 }
 
-function AchievementRow({ item, tab, parts, ui, revealed, onReveal }: { item: LocalAchievementItem; tab: BigPictureAchievementTab;
-	parts: NativeAchievementScreenParts; ui: ScreenUI; revealed: boolean; onReveal: () => void }): React.ReactElement {
+function AchievementRow({ item, tab, parts, ui, revealed, onReveal, comparison, userAvatar }: { item: LocalAchievementItem; tab: BigPictureAchievementTab;
+	parts: NativeAchievementScreenParts; ui: ScreenUI; revealed: boolean; onReveal: () => void;
+	comparison: BigPictureAchievementComparisonSelection | null; userAvatar: string }): React.ReactElement {
 	const { Focusable: NativeFocusable, Icons: NativeIcons } = ui;
 	const hidden = item.hidden && !item.earned && !revealed;
 	const percent = knownBigPictureAchievementPercent(item);
 	const title = hidden ? loc('Achievements_HiddenAchievementItem_Individual_Title', 'Hidden achievement') : item.display_name || item.name;
 	const description = hidden ? loc('Achievements_HiddenAchievementItem_Description', 'Details will be revealed once unlocked.') : item.description;
 	const icon = item.earned ? item.icon : item.icon_gray || item.icon;
+	const friend = comparison?.achievements?.get(item.name);
+	const progress = !item.earned && item.max_progress > 0 ? { flCurrent: item.progress, flMax: item.max_progress,
+		flPercentage: Math.max(0, Math.min(100, item.progress * 100 / item.max_progress)) } : undefined;
+	const friendProgress = friend && !friend.earned && item.max_progress > 0 ? { flCurrent: friend.progress, flMax: item.max_progress,
+		flPercentage: Math.max(0, Math.min(100, friend.progress * 100 / item.max_progress)) } : undefined;
 	const props = { className: 'gdl-bp-ach-row', 'data-gdl-achievement-name': item.name,
 		'data-gdl-focus-key': `achievement-${tab}-${item.name}`, tabIndex: 0, onActivate: onReveal, onClick: onReveal,
 		onOKActionDescription: hidden ? loc('Achievements_HiddenAchievementItem_Individual_Reveal', 'Reveal achievement') : null };
@@ -289,15 +339,20 @@ function AchievementRow({ item, tab, parts, ui, revealed, onReveal }: { item: Lo
 		{hidden ? <span aria-hidden="true">?</span> : <img loading="lazy" src={icon} alt="" />}
 		<div className="gdl-bp-ach-fallback-copy"><div className="gdl-bp-ach-fallback-title">{title}</div><div className="gdl-bp-ach-fallback-description">{description}</div>
 			{item.earned && percent !== null ? <div className="gdl-bp-ach-fallback-detail">{loc('AppDetails_PctUnlocked', '%1$s% of players have this achievement').replace('%1$s', percent.toFixed(1))}</div> : null}
-		</div>{item.earned_time > 0 && item.earned ? <span className="gdl-bp-ach-fallback-detail">{formatLocalUnlockDate(item.earned_time)}</span> : null}
+		</div><div className="gdl-bp-ach-fallback-detail">{item.earned ? <div>{item.earned_time > 0 ? formatLocalUnlockDate(item.earned_time) : loc('AppDetails_Achievements_Unlocked', 'Unlocked')}</div> : null}
+			{friend ? <div>{comparison!.friendName} {friend.earned ? '✓' : '○'}</div> : null}</div>
 	</NativeFocusable>;
 	if (tab === 'mine') {
+		if (friend && (!friend.earned || friend.earnedTime > 0) && (!item.earned || item.earned_time > 0) && parts.ComparisonRow) return <NativeScreenPartBoundary fallback={fallback}><parts.ComparisonRow {...props}
+			title={title} description={description} imgUrl={icon} hidden={hidden} percentGlobalUnlocked={percent ?? undefined}
+			primaryAchiever={{ avatarURL: userAvatar, unlockDate: item.earned ? item.earned_time : 0, progress }}
+			secondaryAchiever={{ avatarURL: comparison!.friendAvatar, unlockDate: friend.earned ? friend.earnedTime : 0, progress: friendProgress }} /></NativeScreenPartBoundary>;
+		if ((item.earned && item.earned_time <= 0) || (friend?.earned && friend.earnedTime <= 0)) return fallback;
 		return parts.PersonalRow ? <NativeScreenPartBoundary fallback={fallback}><parts.PersonalRow {...props}
 			className={`gdl-bp-ach-row ${parts.row.AchievementListItemBase || ''}`}
 			title={title} description={description} imgUrl={icon} hidden={hidden} glow={item.earned && isRareAchievement(item)}
 			unlockDate={item.earned ? item.earned_time : 0} percentGlobalUnlocked={percent ?? undefined}
-			progress={!item.earned && item.max_progress > 0 ? { flCurrent: item.progress, flMax: item.max_progress,
-				flPercentage: Math.max(0, Math.min(100, item.progress * 100 / item.max_progress)) } : undefined} /></NativeScreenPartBoundary> : fallback;
+			progress={progress} /></NativeScreenPartBoundary> : fallback;
 	}
 	const css = parts.row;
 	return <NativeFocusable {...props} focusable className={`gdl-bp-ach-row ${css.GlobalAchievementListItem || 'gdl-bp-ach-fallback-row'}`}>
@@ -319,11 +374,11 @@ function AchievementRow({ item, tab, parts, ui, revealed, onReveal }: { item: Lo
 }
 
 export function openBigPictureAchievementsScreen(doc: Document, shortcut: MappedShortcut,
-	data: LocalAchievementData, title = shortcut.title): boolean {
+	data: LocalAchievementData, title = shortcut.title, initialAchievementName?: string): boolean {
 	const ownerReact = getDocumentReact(doc);
 	if (!currentOwner(doc, shortcut) || !ownerReact || getCachedLocalAchievementsForShortcut(shortcut.steamAppId, String(shortcut.id)) !== data
 		|| String(data.metadata_appid || data.appid) !== shortcut.steamAppId) return false;
 	ensureScreenStyles(doc);
 	return showBigPictureModal(doc, 'gdl-bp-achievements-screen', title,
-		(close, lease) => <BigPictureAchievementScreen document={doc} shortcut={shortcut} data={data} close={close} lease={lease} />);
+		(close, lease) => <BigPictureAchievementScreen document={doc} shortcut={shortcut} data={data} close={close} lease={lease} initialAchievementName={initialAchievementName} />, { fullScreen: true });
 }

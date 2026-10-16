@@ -61,11 +61,49 @@ function installPrimaryLinksResponsiveLayout(inner: HTMLElement): void {
 	const more = inner.querySelector<HTMLElement>('.gdl-primary-more');
 	const win = inner.ownerDocument.defaultView;
 	if (!primary.length || !more || !win) return;
+	const doc = inner.ownerDocument;
+	const trigger = more.querySelector<HTMLElement>('summary');
+	const menu = more.querySelector<HTMLElement>('.gdl-primary-more-menu');
+	const closeMenu = (): void => {
+		if (menu?.matches(':popover-open')) menu.hidePopover();
+		more.removeAttribute('open'); trigger?.setAttribute('aria-expanded', 'false');
+	};
+	const openMenu = (): void => {
+		if (!menu || !trigger || !inner.isConnected) return;
+		more.setAttribute('open', '');
+		menu.showPopover();
+		const anchor = trigger.getBoundingClientRect(), rect = menu.getBoundingClientRect();
+		const scale = menu.offsetWidth > 0 ? rect.width / menu.offsetWidth : 1;
+		menu.style.left = `${Math.max(4, Math.min(anchor.right - rect.width, win.innerWidth - rect.width - 4)) / (scale || 1)}px`;
+		menu.style.top = `${Math.max(4, Math.min(anchor.bottom + 2, win.innerHeight - rect.height - 4)) / (scale || 1)}px`;
+		trigger.setAttribute('aria-expanded', 'true');
+	};
+	const toggleMenu = (event: Event): void => {
+		event.preventDefault();
+		if (more.hasAttribute('open')) closeMenu(); else openMenu();
+	};
+	const outside = (event: Event): void => { if (!more.contains(event.target as Node)) closeMenu(); };
+	const keyboard = (event: KeyboardEvent): void => {
+		if (!more.hasAttribute('open')) return;
+		const items = overflow.filter(item => item.style.display !== 'none');
+		if (event.key === 'Escape') { closeMenu(); trigger?.focus(); }
+		else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+			const index = items.indexOf(doc.activeElement as HTMLElement);
+			items[(index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length]?.focus();
+		} else return;
+		event.preventDefault(); event.stopPropagation();
+	};
+	trigger?.addEventListener('click', toggleMenu);
+	menu?.addEventListener('click', closeMenu);
+	doc.addEventListener('pointerdown', outside, true);
+	doc.addEventListener('keydown', keyboard, true);
+	doc.addEventListener('scroll', closeMenu, true);
 	let frame = 0, lastWidth = -1;
 	const update = (): void => {
 		frame = 0;
 		if (!inner.isConnected || inner.clientWidth === lastWidth) return;
 		lastWidth = inner.clientWidth;
+		closeMenu();
 		for (const link of primary) link.style.removeProperty('display');
 		more.style.setProperty('display', 'none', 'important');
 		for (const item of overflow) item.style.setProperty('display', 'none', 'important');
@@ -85,6 +123,12 @@ function installPrimaryLinksResponsiveLayout(inner: HTMLElement): void {
 	observer?.observe(inner);
 	if (!observer) win.addEventListener('resize', queue, { passive: true });
 	responsiveLayouts.set(inner, { update, dispose: () => {
+		closeMenu();
+		trigger?.removeEventListener('click', toggleMenu);
+		menu?.removeEventListener('click', closeMenu);
+		doc.removeEventListener('pointerdown', outside, true);
+		doc.removeEventListener('keydown', keyboard, true);
+		doc.removeEventListener('scroll', closeMenu, true);
 		observer?.disconnect();
 		if (frame) win.cancelAnimationFrame(frame);
 		if (!observer) win.removeEventListener('resize', queue);
@@ -114,7 +158,8 @@ export function createPrimaryLinksBar(doc: Document, _layout: NativeLibraryLayou
 	if (bar.dataset.gdlLinksSignature !== signature) {
 		const primary = links.map(([label, url], index) => `<a class="gdl-primary-link" data-gdl-primary-index="${index}" href="${escapeHtml(url)}" data-gdl-open-url="${escapeHtml(url)}">${escapeHtml(label)}</a>`).join('');
 		const overflow = links.map(([label, url], index) => `<a class="gdl-primary-overflow-link" data-gdl-primary-index="${index}" href="${escapeHtml(url)}" data-gdl-open-url="${escapeHtml(url)}">${escapeHtml(label)}</a>`).join('');
-		bar.innerHTML = `${primary}<details class="gdl-primary-more"><summary aria-label="${escapeHtml(gdlText('more_links', 'More links'))}">•••</summary><div class="gdl-primary-more-menu">${overflow}</div></details>`;
+		responsiveLayouts.get(bar)?.dispose();
+		bar.innerHTML = `${primary}<details class="gdl-primary-more"><summary aria-haspopup="menu" aria-expanded="false" aria-label="${escapeHtml(gdlText('more_links', 'More links'))}">•••</summary><div class="gdl-primary-more-menu" popover="manual" role="menu">${overflow}</div></details>`;
 		bar.dataset.gdlLinksSignature = signature;
 		installPrimaryLinksResponsiveLayout(bar);
 	}

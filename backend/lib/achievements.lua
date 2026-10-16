@@ -76,13 +76,7 @@ local function clean_html_text(s)
 end
 
 local function achievement_icon_url(appid, icon)
-    icon = tostring(icon or "")
-    if icon == "" then return "" end
-    if icon:match("^https?://") then return icon end
-    local base = icon:match("([^/\\]+)$") or icon
-    if base == "" then return "" end
-    if not base:match("%.[%w]+$") then base = base .. ".jpg" end
-    return "https://cdn.cloudflare.steamstatic.com/steamcommunity/public/images/apps/" .. tostring(appid) .. "/" .. base
+    return metadata_identity.icon_url(appid, icon)
 end
 
 local function fetch_global_achievement_percentages(appid)

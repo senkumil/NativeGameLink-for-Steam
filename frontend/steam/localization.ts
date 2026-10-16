@@ -59,6 +59,7 @@ export const SPANISH_TRANSLATIONS: Record<string, string> = {
 	achievements_mine: 'MIS LOGROS',
 	achievements_global: 'LOGROS GLOBALES',
 	achievement_comparison_unavailable: 'Los logros de este amigo son privados o no están disponibles.',
+	achievement_comparison_friends_unavailable: 'La lista de amigos no está disponible. Inténtalo de nuevo.',
 	hidden_achievement: 'Logro oculto',
 	hidden_achievement_desc: 'Sigue jugando para desbloquear este logro.',
 	show_details: 'Mostrar detalles',

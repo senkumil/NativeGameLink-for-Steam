@@ -37,7 +37,10 @@ export function createBigPictureDetailViews(doc: Document, shortcut: MappedShort
 		const date = Date.parse(game?.release_date?.date || '');
 		return Number.isFinite(date) ? Math.floor(date / 1000) : 0;
 	};
-	const own: Record<string, any> = { appid: id, display_name: game?.name || base?.display_name || shortcut.title };
+	// Steam keys shortcut notes by the real local display name. Metadata titles
+	// belong only to the information projection, never to personal sections.
+	const own: Record<string, any> = { appid: id, display_name: information
+		? game?.name || base?.display_name || shortcut.title : base?.display_name || shortcut.title };
 	if (information) Object.assign(own, {
 		// Only the information component sees metadata presentation semantics.
 		// The real overview still identifies and launches a non-Steam shortcut.

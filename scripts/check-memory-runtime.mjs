@@ -8,10 +8,10 @@ const timers = new Map();
 const frames = new Map();
 let nextHandle = 0;
 const schedule = callback => { const id = ++nextHandle; timers.set(id, callback); return id; };
-function loadModule(file, dependencies = {}) {
+function loadModule(file, dependencies = {}, globals = {}) {
   const context = vm.createContext({
     exports: {}, console, performance, Element: FakeElement, Node: FakeElement,
-    setTimeout: schedule, clearTimeout: id => timers.delete(id),
+    setTimeout: schedule, clearTimeout: id => timers.delete(id), ...globals,
     require: name => {
       if (!(name in dependencies)) throw new Error(`Unexpected dependency ${name} in ${file}`);
       return dependencies[name];
@@ -135,6 +135,7 @@ const cards = loadModule('frontend/features/library/trading-cards.ts', {
   './constants': { GDL_INJECTED: 'gdl-library-injected' },
   './layout': { buildNativeSidebarSection: (_doc, _layout, options) => { sectionHtml = options.innerHtml; return section; } },
   './trading-card-preload': preload,
+  './linked-card-presentation': loadModule('frontend/features/library/linked-card-presentation.ts'),
   './sidebar-order': { getLinkedSidebarOrder: (_doc, layout) => ({
     shortcutAppId: '3000000001', isCurrent: () => true,
     publish: node => { layout.sidebarColumn.appendChild(node); return true; },
@@ -224,4 +225,99 @@ for (let i = 0; i < 1000; i++) {
 assert.equal(performance.getEntriesByName('ngl:memory-test', 'mark').length, 1);
 assert.equal(performance.getEntriesByName('ngl:memory-test', 'measure').length, 0, 'timing entries do not accumulate on navigation');
 performance.clearMarks('ngl:memory-test');
-console.log('Memory runtime checks passed: bounded artwork, expiry, realm isolation, 100 navigation cleanups, observer/frame disposal and bounded performance entries.');
+
+// Invalidation must not keep one tombstone per game forever, including identities
+// that were never fetched. Old requests must still remain inert after replacement.
+const { RetryingRequestCache } = loadModule('frontend/core/request-cache.ts');
+const requests = new RetryingRequestCache({ ttlMs: 60000, retries: 0, maxEntries: 8 });
+for (let index = 0; index < 10000; index++) requests.invalidate(`unused-${index}`);
+assert.equal(requests.keyEpochs.size, 0, 'invalidating absent identities retains no tombstones');
+for (let index = 0; index < 100; index++) await requests.get(String(index), async () => index);
+assert.equal(requests.values.size, 8, 'successful requests retain only the configured cache bound');
+assert.equal(requests.keyEpochs.size + requests.inFlight.size, 0, 'settled requests release all bookkeeping');
+let settleOld, settleNew;
+const oldRequest = requests.get('relinked', () => new Promise(resolve => { settleOld = resolve; }));
+requests.invalidate('relinked');
+const newRequest = requests.get('relinked', () => new Promise(resolve => { settleNew = resolve; }));
+settleOld('obsolete');
+assert.equal(await oldRequest, null, 'an invalidated original caller cannot observe obsolete metadata');
+assert.equal(requests.inFlight.size, 1, 'obsolete completion preserves the replacement request');
+settleNew('current');
+assert.equal(await newRequest, 'current');
+assert.equal(requests.peek('relinked'), 'current');
+assert.equal(requests.keyEpochs.size + requests.inFlight.size, 0);
+let settleCleared;
+const cleared = requests.get('disabled', () => new Promise(resolve => { settleCleared = resolve; }));
+requests.clear();
+settleCleared('late');
+assert.equal(await cleared, null);
+assert.equal(requests.keyEpochs.size + requests.inFlight.size + requests.values.size, 0);
+
+let manualLinkRequests = 0;
+const manualLink = loadModule('frontend/features/library/manual-link-button.ts', {
+  '../../steam/localization': { gdlText: (_key, fallback) => fallback },
+  '../../steam/shortcuts': {},
+  '../shortcuts/runtime': { requestManualShortcutLink() { manualLinkRequests++; return false; } },
+});
+function manualLinkSurface() {
+  const doc = documentSurface();
+  doc.defaultView.MutationObserver = class {
+    constructor() { doc.observers.push(this); }
+    observe() { this.active = true; }
+    disconnect() { this.active = false; }
+  };
+  const host = new FakeElement(doc); doc.documentElement.appendChild(host);
+  host.closest = () => host;
+  let row;
+  doc.getElementById = id => id === 'gdl-manual-link-notice-styles' ? {} : row?.id === id && row.isConnected ? row : null;
+  return { doc, mount() {
+    row = new FakeElement(doc); row.id = 'gdl-manual-link-notice-button-row';
+    const button = new FakeElement(doc); row.appendChild(button); host.appendChild(row);
+    button.closest = selector => selector === '#gdl-manual-link-notice-button' ? button : null;
+    row.queries = { button };
+    manualLink.ensureManualLinkNoticeButton(doc, host, '3000000001', 'Game', () => null);
+    return button;
+  } };
+}
+const manualSurface = manualLinkSurface();
+for (let index = 0; index < 100; index++) {
+  const button = manualSurface.mount();
+  const event = { target: button, preventDefault() {}, stopPropagation() {} };
+  manualSurface.doc.fire('click', event);
+  manualSurface.doc.fire('click', event);
+  assert.equal(manualSurface.doc.listenerCount, 1);
+  assert.equal(timers.size, 1, 'repeated clicks retain only one retry');
+  const staleRetry = [...timers.values()][0];
+  manualLink.removeManualLinkNoticeButton(manualSurface.doc);
+  assert.equal(manualSurface.doc.listenerCount + timers.size, 0, 'notice removal releases delegated clicks and retries');
+  assert.equal(manualSurface.doc.observers.filter(observer => observer.active).length, 0);
+  const callsBefore = manualLinkRequests;
+  staleRetry();
+  assert.equal(manualLinkRequests, callsBefore, 'already queued retry cannot reopen the dialog after cleanup');
+}
+
+// Both idle-callback and timeout maintenance paths are owned by the plugin.
+for (const useIdle of [false, true]) {
+  const entries = new Map(), idleJobs = new Map();
+  const storage = { get length() { return entries.size; }, key: index => [...entries.keys()][index],
+    getItem: key => entries.get(key) ?? null, setItem: (key, value) => entries.set(key, value), removeItem: key => entries.delete(key) };
+  const globals = { localStorage: storage };
+  if (useIdle) Object.assign(globals, {
+    requestIdleCallback: callback => { const id = ++nextHandle; idleJobs.set(id, callback); return id; },
+    cancelIdleCallback: id => idleJobs.delete(id),
+  });
+  const persistent = loadModule('frontend/core/cache.ts', {}, globals);
+  persistent.cacheSet('metadata', { name: 'Game' });
+  const queue = useIdle ? idleJobs : timers;
+  assert.equal(queue.size, 1);
+  const staleMaintenance = [...queue.values()][0];
+  persistent.disposeCacheMaintenance();
+  assert.equal(queue.size, 0, 'disposal cancels pending storage maintenance');
+  entries.set('gdl_cache_malformed', '{');
+  staleMaintenance();
+  assert(entries.has('gdl_cache_malformed'), 'a queued obsolete maintenance callback performs no storage writes');
+  persistent.cacheSet('current', {});
+  assert.equal(queue.size, 1, 'a replacement runtime can schedule maintenance');
+  persistent.disposeCacheMaintenance();
+}
+console.log('Memory runtime checks passed: bounded artwork/requests, 100 navigation and manual-link cleanups, obsolete async isolation, observer/frame disposal and cancelled storage maintenance.');

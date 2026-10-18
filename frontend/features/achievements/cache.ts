@@ -28,6 +28,7 @@ export function localAchievementDataSignature(data: LocalAchievementData): strin
 			item.name, item.display_name, item.description, item.icon, item.icon_gray,
 			item.earned ? 1 : 0, item.earned_time, item.progress, item.max_progress,
 			item.is_online ? 1 : 0, item.hidden ? 1 : 0, item.global_percent ?? '', item.global_percent_known === false ? 0 : 1,
+			item.schema_order ?? '',
 		].join(':')),
 	].join('|');
 	let hash = 2166136261;

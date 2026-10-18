@@ -2,6 +2,7 @@ import { loc } from '../../steam/localization';
 import { PLAYBAR_CLASSES } from '../../steam/css';
 import { resolveActiveGameContext, isCurrentLinkedGamepadTarget } from '../../steam/gamepad/GamepadContext';
 import { steamUIModeService } from '../../steam/ui/SteamUIModeService';
+import { createBigPictureTransitionSnapshot } from './transition-snapshot';
 import { NativeVisibilityLeases } from './visibility-lease';
 import { detectConnectedController, detectGameControllerSupport, type GameControllerSupport } from '../library/controller';
 import { disposePlaybarControllerIcons, mountPlaybarControllerIcons } from './PlaybarControllerIcons';
@@ -157,6 +158,32 @@ const childVisibilityOwners = new WeakMap<HTMLElement, PanelChildVisibility>();
 const ownedPanelsByDocument = new WeakMap<Document, Set<HTMLElement>>();
 const panelCommitObservers = new WeakMap<HTMLElement, { owner: HTMLElement; observer: MutationObserver; retiring: boolean }>();
 const retiringPanels = new WeakMap<Document, { panels: Set<HTMLElement>; observer: MutationObserver }>();
+const transitionSnapshots = new WeakMap<HTMLElement, { owner: HTMLElement; snapshot: HTMLElement }>();
+const nativePanelExits = new WeakMap<HTMLElement, () => void>();
+
+/** Revoke the live owner immediately, but let an actual outgoing Steam CSS
+ * transition finish painting its last passive frame. Explicit disposal still
+ * restores synchronously; a stopped native transition has a bounded deadline. */
+export function preserveNativePanelExit(panel: HTMLElement, root: HTMLElement): boolean {
+	if (panelCommitObservers.get(panel)?.owner !== root) return false;
+	const transitions = new Set<Animation>();
+	for (let parent: HTMLElement | null = panel; parent && parent !== panel.ownerDocument.body; parent = parent.parentElement) {
+		for (const animation of parent.getAnimations?.() || []) {
+			if ('transitionProperty' in animation && /^(transform|opacity)$/.test(String(animation.transitionProperty))
+				&& (animation.playState === 'running' || animation.pending)) transitions.add(animation);
+		}
+	}
+	if (!transitions.size || !root.isConnected) return false;
+	const finish = () => { nativePanelExits.delete(panel); restoreNativePanelChildren(panel); };
+	const timer = setTimeout(finish, 1200);
+	const cancel = () => clearTimeout(timer);
+	nativePanelExits.set(panel, cancel);
+	retireNativePanelChildren(panel, root);
+	void Promise.allSettled([...transitions].map(animation => animation.finished)).then(() => {
+		if (nativePanelExits.get(panel) === cancel) { clearTimeout(timer); finish(); }
+	});
+	return true;
+}
 
 function stopRetiringPanel(panel: HTMLElement): void {
 	const state = retiringPanels.get(panel.ownerDocument);
@@ -170,6 +197,9 @@ export function retireNativePanelChildren(panel: HTMLElement, root: HTMLElement)
 	const watch = panelCommitObservers.get(panel);
 	if (!watch || watch.owner !== root) return;
 	watch.retiring = true;
+	if (root.parentElement === panel && root.childNodes.length > 0 && !transitionSnapshots.has(panel)) {
+		transitionSnapshots.set(panel, { owner: root, snapshot: createBigPictureTransitionSnapshot(root) });
+	}
 	const doc = panel.ownerDocument;
 	let state = retiringPanels.get(doc);
 	if (!state) {
@@ -177,8 +207,10 @@ export function retireNativePanelChildren(panel: HTMLElement, root: HTMLElement)
 		const observer = new MutationObserver(() => {
 			for (const outgoing of [...panels]) {
 				const owner = panelCommitObservers.get(outgoing)?.owner;
-				if (!outgoing.isConnected || !owner?.isConnected
-					|| !isCurrentLinkedGamepadTarget(doc, owner.dataset.gdlShortcutAppId || '', owner.dataset.gdlSteamAppId || '')) {
+				const passiveExit = nativePanelExits.has(outgoing);
+				const ownerCurrent = passiveExit || (owner?.isConnected && isCurrentLinkedGamepadTarget(doc,
+					owner.dataset.gdlShortcutAppId || '', owner.dataset.gdlSteamAppId || ''));
+				if (!outgoing.isConnected || !ownerCurrent) {
 					restoreNativePanelChildren(outgoing);
 				}
 			}
@@ -220,6 +252,9 @@ function restorePanelChild(element: HTMLElement, snapshot: PanelChildVisibility)
 
 export function restoreNativePanelChildren(panel: HTMLElement | null, owner?: HTMLElement): void {
 	if (!panel) return;
+	if (!owner || panelCommitObservers.get(panel)?.owner === owner) { nativePanelExits.get(panel)?.(); nativePanelExits.delete(panel); }
+	const transition = transitionSnapshots.get(panel);
+	if (transition && (!owner || transition.owner === owner)) { transition.snapshot.remove(); transitionSnapshots.delete(panel); }
 	const watch = panelCommitObservers.get(panel);
 	if (watch && (!owner || watch.owner === owner)) {
 		stopRetiringPanel(panel);
@@ -239,12 +274,15 @@ export function restoreNativePanelChildren(panel: HTMLElement | null, owner?: HT
 
 /** Retire only snapshots created by this runtime, including detached panels.
  * An existing marker alone is never evidence that we own a native node. */
-export function restoreAllNativePanelChildren(doc: Document): void {
-	for (const panel of [...(ownedPanelsByDocument.get(doc) || [])]) restoreNativePanelChildren(panel);
+export function restoreAllNativePanelChildren(doc: Document, preserveExits = false): void {
+	for (const panel of [...(ownedPanelsByDocument.get(doc) || [])]) if (!preserveExits || !nativePanelExits.has(panel)) restoreNativePanelChildren(panel);
 }
 
 export function commitNativePanelRoot(panel: HTMLElement, root: HTMLElement, preserveRetiring = false): void {
 	if (!preserveRetiring) {
+		nativePanelExits.get(panel)?.(); nativePanelExits.delete(panel);
+		const transition = transitionSnapshots.get(panel);
+		if (transition) { transition.snapshot.remove(); transitionSnapshots.delete(panel); }
 		stopRetiringPanel(panel);
 		const watch = panelCommitObservers.get(panel);
 		if (watch) watch.retiring = false;
@@ -276,6 +314,7 @@ export function commitNativePanelRoot(panel: HTMLElement, root: HTMLElement, pre
 	}
 	for (const child of Array.from(panel.children)) {
 		if (child === root || child.id === 'gdl-bp-detail-root') continue;
+		if (child === transitionSnapshots.get(panel)?.snapshot) continue;
 		const element = child as HTMLElement;
 		let snapshot = childVisibilityOwners.get(element);
 		if (snapshot) {
@@ -340,7 +379,7 @@ function usableNativePanel(
 	strip: HTMLElement,
 ): panel is HTMLElement {
 	if (!panel || !panel.isConnected || panel === doc.body || panel === doc.documentElement) return false;
-	if (panel.contains(strip) || panel.closest('#gdl-bp-detail-root')) return false;
+	if (panel.contains(strip) || panel.closest('#gdl-bp-detail-root, [data-gdl-bp-transition-snapshot]')) return false;
 	if (panel.hidden || panel.getAttribute('aria-hidden') === 'true') return false;
 	const style = doc.defaultView?.getComputedStyle(panel);
 	if (style?.display === 'none' || style?.visibility === 'hidden') return false;
@@ -457,11 +496,16 @@ export function ensureNativePanelRoot(
 	doc: Document,
 	tabs: BigPictureNativeTabs,
 	tab: BigPicturePanelTab,
+	retainedRoot?: HTMLElement,
 ): { panel: HTMLElement; root: HTMLElement } | null {
 	const nativePanel = findNativeTabPanel(doc, tabs, tab);
 	const panel = nativePanel || ensureFallbackPanel(doc, tabs.strip);
 	if (!panel) return null;
 	let root = doc.getElementById('gdl-bp-detail-root') as HTMLElement | null;
+	// Steam may cancel an entering panel and detach it in the same commit that
+	// creates its replacement. The already-authorized renderer still owns that
+	// exact root; reconnect it rather than creating a second React lifecycle.
+	if (!root && retainedRoot?.ownerDocument === doc && retainedRoot.id === 'gdl-bp-detail-root') root = retainedRoot;
 	if (!root) {
 		root = doc.createElement('div');
 		root.id = 'gdl-bp-detail-root';
@@ -493,7 +537,7 @@ function linkedDetailOwner(doc: Document): HTMLElement | null {
 function ownedNativeElement(doc: Document, root: HTMLElement, scope: HTMLElement, element: HTMLElement): boolean {
  if (element.ownerDocument !== doc || !element.isConnected || !scope.contains(element) || element === root || element.contains(root)
   || element.closest(FOREIGN_NATIVE_SURFACE) || element.querySelector(FOREIGN_NATIVE_SURFACE)
-  || element.closest('#gdl-bp-detail-root, [class*="AllGames"], [class*="LibraryHome"], [class*="Shelf"], [class*="Grid"]')) return false;
+  || element.closest('#gdl-bp-detail-root, [data-gdl-bp-transition-snapshot], [class*="AllGames"], [class*="LibraryHome"], [class*="Shelf"], [class*="Grid"]')) return false;
  const identity = element.closest('[data-appid], [data-app-id], [data-app-id-value]');
  const rawId = identity?.getAttribute('data-appid') || identity?.getAttribute('data-app-id') || identity?.getAttribute('data-app-id-value');
  return !rawId || (Number(rawId) >>> 0) === (Number(root.dataset.gdlShortcutAppId) >>> 0);

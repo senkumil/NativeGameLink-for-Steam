@@ -96,13 +96,19 @@ a.ownLabel.textContent = 'No playtime'; a.ownLabel.removeAttribute('data-gdl-bp-
 
 const listeners = new Set(), protections = new Set(), callbacks = [], refreshes = [], disposed = [];
 const fallback = new Map([[id, { minutesForever: 60, minutesLastTwoWeeks: 5, lastPlayedAt: 300 }]]);
-let pendingFallback = null;
+let pendingFallback = null, noPlaytimeToken = 'No playtime yet';
+const homePlaytime = load('frontend/features/big-picture/home-playtime.ts', {
+  '../../steam/localization': { loc: (_key, fallback) => fallback, steamIntlLocale: () => 'en-US' },
+  '../../steam/modules/SteamWebpackRuntime': { steamWebpackRuntime: { getRuntimeIdentity: () => null } },
+  '../../steam/gamepad/runtime-cache': { DocumentRuntimeCache: class {} },
+});
+const probes = load('frontend/features/big-picture/home-playtime-probes.ts', {});
 const scheduler = load('frontend/features/big-picture/rerender-scheduler.ts', {
   '../../steam/ui/SteamUIModeService': modes,
   '../library/native-route': { isPublicSteamLibraryRoute: doc => doc.route.includes('/app/550'), libraryRouteIdentity: doc => doc.route },
 });
 const runtime = load('frontend/features/big-picture/runtime.ts', {
-  '../../api/backend': { backendLog() {} }, '../../steam/localization': { loc: (_key, text) => text, officialSteamText: text => text, steamIntlLocale: () => 'en-US' },
+  '../../api/backend': { backendLog() {} }, '../../steam/localization': { loc: (key, text) => key === 'AppBox_NoPlayTimeYet' ? noPlaytimeToken : text, officialSteamText: text => text, steamIntlLocale: () => 'en-US' },
   '../../steam/gamepad/stores/AppStoreAdapter': adapters,
   '../playtime/service': { fetchPlaytimeStatsBatch: () => pendingFallback || Promise.resolve(fallback) },
   './details': { disposeBigPictureShortcutDetails: doc => disposed.push(doc), refreshBigPictureShortcutDetails: async doc => { refreshes.push(doc); } },
@@ -111,6 +117,8 @@ const runtime = load('frontend/features/big-picture/runtime.ts', {
   '../../steam/browser-protection': { installBrowserProtection: (_view, doc) => { protections.add(doc); return () => protections.delete(doc); } },
   './rerender-scheduler': scheduler, '../../steam/ui/SteamUIModeService': modes,
   '../../steam/library-details': { committedHeaderAppId: () => null },
+  './home-playtime': homePlaytime,
+  './home-playtime-probes': probes,
   '../../steam/gamepad/GamepadContext': { normalizeGamepadAppId: normalize }, './overview-state': overview,
 });
 const frozenNativeBefore = Object.getOwnPropertyDescriptors(a.native), classificationBefore = Object.fromEntries(
@@ -123,7 +131,7 @@ for (let i = 0; i < 100; i++) runtime.activateBigPicture(a.doc);
 check(listeners.size === 1 && protections.size === 1, 'Repeated activation owns one preferences subscription and one protection lease');
 await runtime.patchBigPictureHomePlaytime(a.doc);
 check(a.app.minutes_playtime_forever === 60 && a.app.minutes_playtime_last_two_weeks === 5 && a.app.rt_last_time_played === 300, 'Production runtime projects measured canonical playtime and timestamps');
-check(a.ownLabel.textContent.includes('1 hour') && a.publicLabel.textContent === 'No playtime' && a.siblingLabel.textContent === 'No playtime', 'Home labels require the exact shortcut card identity, excluding native games and sibling installations');
+check(a.ownLabel.textContent === 'Last two weeks: 5 min' && a.publicLabel.textContent === 'No playtime' && a.siblingLabel.textContent === 'No playtime', 'Home labels require the exact shortcut card identity, excluding native games and sibling installations');
 check(Object.entries(classificationBefore).every(([key, value]) => a.app[key] === value), 'Measured playtime never changes classification or installation');
 const oldCallback = callbacks.at(-1);
 runtime.activateBigPicture(b.doc);
@@ -150,13 +158,38 @@ const ownerCalls = [];
 a.app.minutes_playtime_forever = 0;
 a.view.SteamClient = { Apps: { GetPlaytime: async value => { ownerCalls.push(value); return { nPlaytimeForever: 35 }; } } };
 runtime.activateBigPicture(a.doc); clock += 2000; await runtime.patchBigPictureHomePlaytime(a.doc);
-check(ownerCalls.length === 2 && ownerCalls[0] === id && ownerCalls[1] === (id | 0) && foreignPlaytimeCalls === 0,
-  'Native playtime reads use only the owner SteamClient and its exact unsigned/signed shortcut IDs');
+check(ownerCalls.length === 0 && foreignPlaytimeCalls === 0,
+  'Confirmed positive canonical time bypasses optional native probes and never queries a foreign SteamClient');
 check(a.app.minutes_playtime_forever === 60, 'Measured canonical session time merges with the owner native response');
+for (const placeholder of ['No playtime yet', 'Sin tiempo de juego', 'AÚN NO HAY TIEMPO DE JUEGO']) {
+  runtime.deactivateBigPicture();
+  noPlaytimeToken = placeholder;
+  a.ownLabel.textContent = placeholder;
+  runtime.activateBigPicture(a.doc); clock += 2000;
+  await runtime.patchBigPictureHomePlaytime(a.doc);
+  check(a.ownLabel.textContent === 'Last two weeks: 5 min' && a.publicLabel.textContent === 'No playtime',
+    `The native AppBox_NoPlayTimeYet token authorizes only the actual linked card placeholder: ${placeholder}`);
+  runtime.deactivateBigPicture();
+  check(a.ownLabel.textContent === placeholder, 'Localized Home text is restored exactly when its owner retires');
+}
 runtime.deactivateBigPicture(); runtime.deactivateBigPicture();
 check(listeners.size === 0 && protections.size === 0 && timers.size === 0 && !runtime.isBigPictureActive() && runtime.getBigPictureDocument() === null,
   'Repeated teardown releases preferences, protections, pending rerenders and active document state');
 const afterStop = refreshes.length; for (const callback of callbacks) callback(); await Promise.resolve();
 check(refreshes.length === afterStop, 'Released subscription callbacks remain inert after plugin teardown');
 check(disposed.includes(a.doc) && disposed.includes(b.doc), 'Both replaced Document detail trees receive scoped disposal');
+const hangingCalls = [], probeDoc = { defaultView: null };
+probeDoc.defaultView = { document: probeDoc, closed: false, SteamClient: { Apps: { GetPlaytime: value => { hangingCalls.push(value); return new Promise(() => {}); } } } };
+const blocked = Array.from({ length: 40 }, (_, index) => probes.readBigPictureShortcutPlaytime(probeDoc, id + index));
+check(hangingCalls.length === 8, 'Forty unknown shortcuts can create at most four bounded signed/unsigned native probes');
+for (const [key, callback] of [...timers]) { timers.delete(key); callback(); }
+check((await Promise.all(blocked)).every(value => value === null) && timers.size === 0,
+  'Never-settling native SDK promises release all consumers and deadline timers');
+await Promise.all(Array.from({ length: 40 }, (_, index) => probes.readBigPictureShortcutPlaytime(probeDoc, id + index)));
+check(hangingCalls.length === 8, 'Repeated refreshes never duplicate timed-out SDK calls that remain outstanding');
+const cancelledDoc = { defaultView: null };
+cancelledDoc.defaultView = { ...probeDoc.defaultView, document: cancelledDoc };
+const cancelled = probes.readBigPictureShortcutPlaytime(cancelledDoc, id);
+probes.cancelBigPictureHomePlaytimeProbes(cancelledDoc);
+check(await cancelled === null && timers.size === 0, 'Document disposal immediately settles pending native consumers and clears their deadline');
 console.log(`BP overview ownership passed: ${checks} checks; actual stores, overview/runtime, two Documents, native updates and subscription cleanup. No live SDK/account calls.`);

@@ -197,6 +197,7 @@ export interface LocalAchievementItem {
 	max_progress: number;
 	is_online?: boolean;
 	client_writable?: boolean;
+	schema_order?: number;
 }
 
 export interface LocalAchievementData {

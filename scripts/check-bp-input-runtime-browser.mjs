@@ -31,8 +31,8 @@ try {
     window.clearTimeout = id => timers.delete(id);
     window.requestAnimationFrame = callback => { const id = ++serial; frames.set(id, callback); return id; };
     window.cancelAnimationFrame = id => frames.delete(id);
-    const buttons = Array.from({ length: 16 }, () => ({ pressed: false }));
-    Object.defineProperty(navigator, 'getGamepads', { configurable: true, value: () => [{ connected: true, buttons, axes: [] }] });
+    const buttons = Array.from({ length: 16 }, () => ({ pressed: false })), axes = [];
+    Object.defineProperty(navigator, 'getGamepads', { configurable: true, value: () => [{ connected: true, buttons, axes }] });
     const loaded = {}, dependencies = {
       '../../steam/gamepad/components/AppDetailsNativeClasses': {
         resolveNativeAppDetailsClasses: () => ({ FocusRing: { FocusRingRoot: 'fixture-ring-root', FocusRing: 'fixture-ring' } }),
@@ -178,6 +178,36 @@ try {
       editor.focus(); press(1);
       check(hiddenKeyboards === 2 && document.activeElement === first, 'Gamepad B also exits the text editor without navigating background tabs');
 
+      const editorClicks = firstClicks, editorX = xClicks, editorTabs = tabClicks;
+      editor.focus();
+      for (const index of [0, 2, 5, 13]) buttons[index].pressed = true;
+      axes[3] = .8; poll();
+      buttons[1].pressed = true; poll();
+      const editorScroll = document.documentElement.scrollTop;
+      for (let index = 0; index < 5; index++) poll();
+      check(document.activeElement === first && firstClicks === editorClicks && xClicks === editorX
+        && tabClicks === editorTabs && document.documentElement.scrollTop === editorScroll,
+        'Holding A/X/RB and both sticks while exiting an editor cannot activate, switch or scroll the revealed content');
+      for (const button of buttons) button.pressed = false;
+      axes[3] = 0; poll(); first.focus(); press(0);
+      check(firstClicks === editorClicks + 1, `A fresh gamepad edge works after the editor controls return to neutral (${firstClicks}/${editorClicks}; focus ${document.activeElement?.id})`);
+
+      const hiddenClicks = firstClicks, hiddenX = xClicks, hiddenTabs = tabClicks;
+      first.focus();
+      Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+      for (const index of [0, 2, 5, 13]) buttons[index].pressed = true;
+      axes[3] = .8; poll();
+      Object.defineProperty(document, 'hidden', { configurable: true, value: false });
+      const hiddenScroll = document.documentElement.scrollTop;
+      for (let index = 0; index < 5; index++) poll();
+      check(document.activeElement === first && firstClicks === hiddenClicks && xClicks === hiddenX
+        && tabClicks === hiddenTabs && document.documentElement.scrollTop === hiddenScroll,
+        'Returning to a hidden CEF window requires neutral controls before held input can affect content');
+      for (const button of buttons) button.pressed = false;
+      axes[3] = 0; poll(); press(13);
+      check(document.activeElement === second, 'Directional navigation resumes after the suspended stick returns to neutral');
+      first.focus();
+
       const modal = document.createElement('div'); modal.id = 'gdl-bp-achievements-screen'; modal.setAttribute('role', 'dialog');
       const mine = document.createElement('button'), global = document.createElement('button');
       mine.dataset.gdlAchievementTab = 'mine'; global.dataset.gdlAchievementTab = 'global'; mine.textContent = 'Mine'; global.textContent = 'Global';
@@ -196,8 +226,16 @@ try {
 
       const foreign = document.createElement('div'); foreign.setAttribute('role', 'dialog'); foreign.innerHTML = '<button>Steam dialog</button>'; document.body.appendChild(foreign);
       check(!key('Escape').defaultPrevented && foreign.isConnected, 'A foreign Steam modal retains its own Back action');
-      press(0); check(firstClicks === 1 && foreign.isConnected, 'Fallback gamepad input cannot activate background content under a foreign modal');
+      const foreignClicks = firstClicks, foreignTabs = tabClicks;
+      press(0); check(firstClicks === foreignClicks && foreign.isConnected, 'Fallback gamepad input cannot activate background content under a foreign modal');
+      for (const index of [0, 5, 13]) buttons[index].pressed = true;
+      poll();
       foreign.remove();
+      for (let index = 0; index < 5; index++) poll();
+      check(document.activeElement === first && firstClicks === foreignClicks && tabClicks === foreignTabs,
+        'Input held across a foreign modal dismissal cannot navigate or activate background content');
+      for (const button of buttons) button.pressed = false;
+      poll();
 
       panel.remove();
       check(nav.getBigPictureNavigationAuthority(document) === 'none' && !nav.performBigPictureSemanticAction(document, 'x'),

@@ -9,6 +9,35 @@ const steam = process.env.STEAM_UI_PATH || 'C:/Program Files (x86)/Steam/steamui
 const chunks = { webpackChunksteamui: [] };
 vm.runInNewContext(fs.readFileSync(path.join(steam, 'sp.js'), 'utf8'), { self: chunks });
 const factories = Object.assign({}, ...chunks.webpackChunksteamui.map(chunk => chunk[1]));
+const summaryFactory = Object.values(factories).find(factory => String(factory).includes('SummaryCarouselContainer')
+  && String(factory).includes('AppDetails_Achievements_Locked') && String(factory).includes('vecUnachieved'));
+assert(summaryFactory, 'Installed native gamepad achievement summary is inspectable');
+const summaryTree = ts.createSourceFile('native-summary.js', `(${summaryFactory})`, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+const declarations = [], nativeImports = {}, interopNames = [];
+let achievementItemName;
+const inspectSummary = node => {
+  if (ts.isFunctionDeclaration(node)) declarations.push(node);
+  if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+    const initializer = node.initializer;
+    if (ts.isCallExpression(initializer) && ts.isIdentifier(initializer.expression) && initializer.expression.text === 't'
+      && initializer.arguments[0] && ts.isNumericLiteral(initializer.arguments[0])) nativeImports[node.name.text] = Number(initializer.arguments[0].text);
+    if (ts.isCallExpression(initializer) && ts.isPropertyAccessExpression(initializer.expression)
+      && initializer.expression.name.text === 'n') interopNames.push(node.name.text);
+    if (node.getText(summaryTree).includes('#AppActivity_Achieved_View_Achievements')
+      && node.getText(summaryTree).includes('iconClassNames:')) achievementItemName = node.name.text;
+  }
+  ts.forEachChild(node, inspectSummary);
+};
+inspectSummary(summaryTree);
+const nativeRow = declarations.find(node => node.getText(summaryTree).includes('fnRenderScrollingDiv:')
+  && node.getText(summaryTree).includes('SummaryCarouselContainer'));
+const nativeTile = declarations.find(node => node.getText(summaryTree).includes('AchievementCarouselItem')
+  && node.getText(summaryTree).includes('detailed:'));
+const nativeDetails = declarations.find(node => node.getText(summaryTree).includes('AchivementCarouselItemDetails'));
+const nativePercent = declarations.find(node => node.getText(summaryTree).includes('Math.max(')
+  && node.getText(summaryTree).includes('.flAchieved') && node.getText(summaryTree).includes('.toFixed(1)'));
+assert(nativeRow && nativeTile && nativeDetails && nativePercent && achievementItemName,
+  'Native row, expanded tile, details and percentage functions form an isolated presentation oracle');
 const selected = {};
 for (const [id, factory] of Object.entries(factories)) {
   const code = String(factory);
@@ -24,7 +53,10 @@ const sources = {
   carousel: ts.transpileModule(fs.readFileSync('frontend/features/big-picture/NativeBigPictureCarousel.tsx', 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, jsx: ts.JsxEmit.React },
   }).outputText,
-  nativeCarouselFixtures: `exports.factories=${JSON.stringify(selected)};`,
+  nativeCarouselFixtures: `exports.factories=${JSON.stringify(selected)};exports.summary=${JSON.stringify({
+    source: [nativePercent, nativeDetails, nativeTile, nativeRow].map(node => node.getText(summaryTree)).join('\n'),
+    row: nativeRow.name.text, imports: nativeImports, interopNames, achievementItemName,
+  })};`,
 };
 for (const [name, file] of Object.entries({
   'achievement-screen-parts': 'frontend/features/big-picture/achievement-screen-parts.ts',
@@ -92,10 +124,28 @@ await runBPBrowserScenario(sources, async fixture => {
   const achievementCSS = Object.values(modules).map(module => module.exports).find(value => value.AchievementCarouselItem)
     || nativeReq(Object.keys(registry).find(id => String(registry[id]).includes('AchievementCarouselItem:')));
   const focusCSS = nativeReq(Object.keys(registry).find(id => String(registry[id]).includes('FocusRingRoot:')));
+  const oracle = load('nativeCarouselFixtures').summary;
+  const NativeImage = load('achievement-screen-parts').resolveBigPictureAchievementScreenParts(document, true).Image;
+  const oracleDeps = {
+    ...nativeDeps, 23501: { S1: parts.useSpacing, VJ: parts.Spacing },
+    38850: { Z: props => React.createElement(client.Focusable, { focusable: false, ...props }) },
+    96017: { q: parts.FocusRing }, 62402: { Q: parts.Carousel }, 15023: { ck: React.Fragment },
+    49519: { W6: () => ({ push() {} }) }, 78158: { dd: () => true },
+    72500: { BV: { Library: { App: { Achievements: { My: { Individual: () => '' } } } } } },
+    7727: { we: (_token, value) => `${value}% of players have this achievement` },
+  };
+  const oracleBindings = Object.fromEntries(Object.entries(oracle.imports).map(([name, id]) => [name, oracleDeps[id] || {}]));
+  for (const name of oracle.interopNames) oracleBindings[name] = () => achievementCSS;
+  oracleBindings[oracle.achievementItemName] = props => React.createElement('div', {
+    className: props.achievement.bAchieved ? achievementCSS.Achieved : achievementCSS.NotAchieved,
+  }, React.createElement('div', { className: achievementCSS.AchievementHoverContainer },
+    React.createElement(NativeImage, { className: [achievementCSS.Icon, props.iconClassNames].filter(Boolean).join(' '),
+      imgURL: props.achievement.strImage, glow: false, pauseAnimation: true })));
+  const NativeReferenceRow = new Function(...Object.keys(oracleBindings), `${oracle.source}; return ${oracle.row};`)(...Object.values(oracleBindings));
   const cache = load('cache'), summary = load('summary');
-  const data = { found: true, appid: '550', metadata_appid: '550', total: 34, unlocked: 23,
-    achievements: Array.from({ length: 34 }, (_, index) => ({ name: `ACH_${index}`, display_name: `Achievement ${index}`,
-      description: `Long achievement description ${index}`, icon: '', earned: index < 23, earned_time: index,
+  const data = { found: true, appid: '550', metadata_appid: '550', total: 50, unlocked: 32,
+    achievements: Array.from({ length: 50 }, (_, index) => ({ name: `ACH_${index}`, display_name: `Achievement ${index}`,
+      description: `Long achievement description ${index}`, icon: '', earned: index < 32, earned_time: index,
       global_percent: 80 - index, global_percent_known: true })) };
   cache.cacheLocalAchievements(data, '550', String(A));
   const section = props => React.createElement('section', { style: { position: 'relative' } }, props.highlight, props.children);
@@ -113,7 +163,17 @@ await runBPBrowserScenario(sources, async fixture => {
   render(); await frame();
   const strips = () => [...root.querySelectorAll('[data-gdl-bp-carousel]')];
   const tiles = index => [...strips()[index].querySelectorAll('[data-gdl-focus-key]')];
-  check(strips().length === 2 && tiles(0).length === 23 && tiles(1).length === 11, 'Both production summary rows retain every earned and locked tile: ' + errors.join('\n'));
+  check(strips().length === 2 && tiles(0).length === 12 && tiles(1).length === 12,
+    'A 32-earned/18-locked game matches Steam preview vectors: twelve tiles per row, with the complete snapshot preserved: ' + errors.join('\n'));
+  check(cache.getCachedLocalAchievementsForShortcut('550', String(A)).achievements.length === 50,
+    'Preview bounds do not truncate local progress or the full personal/global screen');
+  check(tiles(0)[0].dataset.gdlFocusKey === 'achievement-summary-ACH_31'
+    && tiles(1)[0].dataset.gdlFocusKey === 'achievement-summary-ACH_32',
+    'The preview starts with newest earned and most commonly unlocked locked achievements');
+  tiles(0)[0].click(); await frame();
+  check(document.querySelectorAll('#gdl-bp-achievements-screen [data-gdl-achievement-name]').length === 50,
+    'Selecting a bounded preview opens all fifty achievements in the complete native-style screen');
+  load('owned').disposeBigPictureModals(document); await frame();
   check(strips().every(row => row.querySelector('[data-gdl-carousel-viewport="1"]')
     && row.querySelector(`.${focusCSS.FocusRingRoot}`)), 'Each strip has its own exact native scroll viewport and native ring provider');
   const nav = load('navigation'), tabs = document.getElementById('tabs');
@@ -151,6 +211,7 @@ await runBPBrowserScenario(sources, async fixture => {
   const lockedIndex = tiles(1).indexOf(document.activeElement);
   await arrow('ArrowRight'); check(document.activeElement === tiles(1)[lockedIndex + 1], 'Right navigates independently through locked achievements');
   // Native virtual-focus events carry focus even when DOM focus does not move.
+  tiles(0)[0].focus(); await new Promise(resolve => setTimeout(resolve, 200));
   const virtual = tiles(0).at(-1); virtual.dispatchEvent(new CustomEvent('vgp_onfocus', { bubbles: true })); await frame();
   check(viewport.scrollLeft > 0, 'Native virtual focus also scrolls its own viewport');
   nav.disposeBigPictureGamepadNavigation(document);
@@ -184,12 +245,12 @@ await runBPBrowserScenario(sources, async fixture => {
     && tiles(1).every(tile => /\/gray-\d+\.png$/.test(tile.querySelector('img').getAttribute('src'))),
     'Earned tiles use their normal image and locked tiles use each achievement gray URL');
   render(summaryState(52, 52), 'all-earned'); await frame();
-  check(strips().length === 1 && tiles(0).length === 52 && !root.querySelector(`.${achievementCSS.LockedAchievementsLabel}`),
-    'All-earned data renders one complete earned row without a locked heading or ghost second row');
+  check(strips().length === 1 && tiles(0).length === 12 && !root.querySelector(`.${achievementCSS.LockedAchievementsLabel}`),
+    'All-earned data renders one bounded native preview without a locked heading or ghost second row');
   check(root.querySelector('[role="progressbar"]').getAttribute('aria-valuenow') === '100'
     && !root.querySelector('.gdl-bp-view-all-achievements'), 'A complete set retains 100 percent and no additional focus stop');
   render(summaryState(52, 0), 'all-locked'); await frame();
-  check(strips().length === 1 && tiles(0).length === 52 && strips()[0].dataset.gdlBpCarousel === 'NativeGameLink Locked Achievements'
+  check(strips().length === 1 && tiles(0).length === 12 && strips()[0].dataset.gdlBpCarousel === 'NativeGameLink Locked Achievements'
     && root.querySelector(`.${achievementCSS.LockedAchievementsLabel}`),
     'All-locked data renders a labeled locked row instead of duplicating it as an earned row');
   check(tiles(0).every(tile => /\/gray-\d+\.png$/.test(tile.querySelector('img').getAttribute('src')))
@@ -207,9 +268,57 @@ await runBPBrowserScenario(sources, async fixture => {
     'Known total without loaded items retains exactly one native fallback opener');
   render(summaryState(0, 0), 'hidden-empty', { hideIfEmpty: true }); await frame();
   check(!root.querySelector('section'), 'An explicitly hidden empty summary leaves no blank section or focus stop');
+  const secrets = summaryState(20, 0); secrets.achievements.forEach(item => { item.hidden = true; });
+  render(secrets, 'all-hidden'); await frame();
+  check(strips().length === 0 && root.querySelectorAll('.gdl-bp-view-all-achievements').length === 1,
+    'Unrevealed hidden achievements do not leak through the locked preview; the complete screen remains reachable');
+
+  // Compare production geometry to Steam's actual row/tile/detail functions,
+  // using the exact same CSS, image component, carousel, ring and inset provider.
+  // Account-backed achievement navigation/hover reads alone are fixture-owned.
+  const referenceHost = document.createElement('div'); referenceHost.className = 'native-summary-oracle';
+  referenceHost.style.cssText = 'position:absolute;left:0;top:1500px'; document.body.appendChild(referenceHost);
+  const referenceRoot = ReactDOM.createRoot(referenceHost);
+  const preview = load('achievement-preview').bigPictureAchievementPreview(data.achievements);
+  const nativeItems = items => items.map(item => ({ strID: item.name, strName: item.display_name, strDescription: item.description,
+    strImage: item.icon, bAchieved: item.earned, flAchieved: item.global_percent }));
+  const nativeGeometry = host => {
+    const row = host.querySelector(`.${achievementCSS.AchievementCarouselItem}`)?.parentElement;
+    const items = [...host.querySelectorAll(`.${achievementCSS.AchievementCarouselItem}`)];
+    const viewport = host.querySelector('[data-gdl-carousel-viewport="1"]') || row.parentElement;
+    const view = viewport.getBoundingClientRect();
+    return { icon: items[0].querySelector(`.${achievementCSS.CarouselIcon}`).getBoundingClientRect().width,
+      detail: items[0].getBoundingClientRect().width, height: items[0].getBoundingClientRect().height,
+      visible: items.filter(item => { const rect = item.getBoundingClientRect(); return rect.left >= view.left - 1 && rect.right <= view.right + 1; }).length };
+  };
+  for (const [width, scale] of [[680, 1], [1160, 1], [1452, 1.135], [1160, .8]]) {
+    root.style.width = referenceHost.style.width = `${width}px`;
+    root.style.transform = referenceHost.style.transform = `scale(${scale})`;
+    root.style.transformOrigin = referenceHost.style.transformOrigin = 'top left';
+    render(data, `geometry-${width}-${scale}`);
+    dom.flushSync(() => referenceRoot.render(React.createElement(NativeReferenceRow, {
+      appid: A, achievements: nativeItems(preview.earned), prioritized: true, onRequestPriority() {}, labelledBy: 'oracle',
+    })));
+    await new Promise(resolve => setTimeout(resolve, 190)); await frame();
+    const actual = nativeGeometry(strips()[0]), expected = nativeGeometry(referenceHost);
+    check(['icon', 'detail', 'height'].every(key => Math.abs(actual[key] - expected[key]) < 1),
+      `Earned preview matches installed native geometry at ${width}px and scale ${scale}: ${JSON.stringify({ actual, expected })}`);
+    check(actual.visible === expected.visible,
+      `The count of fully visible earned tiles follows native clipping at ${width}px and scale ${scale}`);
+    dom.flushSync(() => referenceRoot.render(React.createElement(NativeReferenceRow, {
+      appid: A, achievements: nativeItems(preview.locked), prioritized: false, onRequestPriority() {}, labelledBy: 'oracle',
+    })));
+    await new Promise(resolve => setTimeout(resolve, 190)); await frame();
+    const actualLocked = nativeGeometry(strips()[1]), expectedLocked = nativeGeometry(referenceHost);
+    check(['icon', 'detail', 'height'].every(key => Math.abs(actualLocked[key] - expectedLocked[key]) < 1),
+      `Inactive locked preview matches installed native geometry at ${width}px and scale ${scale}`);
+    check(actualLocked.visible === expectedLocked.visible,
+      `The locked preview count and clipped tail follow native layout at ${width}px and scale ${scale}`);
+  }
+  referenceRoot.unmount(); referenceHost.remove();
   rendered.unmount(); await frame();
   check(!root.querySelector('[data-gdl-bp-carousel]') && !document.getElementById('gdl-bp-focus-ring'), 'Unmount releases both rows, scrolling effects and fallback ring');
   check(document.getElementById('native-public').textContent === 'Native untouched', 'Native sibling content remains untouched');
   check(carousel.resolveBigPictureCarouselParts(document).Carousel === parts.Carousel, 'A replacement lease resolves the current local presentation contracts anew');
-  return { label: 'Big Picture Tus cosas native carousel', checks: fixture.checks(), modalMounts: 0, react: React.version };
+  return { label: 'Big Picture Tus cosas native carousel', checks: fixture.checks(), modalMounts: 1, react: React.version };
 });

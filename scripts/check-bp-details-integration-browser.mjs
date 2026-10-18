@@ -1,6 +1,8 @@
 // All four production detail tabs with independent Steam React dispatchers.
 // Steam account/network/SDK calls are fixtures; no live client state is changed.
 import fs from 'node:fs';
+import path from 'node:path';
+import vm from 'node:vm';
 import ts from 'typescript';
 import { runBPBrowserScenario } from './check-bp-achievements-workflow-browser.mjs';
 import { nativeWindowOracle } from './helpers/native-window-oracle.mjs';
@@ -19,6 +21,8 @@ const files = {
   'details-styles': 'frontend/features/big-picture/details-styles.ts',
   'panel-mount': 'frontend/features/big-picture/panel-mount.ts',
   'visibility-lease': 'frontend/features/big-picture/visibility-lease.ts',
+  'transition-snapshot': 'frontend/features/big-picture/transition-snapshot.ts',
+  'achievement-preview': 'frontend/features/big-picture/achievement-preview.ts',
   AppDetailsNativeComponents: 'frontend/steam/gamepad/components/AppDetailsNativeComponents.ts',
   AppDetailsNativeClasses: 'frontend/steam/gamepad/components/AppDetailsNativeClasses.ts',
   'pure-class-factory': 'frontend/steam/gamepad/components/pure-class-factory.ts',
@@ -38,6 +42,30 @@ const sources = Object.fromEntries(Object.entries(files).map(([name, file]) => [
   }).outputText]));
 const windowOracle = nativeWindowOracle();
 sources['native-window-oracle-data'] = `exports.id=${JSON.stringify(windowOracle.id)};exports.source=${JSON.stringify(windowOracle.factorySource)};exports.updateRoutingInfo=({${String(windowOracle.updateRoutingInfo)}}).UpdateRoutingInfo;`;
+// Execute Steam's actual ContentTransition, TransitionGroup and CSSTransition,
+// with its shipped CSS. Account stores and the focus primitive stay fixtures.
+const steamUI = process.env.STEAM_UI_PATH || 'C:/Program Files (x86)/Steam/steamui';
+const transitionFactories = {};
+for (const file of [path.join(steamUI, 'sp.js'), ...fs.readdirSync(path.join(steamUI, 'libraries'))
+  .filter(name => name.endsWith('.js')).map(name => path.join(steamUI, 'libraries', name))]) {
+  const self = { webpackChunksteamui: [] };
+  vm.runInNewContext(fs.readFileSync(file, 'utf8'), { self });
+  Object.assign(transitionFactories, ...self.webpackChunksteamui.map(chunk => chunk[1]));
+}
+const transitionModule = Object.entries(transitionFactories).find(([, factory]) => String(factory).includes('activeProps:new Set') && String(factory).includes('childrenKey'));
+if (!transitionModule) throw Error('Installed Steam ContentTransition contract is required');
+const selectedFactories = {};
+function includeTransitionFactory(id) {
+  if ([63696, 62540, 78325, 8658, 38850].includes(Number(id)) || selectedFactories[id]) return;
+  const factory = transitionFactories[id];
+  if (!factory) throw Error(`Installed transition dependency ${id} is missing`);
+  selectedFactories[id] = String(factory);
+  const parameters = String(factory).match(/^\(([^)]+)\)=>/)?.[1].split(',');
+  if (!parameters?.[2]) return;
+  for (const match of String(factory).matchAll(new RegExp(`\\b${parameters[2]}\\((\\d+)\\)`, 'g'))) includeTransitionFactory(match[1]);
+}
+includeTransitionFactory(transitionModule[0]);
+sources['native-transition-oracle'] = `exports.id=${JSON.stringify(transitionModule[0])};exports.factories=${JSON.stringify(selectedFactories)};`;
 
 await runBPBrowserScenario(sources, async fixture => {
   const { React, foreignReact, ReactDOM, foreignReactDOM, dom, load, loaded, req, registry, nativeRequire, nativeRegistry, nativeModules, dependencies,
@@ -163,13 +191,15 @@ await runBPBrowserScenario(sources, async fixture => {
     deleteProperty() { throw Error('Public Steam record was mutated'); } });
   const officialOverview = deepReadonly({ appid: 550, display_name: 'Official native game', controller_support: 2,
     steam_deck_compat_category: 3, steam_os_compat_category: 2, BIsShortcut: () => false, GetCanonicalReleaseDate: () => 123456 });
-  const shortcutOverview = deepReadonly({ appid: A, display_name: 'Game A', controller_support: 0,
+  const localShortcutName = 'My renamed local game';
+  const localGameID = String((BigInt(A) << 32n) | 33554432n);
+  const shortcutOverview = deepReadonly({ appid: A, display_name: localShortcutName, gameid: localGameID, controller_support: 0,
     BIsShortcut: () => true, BIsModOrShortcut: () => true, GetCanonicalReleaseDate: () => 0 });
   const appOverviews = new Map([[A, shortcutOverview], [B, { ...shortcutOverview, appid: B }], [550, officialOverview]]);
   window.appStore = { GetAppOverviewByAppID: id => { modelReads.push(['overview', id]); return appOverviews.get(id); } };
   window.libraryStore = { GetCollectionListForAppID: id => { modelReads.push(['collections', id]); return [{ id: 'collection-A', display_name: 'Local collection' }]; } };
-  window.SteamClient = { GameNotes: { OpenGameNotes: id => actions.push(['notes', id]) },
-    Screenshots: { ShowScreenshotsOnDisk: id => actions.push(['screenshots', id]) } };
+  window.SteamClient = { Screenshots: { ShowScreenshotsOnDisk: id => actions.push(['screenshots', id]) } };
+  originalRouter.history.push = path => actions.push(['notes-route', path]);
   const publicDetails = deepReadonly({ unAppID: 550, vecDLC: [999], vecDeckCompatTestResults: [], vecSteamOSCompatTestResults: [] });
   const localDetails = deepReadonly({ unAppID: A, vecDLC: [] });
   nativeModules[78057] = { exports: { H: { GetAppDetails: id => { modelReads.push(['details', id]); return id === 550 ? publicDetails : localDetails; } } } };
@@ -178,7 +208,9 @@ await runBPBrowserScenario(sources, async fixture => {
       React.useState(0);
       nativeProps.push([name, props]);
       return React.createElement('div', { 'data-native-probe': name }, name,
-        name === 'notes' ? React.createElement('button', { onClick: () => window.SteamClient.GameNotes.OpenGameNotes(props.details.unAppID) }, 'Native notes') : null);
+        name === 'notes' ? React.createElement('button', { 'data-notes-parent': props.overview.BIsShortcut()
+          ? props.overview.display_name.trim() : String(props.overview.appid),
+          onClick: () => actions.push(['notes', props.details.unAppID]) }, 'Native notes') : null);
     };
   }
   nativeModules[57150] = { exports: { E: NativeProbe('screenshots') } };
@@ -314,10 +346,22 @@ await runBPBrowserScenario(sources, async fixture => {
   nativeWindows.set(childView, childInstance);
   const childTabNames = { activity: 'Actividad', stuff: 'Tus cosas', community: 'Comunidad', info: 'Información del juego' };
   const childNativeIds = { activity: 'WhatsNew', stuff: 'YourStuff', community: 'Community', info: 'GameInfo' };
+  const transitionOracle = load('native-transition-oracle'), transitionModules = {};
+  const transitionRequire = id => {
+    if (id === 8658) return { A: (...values) => values.filter(Boolean).join(' ') };
+    if (id === 38850) return { Z: props => React.createElement('div', { className: props.className }, props.children) };
+    if (!transitionOracle.factories[id]) return req(id);
+    if (transitionModules[id]) return transitionModules[id].exports;
+    const module = transitionModules[id] = { exports: {} };
+    new Function(`return (${transitionOracle.factories[id]})`)()(module, module.exports, transitionRequire);
+    return module.exports;
+  };
+  Object.assign(transitionRequire, { d: req.d, n: req.n, r: req.r, o: req.o });
+  const nativeTransition = transitionRequire(transitionOracle.id), tabCSS = nativeRequire(62645);
   let selectChildTab;
   function NativePopupDetails() {
     const [selected, select] = React.useState('activity'); selectChildTab = select;
-    return React.createElement('div', { className: 'native-popup-details' },
+    return React.createElement('div', { className: `native-popup-details ${tabCSS.GamepadTabbedPage}` },
       React.createElement('div', { role: 'tablist', style: { display: 'flex', minHeight: 50 } },
         ...Object.entries(childTabNames).map(([key, title]) => React.createElement('button', {
           key, id: `child-${key}`, role: 'tab', 'aria-selected': selected === key,
@@ -325,10 +369,12 @@ await runBPBrowserScenario(sources, async fixture => {
             childLocation.pathname = `/library/app/${A}/tab/${childNativeIds[key]}`; select(key);
           },
         }, title))),
-      ...Object.keys(childTabNames).map(key => React.createElement('section', {
-        key, id: `child-${key}-Content`, role: 'tabpanel', 'aria-labelledby': `child-${key}`,
-        hidden: selected !== key, style: { minHeight: 420 },
-      }, React.createElement('div', { 'data-native-popup-content': key, style: { display: 'flex' } }, `Native popup ${key}`))));
+      React.createElement('div', { className: tabCSS.TabContents, style: { height: 520 } },
+        React.createElement(nativeTransition.FF, { childrenKey: selected, directionClass: tabCSS.Right,
+          childrenClasses: nativeTransition.Qh(tabCSS, tabCSS.ContentTransition) },
+          React.createElement('section', { id: `child-${selected}-Content`, role: 'tabpanel',
+            className: `${tabCSS.TabContentsScroll} _TabContentsScroll`, 'aria-labelledby': `child-${selected}`, style: { minHeight: 420 } },
+          React.createElement('div', { 'data-native-popup-content': selected, style: { display: 'flex' } }, `Native popup ${selected}`)))));
   }
   const portalHost = document.createElement('div'); document.body.appendChild(portalHost);
   const nativePortalRoot = ReactDOM.createRoot(portalHost);
@@ -345,9 +391,9 @@ await runBPBrowserScenario(sources, async fixture => {
   check(childDoc.location.pathname === '/index.html' && !childView.webpackChunksteamui && !childView.g_Router
     && !childView.tempNavStore && !childView.SteamUIStore && !childView.SP_REACT && !childView.SP_REACTDOM,
     'Native portal popup exposes only its shell document, without a child runtime, router or React globals');
-  check(childDoc.querySelectorAll('[role=tab]').length === 4 && childDoc.querySelectorAll('[role=tabpanel]').length === 4
+  check(childDoc.querySelectorAll('[role=tab]').length === 4 && childDoc.querySelectorAll('[role=tabpanel]').length === 1
     && Object.keys(childNativeActivity).some(key => key.startsWith('__reactFiber$')),
-    'Installed parent React really committed the four native tabs and panels into the child document through createPortal');
+    'Installed parent React commits the four tabs and Steam ContentTransition active panel into the child through createPortal');
   await details.refreshBigPictureShortcutDetails(childDoc); await frame(); await frame();
   const childRoot = childDoc.getElementById('gdl-bp-detail-root');
   check(childRoot?.textContent.includes('Production news item') && childRoot.dataset.gdlShortcutAppId === String(A),
@@ -363,13 +409,45 @@ await runBPBrowserScenario(sources, async fixture => {
     nativeHidden: childDoc.querySelector('[data-native-popup-content="stuff"]').hidden,
     outgoingHidden: childNativeActivity.hidden,
   })));
-  check(popupStuffPaint.parent === 'child-stuff-Content' && popupStuffPaint.text.includes('Trading cards')
+  check(popupStuffPaint.parent === 'child-stuff-Content' && popupStuffPaint.text.includes('Achievements')
     && !popupStuffPaint.text.includes('Production news item') && popupStuffPaint.nativeHidden && popupStuffPaint.outgoingHidden,
     `A real shared React portal tab switch moves and commits the linked Stuff root before the first paint: ${JSON.stringify(popupStuffPaint)}`);
+  const outgoingSnapshot = childDoc.querySelector('[data-gdl-bp-transition-snapshot]');
+  check(childDoc.querySelectorAll('[role=tabpanel]').length === 2 && outgoingSnapshot?.textContent.includes('Production news item')
+    && outgoingSnapshot.inert && outgoingSnapshot.getAttribute('aria-hidden') === 'true'
+    && !outgoingSnapshot.querySelector('[data-gdl-shortcut-app-id],[data-gdl-steam-app-id],[data-gdl-focus-key]'),
+    'Real native ContentTransition retains a passive outgoing Activity image while the single live root renders Stuff');
+  check(new Set([...childDoc.querySelectorAll('[id]')].map(node => node.id)).size === childDoc.querySelectorAll('[id]').length,
+    'Concurrent native panels and the outgoing snapshot have no duplicate IDs');
+  await new Promise(resolve => setTimeout(resolve, 400)); await frame();
+  check(childDoc.querySelectorAll('[role=tabpanel]').length === 1 && !childDoc.querySelector('[data-gdl-bp-transition-snapshot]')
+    && !childNativeActivity.hidden, 'Native transition completion removes its outgoing snapshot and restores detached native properties');
   childDoc.getElementById('child-activity').click();
   await new Promise(resolve => requestAnimationFrame(resolve));
   check(childRoot.parentElement?.id === 'child-activity-Content' && childRoot.textContent.includes('Production news item')
-    && childNativeActivity.hidden, 'Returning to Activity in the real native tab tree never exposes the native replacement');
+    && childDoc.querySelector('[data-native-popup-content="activity"]').hidden, 'Returning to Activity in the real native tab tree never exposes the native replacement');
+  await new Promise(resolve => setTimeout(resolve, 400)); await frame();
+  const transitionObserverBaseline = fixture.observerCount(), headerBounds = childDoc.querySelector('[role=tablist]').getBoundingClientRect();
+  for (let index = 0; index < 20; index++) {
+    const selected = ['stuff', 'community', 'info', 'activity'][index % 4];
+    childDoc.getElementById(`child-${selected}`).click();
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    const active = childDoc.getElementById(`child-${selected}-Content`), snapshots = [...childDoc.querySelectorAll('[data-gdl-bp-transition-snapshot]')];
+    check(childRoot === childDoc.getElementById('gdl-bp-detail-root') && childRoot.parentElement === active && childRoot.childElementCount > 0
+      && active.querySelector('[data-native-popup-content]').hidden,
+      `Rapid native transition ${index} commits the same live owner to ${selected} before paint without a native notice frame: ${JSON.stringify({ parent: childRoot.parentElement?.id, requested: active?.id, tab: details.detailStates.get(childDoc)?.activeTab, children: childRoot.childElementCount, hidden: active?.querySelector('[data-native-popup-content]')?.hidden, same: childRoot === childDoc.getElementById('gdl-bp-detail-root'), runtime: NativeDetails.isNativeBigPictureDetailsRuntimeCurrent(childRoot), log: logs.slice(-6) })}`);
+    check(snapshots.every(snapshot => snapshot.inert && snapshot.getAttribute('aria-hidden') === 'true'
+      && !snapshot.querySelector('[data-gdl-shortcut-app-id],[data-gdl-steam-app-id],[data-gdl-gamepad-action]'))
+      && snapshots.length <= childDoc.querySelectorAll('[role=tabpanel]').length - 1,
+      `Rapid native transition ${index} keeps only passive outgoing presentations bounded by Steam's retained panels`);
+    const bounds = childDoc.querySelector('[role=tablist]').getBoundingClientRect();
+    check(bounds.top === headerBounds.top && bounds.height === headerBounds.height,
+      `Rapid native transition ${index} leaves the native header stationary`);
+  }
+  await new Promise(resolve => setTimeout(resolve, 450)); await frame();
+  check(!childDoc.querySelector('[data-gdl-bp-transition-snapshot]') && childDoc.querySelectorAll('[role=tabpanel]').length === 1
+    && fixture.observerCount() === transitionObserverBaseline,
+    'Twenty rapid real native transitions release every outgoing snapshot, visibility observer and panel');
   const childRequireLease = productionRuntime.getRequire(childDoc);
   const wrongFrame = document.createElement('iframe');
   const wrongLoaded = new Promise(resolve => { wrongFrame.onload = resolve; });
@@ -418,8 +496,8 @@ await runBPBrowserScenario(sources, async fixture => {
   const catalogCard = root.querySelector('.gdl-bp-trading-card');
   check(catalogCard?.textContent.includes('Catalog card') && !catalogCard.querySelector(`.${tradingCardClasses.Owned}`)
     && !catalogCard.classList.contains(tradingCardClasses.Owned), 'Public catalog cards retain unknown ownership instead of borrowing an Owned style');
-  check(root.querySelector('img[data-gdl-badge-preview="1"][src*="catalog-foil-badge"]'),
-    'Big Picture presents the same foil catalogue badge preview as linked desktop');
+  check(!root.querySelector('img[src*="catalog-foil-badge"]') && !root.querySelector('img[data-gdl-badge-preview="1"]'),
+    'Unknown personal inventory keeps public catalogue cards without inventing an earned foil badge');
   const badgeProgress = [...root.querySelectorAll('button')].find(button => button.textContent.includes('Ver progreso de la insignia'));
   badgeProgress.click(); check(actions.at(-1)?.[2] === 'https://steamcommunity.com/my/gamecards/550',
     'Catalog badge availability provides only the explicit personal badge-progress URL');
@@ -434,6 +512,10 @@ await runBPBrowserScenario(sources, async fixture => {
   check([...root.querySelectorAll('[data-native-probe]')].map(node => node.dataset.nativeProbe).join(',') === 'dlc,workshop,screenshots,review,notes',
     'Tus cosas keeps native DLC, Workshop, Media, Review and Notes section order');
   const nativeNotesButton = document.querySelector('[data-native-probe=notes] button'); nativeNotesButton.click();
+  check(nativeNotesButton.dataset.notesParent === localShortcutName && nativeNotesButton.dataset.notesParent !== data.game.name,
+    'A renamed shortcut retains its actual native notes parent, independently of the public metadata title');
+  check(nativeProps.filter(([kind]) => kind === 'screenshots').at(-1)?.[1].overview.gameid === localGameID,
+    'Native media receives the exact non-Steam 64-bit GameID without numeric coercion');
   check(actions.at(-1)?.[0] === 'notes' && actions.at(-1)?.[1] === A, 'Native notes destination remains the shortcut AppID');
   const actionCount = actions.length;
   const nativeGamepadCallback = () => actions.push(['native-gamepad', A]);
@@ -464,12 +546,13 @@ await runBPBrowserScenario(sources, async fixture => {
   native.clearNativeComponentsCache(document); await showTab('activity'); await showTab('stuff');
   const fallbackNotes = [...root.querySelectorAll('button')].find(button => button.textContent.includes('Abrir notas'));
   check(Boolean(fallbackNotes), 'Missing native notes component retains an actionable owned fallback');
-  fallbackNotes.click(); check(actions.at(-1)?.[1] === A, 'Fallback notes target the same shortcut');
+  fallbackNotes.click(); check(actions.at(-1)?.[0] === 'notes-route' && actions.at(-1)?.[1] === `/notes/app/${A}/`,
+    'Fallback notes use the native owner history route without a fabricated SteamClient.GameNotes.OpenGameNotes API');
   const localScreenshots = [...root.querySelectorAll('button')].find(button => button.textContent.includes('Mostrar en disco'));
   check(Boolean(localScreenshots) && !root.querySelector('img[src="https://images.invalid/screen.png"]')
     && !root.querySelector('img[src="https://images.invalid/public.png"]'), 'Personal screenshot fallback exposes local files without substituting Store or community promotional media');
-  localScreenshots.click(); check(actions.at(-1)?.[0] === 'screenshots' && actions.at(-1)?.[1] === String(A),
-    'Fallback screenshot manager targets the exact shortcut string AppID');
+  localScreenshots.click(); check(actions.at(-1)?.[0] === 'screenshots' && actions.at(-1)?.[1] === localGameID && localGameID !== String(A),
+    'Fallback screenshot manager targets the exact 64-bit GameID, preserving non-Steam media identity');
   function NativeTradingCard(props) {
     React.useState(0); nativeProps.push(['trading-card', props]); return React.createElement('span', null, props.data.strTitle);
   }
@@ -486,9 +569,9 @@ await runBPBrowserScenario(sources, async fixture => {
     'Unknown catalog inventory acquires neither Owned nor Unowned personal presentation');
   const progress = client.ProgressBar; delete client.ProgressBar; loaded['document-ui-runtime'].clearDocumentUIRuntime(document);
   await showTab('activity'); await showTab('stuff');
-  const fallbackProgress = root.querySelector('.gdl-bp-progress');
-  check(fallbackProgress?.getAttribute('aria-valuenow') === '50' && fallbackProgress.firstElementChild.style.width === '50%',
-    'A missing native progress component retains correct 0–100 percent semantics');
+  const fallbackProgress = root.querySelector('[role="progressbar"]');
+  check(fallbackProgress?.getAttribute('aria-valuenow') === '50' && fallbackProgress.style.width === '50%',
+    'The native achievement fill retains correct 0–100 percent semantics without the generic progress component');
   client.ProgressBar = progress; loaded['document-ui-runtime'].clearDocumentUIRuntime(document);
   const resources = new Map();
   const deferred = name => new Promise(resolve => resources.set(name, resolve));
@@ -536,6 +619,19 @@ await runBPBrowserScenario(sources, async fixture => {
   window.g_Router.history.push = route => actions.push(['route', route]);
   collectionsButton.click(); check(actions.at(-1)?.[1] === '/library/collection/collection-A', 'Local collections use the owning window router');
   window.g_Router.history.push = originalPush;
+  const savedRouter = window.g_Router, savedTempNav = window.tempNavStore;
+  delete window.g_Router;
+  window.tempNavStore = { m_history: { location: { pathname: `/routes/library/app/${A}` },
+    push: route => actions.push(['local-history', route]) } };
+  collectionsButton.click();
+  check(actions.at(-1)?.[0] === 'local-history' && actions.at(-1)?.[1] === '/library/collection/collection-A',
+    'Collection fallback navigates through the owning document history when no global router exists');
+  const beforeRetiredCollection = actions.length;
+  window.tempNavStore.m_history.location.pathname = '/routes/library/app/550';
+  collectionsButton.click();
+  check(actions.length === beforeRetiredCollection, 'A retired collection button cannot navigate away from a native game');
+  window.g_Router = savedRouter;
+  if (savedTempNav === undefined) delete window.tempNavStore; else window.tempNavStore = savedTempNav;
   let unsafeQuickLinkReads = 0;
   function NativeLink({ url, label, link, isVisible }) {
     React.useState(0); nativeProps.push(['native-link', { url, label, link, isVisible }]);

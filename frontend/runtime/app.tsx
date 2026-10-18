@@ -3,7 +3,7 @@ import { Millennium, IconsModule, definePlugin } from '@steambrew/client';
 import { backendLog } from '../api/backend';
 import { mappings, loadMappings } from '../core/mappings';
 import { clearGameDataCache, warmupAllMappedGameData } from '../core/game-data';
-import { pruneCacheStorage, setProtectedCacheAppIds } from '../core/cache';
+import { disposeCacheMaintenance, pruneCacheStorage, setProtectedCacheAppIds } from '../core/cache';
 import { getSteamLanguage, subscribeSteamLanguageChange, startSteamLanguageWatcher, stopSteamLanguageWatcher, setLocalizationDocumentProvider } from '../steam/localization';
 import { steamUIModeService } from '../steam/ui/SteamUIModeService';
 import { steamComponents } from '../steam/modules/SteamComponentResolver';
@@ -20,7 +20,7 @@ import { DisposableRegistry } from '../core/disposables';
 import { mutationIsWithinSelector } from '../core/dom';
 import { configureShortcutRuntimeHost, disposeCustomizationArtwork, mutationMayContainProperties, startNativeAddAutoDetector, stopNativeAddAutoDetector, tryInjectCustomizationArtwork, tryInjectPropertiesField } from '../features/shortcuts/runtime';
 import { GDL_INJECTED } from '../features/library/constants';
-import { activateBigPicture, deactivateBigPicture, getBigPictureDocument, isBigPictureActive, refreshBigPicture } from '../features/big-picture/runtime';
+import { activateBigPicture, deactivateBigPicture, getBigPictureDocument, isBigPictureActive, refreshBigPicture, shouldSkipBigPictureRefresh } from '../features/big-picture/runtime';
 import { captureNativeUiBlueprints, clearNativeUiBlueprints } from '../steam/native-dom';
 import { installEarlyLinkedPlaybar, type EarlyLinkedPlaybar } from '../features/library/early-playbar';
 import { syncEarlyLinkedNotice } from '../features/library/early-notice';
@@ -50,13 +50,13 @@ import { installMappingRefresh } from './mapping-refresh';
 import { installArtworkBatchRefresh } from './artwork-batch-refresh';
 import { installBrowserProtection, disposeAllBrowserProtection } from '../steam/browser-protection';
 import { disposeTradingCardUI } from '../features/library/trading-cards';
+import { removeManualLinkNoticeButton } from '../features/library/manual-link-button';
 import { disposeCopiedFeedbackCleanup, scheduleCopiedFeedbackCleanup } from './copied-feedback';
 let mainWindowDoc: Document | null = null, appRuntimeLifecycle: DisposableRegistry | null = null;
 setLocalizationDocumentProvider(() => mainWindowDoc);
 const observedDocs = new WeakSet<Document>(), activeSteamDocuments = new Set<Document>(), documentLifecycles = new Set<DisposableRegistry>();
 function disposeDocumentLifecycles(): void {
 	for (const lifecycle of Array.from(documentLifecycles)) lifecycle.dispose();
-	documentLifecycles.clear();
 }
 function resolveMainWindowDocument(): Document | null {
 	if (!appRuntimeLifecycle || appRuntimeLifecycle.isDisposed) return null;
@@ -142,7 +142,7 @@ function windowCreated(context: any): void {
 		lifecycle.listen(popupWin, 'beforeunload', disposeWindow, { once: true });
 		lifecycle.listen(popupWin, 'unload', disposeWindow, { once: true });
 	}
-	lifecycle.add(() => { disposeLocalAchievementUI(popupDoc); disposeCustomizationArtwork(popupDoc); disposeTradingCardUI(popupDoc); disposeGhostSidebarCleanup(popupDoc); disposeCopiedFeedbackCleanup(popupDoc); cancelPendingLibraryPaint(popupDoc); });
+	lifecycle.add(() => { disposeLocalAchievementUI(popupDoc); disposeCustomizationArtwork(popupDoc); disposeTradingCardUI(popupDoc); disposeGhostSidebarCleanup(popupDoc); disposeCopiedFeedbackCleanup(popupDoc); removeManualLinkNoticeButton(popupDoc); cancelPendingLibraryPaint(popupDoc); });
 	lifecycle.add(installBrowserProtection(popupWin, popupDoc));
 	const winTitle = `${popupName} ${popupTitle}`.trim();
 	if (isOverlayWindow || isBigPictureWindow || isMainWindow) {
@@ -222,7 +222,7 @@ function windowCreated(context: any): void {
 		}
 		// This precedes the static main-window branch because Steam reuses that document.
 		if (currentIsBigPicture) {
-			if (isPublicSteamLibraryRoute(popupDoc) && !popupDoc.getElementById('gdl-bp-detail-root') && !popupDoc.getElementById('gdl-bp-playbar-controller')) {
+			if (shouldSkipBigPictureRefresh(popupDoc)) {
 				return;
 			}
 			activateBigPicture(popupDoc);
@@ -297,7 +297,7 @@ function windowCreated(context: any): void {
 		}
 		if (mutationTimer) return;
 		const bigPictureSurface = isBigPictureSurface();
-		if (bigPictureSurface && isPublicSteamLibraryRoute(popupDoc) && !popupDoc.getElementById('gdl-bp-detail-root') && !popupDoc.getElementById('gdl-bp-playbar-controller')) {
+		if (bigPictureSurface && shouldSkipBigPictureRefresh(popupDoc)) {
 			return;
 		}
 		const delay = Math.max(bigPictureSurface ? 250 : 140, (bigPictureSurface ? 500 : 350) - (Date.now() - lastMutationInjectionAt));
@@ -493,7 +493,7 @@ export default definePlugin(() => {
 			stopSteamLanguageWatcher(); stopNativeAddAutoDetector(); stopPlaytimeTracker();
 			stopFirstLaunchAchievementWatcher(); deactivateBigPicture(); hasHadBigPictureSession = false; gamepadRuntime.invalidate(); disposeLibraryRuntime();
 			disposeAchievementRuntime(); clearNativeUiBlueprints(); resetResolvedCssClassModules();
-			steamComponents.clearCache(); disposeAllBrowserProtection();
+			steamComponents.clearCache(); disposeAllBrowserProtection(); disposeCacheMaintenance();
 		},
 	};
 });

@@ -6,6 +6,13 @@ export interface NonSteamNoticeInfo { element: Element; title: string }
 
 const manualLinkNoticeObservers = new WeakMap<Document, MutationObserver>();
 const manualLinkNoticeClickHandlers = new WeakMap<Document, EventListener>();
+const manualLinkNoticeRetryTimers = new WeakMap<Document, number>();
+
+function cancelManualLinkNoticeRetry(doc: Document): void {
+	const timer = manualLinkNoticeRetryTimers.get(doc);
+	if (timer !== undefined) doc.defaultView?.clearTimeout(timer);
+	manualLinkNoticeRetryTimers.delete(doc);
+}
 
 function ensureManualLinkNoticeButtonStyles(doc: Document): void {
 	if (doc.getElementById('gdl-manual-link-notice-styles')) return;
@@ -35,13 +42,20 @@ function ensureManualLinkNoticeClickHandler(doc: Document): void {
 		event.stopPropagation();
 		const id = Number(button.dataset.shortcutAppId || '0');
 		const title = button.dataset.gameTitle || '';
+		cancelManualLinkNoticeRetry(doc);
 		const retry = (delay: number, attempts = 0): void => {
-			window.setTimeout(() => {
-				if (!button.isConnected) return;
+			const view = doc.defaultView;
+			if (!view || view.closed) return;
+			const timer = view.setTimeout(() => {
+				if (manualLinkNoticeRetryTimers.get(doc) !== timer) return;
+				manualLinkNoticeRetryTimers.delete(doc);
+				if (manualLinkNoticeClickHandlers.get(doc) !== handler || !button.isConnected
+					|| Number(button.dataset.shortcutAppId || '0') !== id || button.dataset.gameTitle !== title) return;
 				if (!requestManualShortcutLink(id, title, doc) && attempts < 7) {
 					retry(delay < 700 ? delay * 2 : 1500, attempts + 1);
 				}
 			}, delay);
+			manualLinkNoticeRetryTimers.set(doc, timer);
 		};
 		if (!requestManualShortcutLink(id, title, doc)) retry(100);
 	};
@@ -50,6 +64,10 @@ function ensureManualLinkNoticeClickHandler(doc: Document): void {
 }
 
 export function removeManualLinkNoticeButton(doc: Document): void {
+	cancelManualLinkNoticeRetry(doc);
+	const handler = manualLinkNoticeClickHandlers.get(doc);
+	if (handler) doc.removeEventListener('click', handler, true);
+	manualLinkNoticeClickHandlers.delete(doc);
 	doc.getElementById('gdl-manual-link-notice-button-row')?.remove();
 	disconnectManualLinkNoticeObserver(doc);
 }
@@ -71,14 +89,10 @@ function mountManualLinkNoticeButton(doc: Document, noticeElement: Element, shor
 	button.dataset.shortcutAppId = shortcutAppId;
 	button.dataset.gameTitle = gameTitle;
 	button.setAttribute('aria-label', `${gdlText('link_button', 'Link')} ${gameTitle}`);
-	button.textContent = gdlText('link_button', 'Link');
-	button.onclick = (event: MouseEvent) => {
-		event.preventDefault();
-		event.stopPropagation();
-		const id = Number(button.dataset.shortcutAppId || shortcutAppId || '0');
-		const title = button.dataset.gameTitle || gameTitle || '';
-		requestManualShortcutLink(id, title, doc);
-	};
+	const label = gdlText('link_button', 'Link');
+	// The notice observer includes this button. Replacing its text on every
+	// observation would enqueue another child-list mutation indefinitely.
+	if (button.textContent !== label) button.textContent = label;
 	if (row.parentElement !== host) host.appendChild(row);
 	return true;
 }

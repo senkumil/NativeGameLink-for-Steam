@@ -35,6 +35,7 @@ const mocks = {
   findMappingForTitle: () => null, getShortcutAppById: () => app,
   fetchPlaytimeStatsBatch: () => new Promise(resolve => { completeBatch = resolve; }),
   restoreBigPictureOverviewState: () => {},
+  cancelBigPictureHomePlaytimeProbes: () => {}, readBigPictureShortcutPlaytime: async () => null,
 };
 const schedulerContext = vm.createContext({ exports: {}, require: () => mocks, setTimeout, clearTimeout });
 vm.runInContext(compile('frontend/features/big-picture/rerender-scheduler.ts'), schedulerContext);

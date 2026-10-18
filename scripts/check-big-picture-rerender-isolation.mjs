@@ -78,6 +78,7 @@ const mocks = {
   PLAYBAR_CLASSES: () => ({}), LINKS_BAR_CLASSES: () => ({}), elementsWithCssModuleClass: () => [],
   isRenderedElement: () => false, committedHeaderAppId: () => null, isPaintedLibraryElement: () => false,
   restoreBigPictureOverviewState: () => {},
+  cancelBigPictureHomePlaytimeProbes: () => {}, readBigPictureShortcutPlaytime: async () => null,
 };
 function load(name) {
   if (modules[name]) return modules[name];

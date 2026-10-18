@@ -38,6 +38,7 @@ export function setPersistentInfoExpanded(_expanded: boolean): void {
 }
 
 const nativeInfoResizeObservers = new WeakMap<HTMLElement, ResizeObserver>();
+const nativeInfoPanels = new WeakMap<Document, HTMLElement>();
 
 function informationSvg(): string {
 	// Exact geometry used by Steam's current SVGIcon_Information component.
@@ -547,10 +548,25 @@ function nativeInfoPanelHeight(panel: HTMLElement): number {
 	return Math.max(1, Math.ceil(base + marginTop + marginBottom + padTop + padBottom));
 }
 
-let infoAnimationTimer: any = null;
+const infoAnimationTimers = new WeakMap<Document, ReturnType<typeof setTimeout>>();
+
+function cancelInfoAnimation(doc: Document): void {
+	const timer = infoAnimationTimers.get(doc);
+	if (timer !== undefined) clearTimeout(timer);
+	infoAnimationTimers.delete(doc);
+}
+
+function scheduleInfoAnimation(doc: Document, callback: () => void): void {
+	const timer = setTimeout(() => {
+		if (infoAnimationTimers.get(doc) !== timer) return;
+		infoAnimationTimers.delete(doc);
+		callback();
+	}, 320);
+	infoAnimationTimers.set(doc, timer);
+}
 
 function resizeFallbackInfoPanel(panel: HTMLElement): void {
-	if (panel.dataset.expanded !== '1' || infoAnimationTimer) return;
+	if (panel.dataset.expanded !== '1' || infoAnimationTimers.has(panel.ownerDocument)) return;
 	panel.style.height = `${nativeInfoPanelHeight(panel)}px`;
 }
 
@@ -571,7 +587,7 @@ function setNativeInfoExpanded(
 		const isCurrentlyExpanded = panel.dataset.expanded === '1';
 
 		if (expanded === isCurrentlyExpanded && panel.classList.contains(expanded ? 'gdl-info-expanded' : 'gdl-info-collapsed')) {
-			if (expanded && !infoAnimationTimer) {
+			if (expanded && !infoAnimationTimers.has(doc)) {
 				panel.style.height = `${nativeInfoPanelHeight(panel)}px`;
 			}
 			return;
@@ -579,10 +595,7 @@ function setNativeInfoExpanded(
 
 		panel.dataset.expanded = expanded ? '1' : '0';
 
-		if (infoAnimationTimer) {
-			clearTimeout(infoAnimationTimer);
-			infoAnimationTimer = null;
-		}
+		cancelInfoAnimation(doc);
 
 		if (!animate) {
 			panel.classList.toggle('gdl-info-expanded', expanded);
@@ -622,12 +635,11 @@ function setNativeInfoExpanded(
 			panel.style.height = `${targetHeight}px`;
 			panel.style.opacity = '1';
 
-			infoAnimationTimer = setTimeout(() => {
-				infoAnimationTimer = null;
+			scheduleInfoAnimation(doc, () => {
 				if (panel.isConnected && panel.dataset.expanded === '1') {
 					panel.style.height = `${nativeInfoPanelHeight(panel)}px`;
 				}
-			}, 320);
+			});
 		} else {
 			// Collapse: animate smoothly from current height down to 0px
 			panel.classList.remove('gdl-info-expanded');
@@ -647,14 +659,13 @@ function setNativeInfoExpanded(
 			panel.style.height = '0px';
 			panel.style.opacity = '0';
 
-			infoAnimationTimer = setTimeout(() => {
-				infoAnimationTimer = null;
+			scheduleInfoAnimation(doc, () => {
 				if (panel.isConnected && panel.dataset.expanded === '0') {
 					panel.classList.remove('gdl-info-collapsing');
 					panel.classList.add('gdl-info-collapsed');
 					panel.setAttribute('aria-hidden', 'true');
 				}
-			}, 320);
+			});
 		}
 	}
 	for (const button of Array.from(doc.querySelectorAll<HTMLElement>('[data-gdl-game-info-button="1"]'))) {
@@ -675,14 +686,17 @@ function setNativeInfoExpanded(
 }
 
 export function removeNativeInfoPanel(doc: Document, _preserveExpansion = false): void {
-	if (infoAnimationTimer) {
-		clearTimeout(infoAnimationTimer);
-		infoAnimationTimer = null;
-	}
+	cancelInfoAnimation(doc);
 	const panel = doc.getElementById('gdl-game-info-panel') as HTMLElement | null;
-	if (!panel) return;
-	nativeInfoResizeObservers.get(panel)?.disconnect();
-	panel.remove();
+	// Steam can detach the panel before its route observer runs. Keep its
+	// cleanup identity until then so its ResizeObserver is still disconnected.
+	for (const ownedPanel of new Set([panel, nativeInfoPanels.get(doc)])) {
+		if (!ownedPanel) continue;
+		nativeInfoResizeObservers.get(ownedPanel)?.disconnect();
+		nativeInfoResizeObservers.delete(ownedPanel);
+		ownedPanel.remove();
+	}
+	nativeInfoPanels.delete(doc);
 }
 
 export function ensureNativeInfoPanel(doc: Document, model: NativeGameInfo): HTMLElement | null {
@@ -691,6 +705,7 @@ export function ensureNativeInfoPanel(doc: Document, model: NativeGameInfo): HTM
 		return null;
 	}
 	let panel = doc.getElementById('gdl-game-info-panel') as HTMLElement | null;
+	if (!panel && nativeInfoPanels.has(doc)) removeNativeInfoPanel(doc);
 	const shortcutId = String(routedSteamAppId(doc) || '');
 	let created = false;
 	const signature = nativeInfoSignature(model);
@@ -722,12 +737,13 @@ export function ensureNativeInfoPanel(doc: Document, model: NativeGameInfo): HTM
 		const linkBar = doc.getElementById('gdl-link-bar');
 		if (linkBar?.parentElement) linkBar.parentElement.insertBefore(panel, linkBar);
 		else return null;
+		nativeInfoPanels.set(doc, panel);
 
 		const ResizeObserverCtor = doc.defaultView?.ResizeObserver;
 		const content = panel.firstElementChild as HTMLElement | null;
 		if (typeof ResizeObserverCtor === 'function' && content) {
 			const observer = new ResizeObserverCtor(() => {
-				if (panel?.dataset.expanded === '1' && !infoAnimationTimer) {
+				if (panel?.dataset.expanded === '1' && !infoAnimationTimers.has(doc)) {
 					panel.style.height = `${nativeInfoPanelHeight(panel)}px`;
 				}
 			});
@@ -735,7 +751,7 @@ export function ensureNativeInfoPanel(doc: Document, model: NativeGameInfo): HTM
 			nativeInfoResizeObservers.set(panel, observer);
 		}
 		panel.querySelector('img')?.addEventListener('load', () => {
-			if (panel?.dataset.expanded === '1' && !infoAnimationTimer) {
+			if (panel?.dataset.expanded === '1' && !infoAnimationTimers.has(doc)) {
 				panel.style.height = `${nativeInfoPanelHeight(panel)}px`;
 			}
 		});

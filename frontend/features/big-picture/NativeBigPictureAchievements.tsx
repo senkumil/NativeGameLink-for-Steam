@@ -8,11 +8,6 @@ import {
 	registerNativeAchievementStateRestore,
 	restoreNativeAchievementState,
 } from '../../steam/gamepad/components/AppDetailsNativeComponents';
-import {
-	compareEarnedAchievementsForDisplay,
-	compareLockedAchievementsForDisplay,
-	highlightedAchievementNames,
-} from '../achievements/rarity';
 import type { BigPictureDetailData, MappedShortcut } from './types';
 import { getCommittedShortcutSteamAppId } from '../shortcuts/registry';
 import { getCachedLocalAchievementsForShortcut } from '../achievements/cache';
@@ -22,6 +17,7 @@ import { openBigPictureAchievementsScreen } from './NativeBigPictureAchievementS
 import { getDocumentReact } from '../../steam/gamepad/document-ui-runtime';
 import { resolveBigPictureAchievementScreenParts } from './achievement-screen-parts';
 import { isRareAchievement } from '../achievements/rarity';
+import { bigPictureAchievementPreview } from './achievement-preview';
 
 interface AchievementProjection {
 	appId: number; appData: any; owners: Set<Document>; originalDetails: any; installedDetails: any;
@@ -119,7 +115,7 @@ export function syncAchievementsToNativeStore(
 		if (owner) projection.owners.add(owner);
 		const allItems: LocalAchievementItem[] = achievementsData.achievements || [];
 		const earned = allItems.filter(a => a.earned);
-		const unachieved = allItems.filter(a => !a.earned);
+		const preview = bigPictureAchievementPreview(allItems);
 
 		const toNativeItem = (item: LocalAchievementItem, isEarned: boolean) => ({
 			strID: String(item.name || ''),
@@ -138,9 +134,9 @@ export function syncAchievementsToNativeStore(
 		const nativeAchievements = {
 			nTotal: Math.max(allItems.length, Number(achievementsData.total || 0)),
 			nAchieved: Math.max(earned.length, Number(achievementsData.unlocked || 0)),
-			vecHighlight: earned.map(item => toNativeItem(item, true)),
-			vecUnachieved: unachieved.map(item => toNativeItem(item, false)),
-			vecAchievedHidden: earned.filter(item => item.hidden).map(item => toNativeItem(item, true)),
+			vecHighlight: preview.earned.map(item => toNativeItem(item, true)),
+			vecUnachieved: preview.locked.map(item => toNativeItem(item, false)),
+			vecAchievedHidden: preview.earnedHidden.map(item => toNativeItem(item, true)),
 		};
 
 		projection.installedDetails = {
@@ -207,9 +203,7 @@ function FallbackAchievementsSection(props: AchievementsSectionProps): ReactElem
 	const items = achievements?.achievements || [];
 	if (props.hideIfEmpty && items.length === 0 && !props.hydrating) return null;
 
-	const earned = items.filter(item => item.earned).sort(compareEarnedAchievementsForDisplay);
-	const locked = items.filter(item => !item.earned).sort(compareLockedAchievementsForDisplay);
-	const highlightedNames = highlightedAchievementNames(earned);
+	const { earned, locked } = bigPictureAchievementPreview(items);
 
 	const [prioritizedRow, setPrioritizedRow] = ownerReact.useState<'earned' | 'locked'>(
 		earned.length > 0 ? 'earned' : 'locked',
@@ -222,19 +216,19 @@ function FallbackAchievementsSection(props: AchievementsSectionProps): ReactElem
 	const highlight = total > 0 ? (
 		<div className={[native?.HighlightDiv, percent === 100 && native?.AllAchieved].filter(Boolean).join(' ')}>
 			{percent === 100 && props.NativeIcons.Achievement ? (
-				<props.NativeIcons.Achievement className={native?.Ribbon} />
+				<props.NativeIcons.Achievement fullcolor className={native?.Ribbon} />
 			) : null}
 			<div className={native?.UnlockedLabel}>
 				<span>
-					{gdlText('achievements_unlocked', '{unlocked} of {total} achievements unlocked', {
-						unlocked,
-						total,
-					})}
+					{loc(percent === 100 ? 'AppDetails_PlayerUnlockedPercentAll' : 'AppDetails_PlayerUnlockedPercent',
+						percent === 100 ? "You've unlocked all achievements! %1$s/%2$s" : "You've unlocked %1$s/%2$s achievements")
+						.replace('%1$s', String(unlocked)).replace('%2$s', String(total))}
 				</span>
 				<span className={native?.UnlockedLabelPercent}> ({percent}%)</span>
 			</div>
 			<div className={native?.AchievementProgressContainer}>
-				<props.NativeProgress nProgress={percent} />
+				<div className={native?.AchievementProgress} style={{ width: `${percent}%` }}
+					role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent} />
 			</div>
 		</div>
 	) : null;
@@ -253,7 +247,6 @@ function FallbackAchievementsSection(props: AchievementsSectionProps): ReactElem
 				items={earned}
 				classes={props.classes}
 				name="NativeGameLink Achievements"
-				highlightedNames={highlightedNames}
 				isPrioritized={prioritizedRow === 'earned'}
 				onRequestPriority={() => setPrioritizedRow('earned')}
 				onSelect={onOpenAchievements}
@@ -278,7 +271,7 @@ function FallbackAchievementsSection(props: AchievementsSectionProps): ReactElem
 					/>
 				</>
 			) : null}
-			{total > 0 && items.length === 0 ? (
+			{total > 0 && earned.length === 0 && locked.length === 0 ? (
 				<props.NativeButton
 					{...clickProps(() => onOpenAchievements())}
 					className={[native?.ViewAllAchievementsButton, 'gdl-bp-view-all-achievements'].filter(Boolean).join(' ')}
@@ -313,7 +306,6 @@ function FallbackAchievementCarousel({
 	items: LocalAchievementItem[];
 	classes: NativeAppDetailsClasses;
 	name: string;
-	highlightedNames?: Set<string>;
 	isPrioritized: boolean;
 	onRequestPriority: () => void;
 	onSelect?: (item: LocalAchievementItem) => void;
@@ -373,7 +365,7 @@ function FallbackAchievementCarousel({
 										{loc(
 											'AppDetails_PctUnlocked',
 											'%1$s% de los jugadores tienen este logro',
-										).replace('%1$s', item.global_percent!.toFixed(1))}
+										).replace('%1$s', Math.max(.1, item.global_percent!).toFixed(1))}
 									</div>
 								) : null}
 							</div>

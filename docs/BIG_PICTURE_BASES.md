@@ -1,6 +1,8 @@
 # Big Picture para juegos vinculados: implementación y aceptación
 
-Estado: cuatro pestañas y flujos integrados, 14 de octubre de 2026.
+Estado: cuatro pestañas y flujos integrados, revisión de recursos y navegación
+del 18 de octubre de 2026. Evidencia y límites de esta revisión en
+[VERIFICACION_2026-10-18.md](VERIFICACION_2026-10-18.md).
 
 Corrección del arranque vacío en Steam real: el bootstrap instalado expone
 `require.m` y mantiene privada su caché, sin `require.c`. Se captura ese runtime
@@ -196,7 +198,7 @@ ni una prueba física con control.
 | 2. Montaje/foco | Commit real, proveedores vigentes, autoridad exclusiva y recursos con disposer | Integrado y verificado con cambios repetidos de panel/generación |
 | 3. Logros | **Tus cosas → logros → mis/mundiales → volver**, con identidad del shortcut | Integrado y verificado con aperturas/cierres, filtros y foco |
 | 4. Pestañas | Actividad/noticias, comunidad/medios, información, amigos, notas y recursos disponibles | Integrado y verificado en el flujo de cuatro pestañas |
-| 5. Certificación | Comparaciones contra Steam nativo, controles y resoluciones reales | Pendiente de validación física y visual; mejoras optativas |
+| 5. Certificación | Comparaciones contra Steam nativo, controles y resoluciones reales | Pendiente de validación física y visual completa; integración automática en juegos vinculados |
 
 Al ampliar funciones, conservar el flujo completo de datos, foco, acción, modal
 y regreso. Las capacidades se resuelven en ejecución; un fallback acotado debe

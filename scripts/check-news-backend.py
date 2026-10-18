@@ -12,7 +12,7 @@ local payload = { appnews = { newsitems = {
 }}}
 local news = factory({http={get=function() return {status=200,body='json'} end},
  cjson={decode=function() return payload end,encode=function(v) return v end},
- util={normalize_appid_and_language=function(a,l) return a,l end}})
+ util={normalize_appid_and_language=function(a,l) return a,l end,sanitize_utf8_tree=function(value)return value end}})
 local result = news.fetch_news('1593500','english')
 assert(#result.items==1 and result.items[1].gid=='1')
 assert(result.items[1].url=='https://store.steampowered.com/news/externalpost/steam_community_announcements/6250522009517172772')

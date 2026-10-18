@@ -194,6 +194,18 @@ local function on_load()
 end
 
 local function on_unload()
+    local loaded_farmer = rawget(deps, "steam_card_farmer")
+    if loaded_farmer then
+        local ok_stop, stop_result = pcall(loaded_farmer.stop_card_farming)
+        if not ok_stop then
+            logger:warn("Could not stop card farming: " .. tostring(stop_result))
+        else
+            local parsed, result = pcall(cjson.decode, stop_result)
+            if parsed and type(result) == "table" and result.ok == false then
+                logger:warn("Could not stop card farming: " .. tostring(result.error))
+            end
+        end
+    end
     local loaded_playtime = rawget(deps, "playtime")
     if loaded_playtime then
         local ok_flush, flush_err = pcall(function() loaded_playtime.flush() end)

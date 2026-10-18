@@ -145,7 +145,7 @@ sincronizaciones.
 
 ## 🖥️ Integración con Big Picture
 
-Las mejoras opcionales de Big Picture integran los accesos vinculados en las cuatro pestañas del detalle, conservando el shell y las acciones del acceso directo de Steam:
+Big Picture integra automáticamente los accesos vinculados en las cuatro pestañas del detalle, conservando el shell y las acciones del acceso directo de Steam:
 
 - Actividad y noticias; tus cosas, con logros personales y mundiales, notas y capturas; comunidad e información del juego.
 - Componentes, estilos, foco y modales de la ventana de Steam propietaria, con alternativas locales cuando una capacidad no está disponible.
@@ -286,7 +286,8 @@ La [implementación y matriz de aceptación de Big Picture](docs/BIG_PICTURE_BAS
 documenta identidad, aislamiento, navegación, capacidades y pruebas. Ejecuta
 `npm run check:big-picture` para verificar la integración. Las cuatro pestañas
 y sus flujos están implementados; la comparación visual 1:1 y la validación
-física con controles en Steam siguen pendientes. Las mejoras siguen siendo optativas.
+física con controles en Steam siguen pendientes. Consulta también el
+[informe de integración y recursos](docs/VERIFICACION_2026-10-18.md).
 
 ---
 

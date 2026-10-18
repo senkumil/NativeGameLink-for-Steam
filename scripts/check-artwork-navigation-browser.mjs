@@ -181,7 +181,7 @@ async function browserChecks(sources) {
     './prefetch': { reprioritizeLinkedGame: noop },
     './artwork-sync': { prioritizeShortcutLinkingAndArtwork: (...args) => shortcutMutationAttempts.push({ type: 'linking-artwork-icon', args }) },
     './sidebar-cleanup': { tryRedirectUnownedMappedGame: () => false },
-    './info-panel': { removeNativeInfoButton: noop, resetMainScrollToTop: noop },
+    './info-panel': { removeNativeInfoButton: noop, removeNativeInfoPanel: noop, resetMainScrollToTop: noop },
   };
   const load = name => {
     if (modules[name]) return modules[name];

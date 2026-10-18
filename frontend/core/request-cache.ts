@@ -26,7 +26,9 @@ export class RetryingRequestCache<T> {
 	private readonly values = new Map<string, CachedValue<T>>();
 	private readonly inFlight = new Map<string, Promise<T | null>>();
 	private clearEpoch = 0;
-	private readonly keyEpochs = new Map<string, number>();
+	// Tokens belong only to active requests. Retaining invalidation tombstones
+	// forever would grow with every relinked or evicted game in a long session.
+	private readonly keyEpochs = new Map<string, object>();
 
 	constructor(private readonly options: RequestCacheOptions<T>) {}
 
@@ -43,9 +45,10 @@ export class RetryingRequestCache<T> {
 		if (active) return active;
 
 		const requestClearEpoch = this.clearEpoch;
-		const requestKeyEpoch = this.keyEpoch(key);
+		const requestKeyEpoch = {};
+		this.keyEpochs.set(key, requestKeyEpoch);
 		const isCurrent = (): boolean => requestClearEpoch === this.clearEpoch
-			&& requestKeyEpoch === this.keyEpoch(key);
+			&& requestKeyEpoch === this.keyEpochs.get(key);
 		let request!: Promise<T | null>;
 		request = this.loadWithRetry(loader, isCurrent)
 			.then(value => {
@@ -64,8 +67,9 @@ export class RetryingRequestCache<T> {
 				// A cache clear can start a newer request for the same key. An older
 				// request must not remove that newer in-flight deduplication entry.
 				if (this.inFlight.get(key) === request) this.inFlight.delete(key);
+				if (this.keyEpochs.get(key) === requestKeyEpoch) this.keyEpochs.delete(key);
 			});
-		this.inFlight.set(key, request);
+		if (isCurrent()) this.inFlight.set(key, request);
 		return request;
 	}
 
@@ -92,7 +96,7 @@ export class RetryingRequestCache<T> {
 	/** Drop one key without retaining a late result from a request started before it. */
 	invalidate(key: string): void {
 		this.values.delete(key);
-		this.keyEpochs.set(key, this.keyEpoch(key) + 1);
+		this.keyEpochs.delete(key);
 		this.inFlight.delete(key);
 	}
 
@@ -106,10 +110,6 @@ export class RetryingRequestCache<T> {
 		for (const key of keys) {
 			if (predicate(key)) this.invalidate(key);
 		}
-	}
-
-	private keyEpoch(key: string): number {
-		return this.keyEpochs.get(key) ?? 0;
 	}
 
 	private isCacheable(value: T | null): value is T {

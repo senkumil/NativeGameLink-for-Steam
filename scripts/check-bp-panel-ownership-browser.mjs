@@ -13,6 +13,7 @@ catch { ({ chromium } = require(path.join(process.env.USERPROFILE,
 const sources = Object.fromEntries([
   ['panel', 'frontend/features/big-picture/panel-mount.ts'], ['details', 'frontend/features/big-picture/details.ts'],
   ['visibility', 'frontend/features/big-picture/visibility-lease.ts'],
+  ['snapshot', 'frontend/features/big-picture/transition-snapshot.ts'],
 ].map(([name, file]) => [name, ts.transpileModule(fs.readFileSync(file, 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
 }).outputText]));
@@ -34,7 +35,9 @@ try {
     }
     let linked = true, connected = true;
     const shortcutId = '3000000001';
+    const presentation = load(sources.snapshot);
     const panel = load(sources.panel, {
+      './transition-snapshot': presentation,
       './visibility-lease': load(sources.visibility),
       '../../steam/gamepad/GamepadContext': {
         isCurrentLinkedGamepadTarget: (doc, id, steamId) => linked && doc === document && String(id) === shortcutId && steamId === '550',
@@ -137,6 +140,54 @@ try {
     check(f.children.every((child, index) => signature(child) === f.before[index]) && !lateOutgoing.hidden,
       'Finishing the native exit releases the detached outgoing panel and its original properties');
     panel.restoreAllNativePanelChildren(document); incoming.remove();
+
+    f = fixture(); let originalClicks = 0;
+    f.root.dataset.gdlShortcutAppId = shortcutId; f.root.dataset.gdlSteamAppId = '550';
+    f.root.innerHTML = '<style>#clip-icon{color:red}</style><button id="clip-icon" class="gpfocus" data-gdl-focus-key="action" onclick="window.snapshotInlineRan=true">Action</button>'
+      + '<label for="edit-value">Text</label><input id="edit-value" value="old"><input type="checkbox">'
+      + '<div class="scroller" style="height:50px;overflow:auto"><div style="height:500px">Scrolled content</div></div>'
+      + '<svg><defs><clipPath id="clip-region"><rect width="10" height="10"/></clipPath></defs><path clip-path="url(#clip-region)"/></svg>'
+      + '<video poster="https://images.invalid/poster.png"><source src="https://media.invalid/video.mp4"></video>'
+      + '<audio src="https://media.invalid/audio.mp3"></audio><iframe src="about:blank"></iframe><object data="about:blank"></object><canvas width="10" height="10"></canvas>';
+    const liveAction = f.root.querySelector('button'); liveAction.onclick = () => originalClicks++;
+    f.root.querySelector('input').value = 'live editor value'; f.root.querySelector('[type=checkbox]').checked = true;
+    f.root.querySelector('.scroller').scrollTop = 125;
+    const originalPresentation = f.root.outerHTML, snapshot = presentation.createBigPictureTransitionSnapshot(f.root);
+    check(f.root.outerHTML === originalPresentation && f.root.querySelector('.scroller').scrollTop === 125,
+      'A transition presentation leaves the mounted original DOM, live editor and scroll state unchanged');
+    check(snapshot.inert && snapshot.getAttribute('aria-hidden') === 'true' && !snapshot.querySelector('[data-gdl-focus-key],.gpfocus')
+      && !snapshot.hasAttribute('data-gdl-shortcut-app-id') && !snapshot.hasAttribute('data-gdl-steam-app-id'),
+      'The outgoing presentation has neither active identity, input metadata nor native focus ownership');
+    const clonedButton = snapshot.querySelector('button'); clonedButton.click(); clonedButton.focus();
+    check(originalClicks === 0 && !window.snapshotInlineRan && document.activeElement !== clonedButton && clonedButton.tabIndex === -1,
+      'Cloned outgoing content cannot run original callbacks, inline events or receive focus');
+    check(snapshot.querySelector('input').value === 'live editor value' && snapshot.querySelector('[type=checkbox]').checked
+      && snapshot.querySelector('.scroller').scrollTop === 125, 'The last painted input, checkbox and internal scroll values survive handoff');
+    check(snapshot.querySelector('path').getAttribute('clip-path') === `url(#${snapshot.querySelector('clipPath').id})`
+      && snapshot.querySelector('label').htmlFor === snapshot.querySelector('input').id
+      && snapshot.querySelector('style').textContent.includes('#' + clonedButton.id)
+      && !snapshot.querySelector('[id="clip-region"],[id="edit-value"]'),
+      'Retired SVG fragments, labels and scoped styles reference unique snapshot IDs');
+    check(!snapshot.querySelector('iframe,object,embed,video,audio,canvas,source') && snapshot.querySelector('img[src$="poster.png"]')
+      && snapshot.querySelector('img[src^="data:image/png"]'), 'Snapshots contain only static media presentation without new players or browsing contexts');
+    snapshot.remove(); f.host.remove();
+
+    // A real outgoing native CSS transition may outlive route authority.
+    f = fixture(); f.root.textContent = 'Linked outgoing presentation';
+    f.root.dataset.gdlShortcutAppId = shortcutId; f.root.dataset.gdlSteamAppId = '550';
+    panel.commitNativePanelRoot(f.host, f.root);
+    f.host.style.transform = 'translateX(0)'; f.host.getBoundingClientRect();
+    f.host.style.transition = 'transform 150ms linear'; f.host.style.transform = 'translateX(-50px)';
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    check(panel.preserveNativePanelExit(f.host, f.root), 'Route exit recognizes the running native CSS transition');
+    linked = false; f.root.remove(); panel.restoreAllNativePanelChildren(document, true);
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    check(f.children.every(child => child.hidden) && f.host.querySelector('[data-gdl-bp-transition-snapshot]')?.inert,
+      'Route authority is revoked immediately while outgoing native notices remain hidden beneath a passive final frame');
+    await new Promise(resolve => setTimeout(resolve, 210));
+    check(!f.host.querySelector('[data-gdl-bp-transition-snapshot]') && f.children.every((child, index) => signature(child) === f.before[index]),
+      'Native transition completion releases route-exit presentation and restores exact native properties');
+    linked = true; f.host.remove();
 
     const foreign = document.createElement('div'); foreign.hidden = true;
     foreign.style.setProperty('display', 'none', 'important'); foreign.setAttribute('aria-hidden', 'true');

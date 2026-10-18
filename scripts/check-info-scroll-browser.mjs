@@ -109,6 +109,33 @@ async function browserChecks({ sources, foreignOnly = false }) {
       foreignButton.click(); await flush(600);
       check(foreignPane.scrollTop === 0 && foreignSidebar.scrollTop === 340,
         'The secondary-document arrow scrolls its own details pane and preserves its library list');
+      const mainPane = foreignPane.cloneNode(true);
+      mainPane.querySelectorAll('[data-gdl-game-info-button], #gdl-game-info-panel').forEach(node => node.remove());
+      document.body.appendChild(mainPane);
+      const mainPlaybar = mainPane.querySelector(`.${classes.Container}`);
+      const mainButtons = mainPane.querySelector(`.${classes.AppButtonsContainer}`);
+      commit(mainPlaybar); commit(mainButtons);
+      info.ensureNativeInfoPanel(document, model); info.ensureNativeInfoButton(document, model);
+      const mainButton = mainButtons.querySelector('[data-gdl-game-info-button="1"]');
+      const nativeSetTimeout = window.setTimeout, nativeClearTimeout = window.clearTimeout;
+      const animationTimers = new Set();
+      window.setTimeout = (callback, delay, ...args) => {
+        const timer = nativeSetTimeout(() => { animationTimers.delete(timer); callback(...args); }, delay);
+        if (delay === 320) animationTimers.add(timer);
+        return timer;
+      };
+      window.clearTimeout = timer => { animationTimers.delete(timer); nativeClearTimeout(timer); };
+      try {
+        mainButton.click(); foreignButton.click();
+        check(animationTimers.size === 2,
+          'Simultaneous Info animations in two Steam documents own separate timers');
+        info.removeNativeInfoButton(document); info.removeNativeInfoPanel(document);
+        check(animationTimers.size === 1,
+          'Removing one document panel preserves the other document animation');
+        info.removeNativeInfoPanel(foreignDoc);
+        check(animationTimers.size === 0, 'Removing both panels cancels every animation timer');
+      } finally { window.setTimeout = nativeSetTimeout; window.clearTimeout = nativeClearTimeout; }
+      mainPane.remove();
       info.removeNativeInfoButton(foreignDoc); info.removeNativeInfoPanel(foreignDoc); iframe.remove();
       return { ok: true, checks: results.length, results };
     }

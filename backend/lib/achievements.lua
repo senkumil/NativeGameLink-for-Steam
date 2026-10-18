@@ -266,6 +266,8 @@ local function normalize_local_schema(appid, root_dir, lang)
                                 icon = achievement_icon_url(appid, a.icon or a.icon_normal or a.iconNormal or ""),
                                 icongray = achievement_icon_url(appid, a.icongray or a.icon_gray or a.icon_locked or a.iconLocked or ""),
                                 hidden = a.hidden == true or tonumber(a.hidden) == 1,
+                                schema_order = metadata_identity.schema_order(a.schema_order)
+                                    or (type(k) == "number" and k >= 1 and metadata_identity.schema_order(k - 1) or nil),
                             }
                         end
                     end
@@ -578,6 +580,7 @@ function M.fetch_local_achievement_data(request_json, language, state_app_id)
                 global_percent = tonumber(m.global_percent) or 0,
                 global_percent_known = m.global_percent ~= nil,
                 client_writable = m.client_writable,
+                schema_order = m.schema_order,
             }
         end
         if #meta_list == 0 then
@@ -696,6 +699,7 @@ function M.fetch_local_achievement_data(request_json, language, state_app_id)
                 global_percent = item.global_percent,
                 global_percent_known = item.global_percent_known,
                 client_writable = item.client_writable,
+                schema_order = item.schema_order,
                 earned = is_earned,
                 earned_time = earned_time,
                 progress = 0,
@@ -782,6 +786,7 @@ function M.fetch_local_achievement_data(request_json, language, state_app_id)
             global_percent = tonumber(m.global_percent) or 0,
             global_percent_known = m.global_percent ~= nil,
             client_writable = m.client_writable,
+            schema_order = m.schema_order,
             earned = is_earned,
             earned_time = earned_time,
             progress = tonumber(st.progress) or 0,

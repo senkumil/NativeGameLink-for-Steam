@@ -6,6 +6,7 @@ const sources = Object.fromEntries(Object.entries({
   PlaybarControllerIcons: 'frontend/features/big-picture/PlaybarControllerIcons.tsx',
   'panel-mount': 'frontend/features/big-picture/panel-mount.ts',
   'visibility-lease': 'frontend/features/big-picture/visibility-lease.ts',
+  'transition-snapshot': 'frontend/features/big-picture/transition-snapshot.ts',
 }).map(([name, file]) => [name, ts.transpileModule(fs.readFileSync(file, 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, jsx: ts.JsxEmit.React },
 }).outputText]));

@@ -14,6 +14,11 @@ local d = {
 local module = factory(d)
 assert(module.read_logo_layout_images({shortcut_app_id='100'}).ok==false)
 assert(module.read_logo_layout_images({shortcut_app_id='../3000000001'}).ok==false)
+for _,id in ipairs({'100','../3000000001','3000000001/hero','3000000001.0','4294967296'}) do
+ assert(module.read_logo_layout_images({shortcut_app_id=id}).ok==false)
+ assert(module.read_custom_logo_position({shortcut_app_id=id}).ok==false)
+ assert(module.save_custom_logo_position({shortcut_app_id=id,logo_position={}}).ok==false)
+end
 assert(#reads==0)
 local result=module.read_logo_layout_images({shortcut_app_id='3000000001'})
 assert(result.ok and result.logo and result.hero and #reads==2)

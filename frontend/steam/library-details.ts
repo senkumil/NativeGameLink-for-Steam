@@ -93,7 +93,7 @@ export function committedHeaderAppId(element: HTMLElement): number | null {
 			if (!fiber || seen.has(fiber)) return null;
 			seen.add(fiber);
 			const props = fiber.memoizedProps;
-			for (const value of [props?.overview?.appid, props?.appOverview?.appid, props?.details?.unAppID, props?.appid, props?.appId, props?.nAppID]) {
+			for (const value of [props?.overview?.appid, props?.appOverview?.appid, props?.app?.appid, props?.details?.unAppID, props?.appid, props?.appId, props?.nAppID]) {
 				const id = appId(value);
 				if (id !== null) return id;
 			}

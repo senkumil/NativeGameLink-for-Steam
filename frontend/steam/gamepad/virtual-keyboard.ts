@@ -10,12 +10,14 @@ export interface VirtualKeyboardHandle {
 }
 
 interface CachedVirtualKeyboardHandle {
+	document: Document;
 	runtimeIdentity: object | null;
+	manager: object | null;
 	handle: VirtualKeyboardHandle;
 }
 
 const cachedHandles = new WeakMap<Window, CachedVirtualKeyboardHandle>();
-const lastShowRequests = new WeakMap<Window, { target: HTMLElement | null; at: number }>();
+const lastShowRequests = new WeakMap<Window, { document: Document; handle: VirtualKeyboardHandle | null; target: HTMLElement | null; at: number }>();
 const SHOW_DEBOUNCE_MS = 350;
 
 function resolveTargetWindow(doc?: Document): Window | null {
@@ -42,43 +44,46 @@ function createManagerHandle(vkm: any): VirtualKeyboardHandle | null {
 			}
 			vkm.SetVirtualKeyboardVisible?.();
 		},
-		HideVirtualKeyboard: () => {
+		...(typeof vkm.SetVirtualKeyboardHidden === 'function' || typeof vkm.HideVirtualKeyboard === 'function' ? { HideVirtualKeyboard: () => {
 			if (typeof vkm.SetVirtualKeyboardHidden === 'function') {
 				vkm.SetVirtualKeyboardHidden();
 				return;
 			}
 			if (typeof vkm.HideVirtualKeyboard === 'function') vkm.HideVirtualKeyboard();
-		},
+		} } : {}),
 	};
 }
 
 export function resolveVirtualKeyboardHandle(doc?: Document): VirtualKeyboardHandle | null {
 	const view = resolveTargetWindow(doc);
+	if (!view) return null;
+	const targetDoc = doc || view.document;
 	try {
-		steamWebpackRuntime.captureRuntime(doc);
-		const runtimeIdentity = steamWebpackRuntime.getRuntimeIdentity(doc);
-		if (view) {
-			const cached = cachedHandles.get(view);
-			if (cached && cached.runtimeIdentity === runtimeIdentity) return cached.handle;
-		}
+		steamWebpackRuntime.captureRuntime(targetDoc);
+		const runtimeIdentity = steamWebpackRuntime.getRuntimeIdentity(targetDoc);
+		// Steam can replace or revoke its manager without replacing the runtime.
+		// Revalidate the owner before using a cached closure over that manager.
+		const manager = getNativeWindowInstance(targetDoc)?.VirtualKeyboardManager || null;
+		const cached = cachedHandles.get(view);
+		if (cached && cached.document === targetDoc && cached.runtimeIdentity === runtimeIdentity && cached.manager === manager) return cached.handle;
+		cachedHandles.delete(view);
 
 		if (view?.document) {
 			try {
-				const inst = getNativeWindowInstance(doc || view.document);
-				const handle = createManagerHandle(inst?.VirtualKeyboardManager);
+				const handle = createManagerHandle(manager);
 				if (handle) {
-					if (view) cachedHandles.set(view, { runtimeIdentity, handle });
+					cachedHandles.set(view, { document: targetDoc, runtimeIdentity, manager, handle });
 					backendLog('[NGL][VirtualKeyboard] Resolved VirtualKeyboardManager from owning WindowStore');
 					return handle;
 				}
 			} catch {}
 		}
 
-		for (const mod of steamWebpackRuntime.getAllModules(doc)) {
+		for (const mod of steamWebpackRuntime.getAllModules(targetDoc)) {
 			const exp = mod.exports as any;
 			if (!exp || typeof exp.ShowVirtualKeyboard !== 'function') continue;
 			const handle = exp as VirtualKeyboardHandle;
-			if (view) cachedHandles.set(view, { runtimeIdentity, handle });
+			cachedHandles.set(view, { document: targetDoc, runtimeIdentity, manager, handle });
 			backendLog(`[NGL][VirtualKeyboard] Found ShowVirtualKeyboard in module ${mod.id}`);
 			return handle;
 		}
@@ -115,14 +120,15 @@ export function showSteamVirtualKeyboard(doc?: Document, targetInput?: HTMLEleme
 	try {
 		const targetDoc = doc || (typeof document !== 'undefined' ? document : undefined);
 		const view = resolveTargetWindow(targetDoc);
-		if (view) {
-			const now = Date.now();
-			const previous = lastShowRequests.get(view);
-			if (previous && previous.target === (targetInput || null) && now - previous.at < SHOW_DEBOUNCE_MS) return true;
-			lastShowRequests.set(view, { target: targetInput || null, at: now });
-		}
-
+		if (!view || !targetDoc) return false;
 		const handle = resolveVirtualKeyboardHandle(targetDoc);
+		const now = Date.now(), previous = lastShowRequests.get(view);
+		if (previous && previous.document === targetDoc && previous.handle === handle
+			&& previous.target === (targetInput || null) && now - previous.at < SHOW_DEBOUNCE_MS) return true;
+		const request = { document: targetDoc, handle, target: targetInput || null, at: now };
+		// The manager can synchronously notify focus handlers. Coalesce that
+		// reentry, but retire the provisional record if every delivery fails.
+		lastShowRequests.set(view, request);
 		if (handle?.ShowVirtualKeyboard) {
 			try {
 				handle.ShowVirtualKeyboard(targetInput || null);
@@ -133,7 +139,9 @@ export function showSteamVirtualKeyboard(doc?: Document, targetInput?: HTMLEleme
 			}
 		}
 
-		return postVirtualKeyboardMessage(view, 'ShowVirtualKeyboard');
+		const posted = postVirtualKeyboardMessage(view, 'ShowVirtualKeyboard');
+		if (!posted && lastShowRequests.get(view) === request) lastShowRequests.delete(view);
+		return posted;
 	} catch (err) {
 		backendLog(`[NGL][VirtualKeyboard] showSteamVirtualKeyboard error: ${err}`);
 		return false;
@@ -145,6 +153,8 @@ export function hideSteamVirtualKeyboard(doc?: Document): boolean {
 	try {
 		const targetDoc = doc || (typeof document !== 'undefined' ? document : undefined);
 		const view = resolveTargetWindow(targetDoc);
+		if (!view) return false;
+		lastShowRequests.delete(view);
 		const handle = resolveVirtualKeyboardHandle(targetDoc);
 		if (handle?.HideVirtualKeyboard) {
 			try {

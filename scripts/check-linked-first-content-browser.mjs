@@ -155,7 +155,7 @@ async function browserChecks(sources, prepaintOnly = false) {
       removeOwnedLibraryChrome: doc => doc.querySelectorAll('#gdl-skeleton,#gdl-main-content-stack,#gdl-library-injected,#gdl-link-bar').forEach(node => node.remove()) },
     './hydration': { hydrateLinkedRouteResources: noop }, './prefetch': { reprioritizeLinkedGame: noop },
     './sidebar-cleanup': { tryRedirectUnownedMappedGame: () => false },
-    './info-panel': { removeNativeInfoButton: noop, resetMainScrollToTop: noop },
+    './info-panel': { removeNativeInfoButton: noop, removeNativeInfoPanel: noop, resetMainScrollToTop: noop },
     './cloud-status': { ensureCloudStatus: noop },
     './styles': { ensureNativeGameInfoStyles: doc => {
       load('activity-styles').ensureActivityStyles(doc); load('status-styles').ensureStatusComposerStyles(doc);

@@ -19,7 +19,7 @@ import { focusBigPictureNativeElement } from './native-focus';
 import { isRareAchievement } from '../achievements/rarity';
 import { getCurrentSteamUser } from '../library/social/feed';
 import { EXIT_TEXT_EDITOR_EVENT, isEditableTextTarget } from './editable-target';
-import { switchBigPictureOwnedModalTab } from './gamepad-nav';
+import { returnBigPictureFocusToTabs, switchBigPictureOwnedModalTab } from './gamepad-nav';
 import { showBigPictureModal, type BigPictureModalLease } from './owned-modals';
 import type { MappedShortcut } from './types';
 
@@ -195,7 +195,9 @@ export function BigPictureAchievementScreen(props: ScreenProps): React.ReactElem
 	}, [doc, shortcut.id, shortcut.steamAppId]);
 	ownerReact.useEffect(() => {
 		const exitEditor = () => {
-			if (current()) doc.getElementById('gdl-bp-achievements-screen')?.querySelector<HTMLElement>(`[data-gdl-achievement-tab="${tab}"]`)?.focus();
+			if (!current()) return;
+			const target = doc.getElementById('gdl-bp-achievements-screen')?.querySelector<HTMLElement>(`[data-gdl-achievement-tab="${tab}"]`);
+			if (target && !focusBigPictureNativeElement(doc, target)) target.focus({ preventScroll: true });
 		};
 		doc.addEventListener(EXIT_TEXT_EDITOR_EVENT, exitEditor);
 		return () => doc.removeEventListener(EXIT_TEXT_EDITOR_EVENT, exitEditor);
@@ -256,8 +258,18 @@ export function BigPictureAchievementScreen(props: ScreenProps): React.ReactElem
 			placeholder={loc('Achievements_Filter_Default', 'Search')} /></div>
 		{searchRight}
 	</div>;
+	const cancel = (event?: any): boolean => {
+		if (!current()) return false;
+		if (!event?.detail?.is_repeat) {
+			if (isEditableTextTarget(doc.activeElement)) {
+				if (!returnBigPictureFocusToTabs(doc)) return false;
+			} else close();
+		}
+		event?.preventDefault?.(); event?.stopPropagation?.();
+		return true;
+	};
 	return <NativeFocusable className="gdl-bp-ach-screen" flow-children="column" focusable={false}
-		onCancel={close} onCancelButton={close} onCancelActionDescription={loc('ActionButtonLabelBack', 'Back')}
+		onCancel={cancel} onCancelButton={cancel} onCancelActionDescription={loc('ActionButtonLabelBack', 'Back')}
 		onButtonDown={(event: any) => {
 			if (!current() || event.defaultPrevented || event.detail?.is_repeat || isEditableTextTarget(doc.activeElement)) return;
 			const offset = event.detail?.button === GamepadButton.BUMPER_LEFT ? -1 : event.detail?.button === GamepadButton.BUMPER_RIGHT ? 1 : 0;

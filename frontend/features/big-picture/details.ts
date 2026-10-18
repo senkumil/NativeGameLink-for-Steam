@@ -32,6 +32,7 @@ import {
 	ensureNativePanelRoot,
 	ensurePlaybarControllerStat,
 	hideBigPictureNonSteamNotices,
+	preserveNativePanelExit,
 	removeBigPictureFallbackPanel,
 	removeCloudDivider,
 	removePlaybarControllerStat,
@@ -46,6 +47,7 @@ import type { BigPictureDetailData, BigPictureTab, MappedShortcut } from './type
 import { getBigPictureMappedShortcuts } from './mapped-shortcuts-cache';
 import { disposeBigPictureModals } from './owned-modals';
 import { syncBigPicturePlaybarMetadata, disposeBigPicturePlaybarMetadata } from './playbar-metadata';
+import { bigPictureAchievementPreview } from './achievement-preview';
 
 interface BigPictureDetailState {
 	shortcut: MappedShortcut;
@@ -78,7 +80,8 @@ function preloadDetailAchievementImages(doc: Document, state: BigPictureDetailSt
 	const source = getCachedLocalAchievementsForShortcut(state.shortcut.steamAppId, String(state.shortcut.id));
 	if (!doc.head || !source || achievementImagePreloads.get(doc)?.source === source) return;
 	const items = source.achievements || [];
-	const visible = [...items.filter(item => item.earned).slice(0, 12), ...items.filter(item => !item.earned).slice(0, 12)];
+	const preview = bigPictureAchievementPreview(items);
+	const visible = [...preview.earned, ...preview.locked];
 	const urls = new Set(visible.map(item => item.earned ? item.icon : item.icon_gray || item.icon).filter(Boolean));
 	const prior = achievementImagePreloads.get(doc);
 	const retained = new Map(prior?.links.map(link => [link.href, link]) || []);
@@ -439,9 +442,24 @@ function bindTabs(doc: Document, strip: HTMLElement, controls: Map<BigPictureTab
 		subtree: true,
 		attributeFilter: ['aria-selected', 'aria-current'],
 	});
+	// Native Transition mounts the incoming scroll panel concurrently after
+	// selecting its tab. Adopt that committed host before paint, without the
+	// application's slower whole-window mutation debounce.
+	let host = strip.parentElement;
+	const panel = detailStates.get(doc)?.panel;
+	while (host && panel && !host.contains(panel)) host = host.parentElement;
+	const panels = new MutationObserver(records => {
+		if (!detailStates.get(doc) || !strip.isConnected) return;
+		if (!records.some(record => !(record.target as Element).closest?.('#gdl-bp-detail-root, [data-gdl-bp-transition-snapshot]')
+			&& [...Array.from(record.addedNodes), ...Array.from(record.removedNodes)].some(node => node.nodeType === 1
+				&& !(node as HTMLElement).id?.startsWith('gdl-')
+				&& ((node as Element).matches('[role="tabpanel"], ._TabContentsScroll') || (node as Element).querySelector('[role="tabpanel"], ._TabContentsScroll'))))) return;
+		scheduleTabSync(doc, preferredDetailTabs.get(doc)?.tab || activeTabFromNative(doc, controls) || undefined);
+	});
+	if (host) panels.observe(host, { childList: true, subtree: true });
 	const dispose = () => {
 		detailTabSyncMicrotasks.delete(doc);
-		observer.disconnect(); strip.removeEventListener('click', input); strip.removeEventListener('keydown', input);
+		observer.disconnect(); panels.disconnect(); strip.removeEventListener('click', input); strip.removeEventListener('keydown', input);
 		for (const [tab, control] of controls) if (control.dataset.gdlBpTab === tab) {
 			const original = prior.get(control);
 			if (original === undefined) delete control.dataset.gdlBpTab; else control.dataset.gdlBpTab = original;
@@ -455,7 +473,7 @@ function retireLegacyDetailShell(doc: Document): void {
 	for (const stale of Array.from(doc.querySelectorAll('#gdl-bp-detail-shell, #gdl-bp-native-strip-placeholder'))) stale.remove();
 }
 
-function removeBigPictureDetailsNodes(doc: Document, keepControllerStat = false): void {
+function removeBigPictureDetailsNodes(doc: Document, keepControllerStat = false, allowNativeExit = false): void {
 	for (const link of achievementImagePreloads.get(doc)?.links || []) link.remove();
 	achievementImagePreloads.delete(doc);
 	disposeBigPicturePlaybarMetadata(doc);
@@ -463,11 +481,11 @@ function removeBigPictureDetailsNodes(doc: Document, keepControllerStat = false)
 	achievementSyncCleanups.get(doc)?.();
 	detailTabObservers.get(doc)?.dispose();
 	deactivateNativeGameInfoBridge(doc);
-		const state = detailStates.get(doc);
+	const state = detailStates.get(doc);
 	if (state) {
 		detailStates.delete(doc);
 		nextDetailGeneration(doc);
-		restoreNativePanelChildren(state.panel);
+		if (!allowNativeExit || !preserveNativePanelExit(state.panel, state.root)) restoreNativePanelChildren(state.panel);
 		const patchTimer = detailPatchTimers.get(state);
 		if (patchTimer) clearTimeout(patchTimer);
 		detailPatchTimers.delete(state);
@@ -476,7 +494,7 @@ function removeBigPictureDetailsNodes(doc: Document, keepControllerStat = false)
 		restoreBigPictureAchievementProjections(state.shortcut.id, doc);
 		detailStates.delete(doc);
 	}
-	restoreAllNativePanelChildren(doc);
+	restoreAllNativePanelChildren(doc, allowNativeExit);
 	nextDetailGeneration(doc);
 	for (const element of Array.from(doc.querySelectorAll('#gdl-bp-detail-root, #gdl-bp-detail-shell, #gdl-bp-native-strip-placeholder, #gdl-bp-focus-ring-root, #gdl-bp-focus-ring, #gdl-playbar-achievements, [data-gdl-playbar-achievements="1"]'))) element.remove();
 	removeBigPictureFallbackPanel(doc);
@@ -518,7 +536,7 @@ export async function refreshBigPictureShortcutDetails(doc: Document): Promise<v
 	if (!doc.body) return;
 	if (isLibraryOrNonDetailsView(doc)) {
 		detailMountReports.delete(doc);
-		removeBigPictureDetailsNodes(doc);
+		removeBigPictureDetailsNodes(doc, false, true);
 		return;
 	}
 	const context = resolveActiveGameContext(doc);
@@ -527,7 +545,7 @@ export async function refreshBigPictureShortcutDetails(doc: Document): Promise<v
 		detailContextGapSince.delete(doc);
 		const retryTimer = detailRetryTimers.get(doc);
 		if (retryTimer) { clearTimeout(retryTimer); detailRetryTimers.delete(doc); }
-		removeBigPictureDetailsNodes(doc);
+		removeBigPictureDetailsNodes(doc, false, true);
 		return;
 	}
 	if (context.type !== 'shortcut-linked' || !context.identity
@@ -549,7 +567,7 @@ export async function refreshBigPictureShortcutDetails(doc: Document): Promise<v
 			}
 		}
 		detailContextGapSince.delete(doc);
-		removeBigPictureDetailsNodes(doc);
+		removeBigPictureDetailsNodes(doc, false, true);
 		return;
 	}
 	detailContextGapSince.delete(doc);
@@ -567,7 +585,15 @@ export async function refreshBigPictureShortcutDetails(doc: Document): Promise<v
 		|| state.shortcut.steamAppId !== shortcut.steamAppId
 		|| state.language !== language;
 	if (changedShortcut && state) {
-		removeBigPictureDetailsNodes(doc);
+		// Retire the old data generation without tearing a still-live owner
+		// renderer out of Steam's transition. Its replacement commits atomically.
+		detailStates.delete(doc);
+		const patchTimer = detailPatchTimers.get(state);
+		if (patchTimer) clearTimeout(patchTimer);
+		detailPatchTimers.delete(state); detailPendingPatches.delete(state);
+		disposeBigPictureModals(doc);
+		deactivateNativeGameInfoBridge(doc);
+		restoreBigPictureAchievementProjections(state.shortcut.id, doc);
 		state = undefined;
 	}
 	const tabs = findBigPictureTabStrip(doc);
@@ -585,7 +611,7 @@ export async function refreshBigPictureShortcutDetails(doc: Document): Promise<v
 	const preferredTab = preferred && preferred.until >= Date.now() ? preferred.tab : null;
 	if (preferred && (preferred.until < Date.now() || detectedTab === preferred.tab)) preferredDetailTabs.delete(doc);
 	const nativeTab = preferredTab || detectedTab || state?.activeTab || 'activity';
-	const nodes = ensureNativePanelRoot(doc, tabs, nativeTab);
+	const nodes = ensureNativePanelRoot(doc, tabs, nativeTab, state?.root);
 	if (!nodes) {
 		reportDetailMount(doc, 'native content panel not ready; retrying');
 		scheduleDetailRetry(doc);

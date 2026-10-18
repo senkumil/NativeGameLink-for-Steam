@@ -69,7 +69,13 @@ async function browserChecks(sources) {
   };
   let audit;
   const NativeObserver = window.MutationObserver;
+  const NativeResizeObserver = window.ResizeObserver;
+  const activeResizeObservers = new Set();
   window.MutationObserver = class extends NativeObserver { constructor(callback) { super(callback); watcherCreates++; } };
+  window.ResizeObserver = class extends NativeResizeObserver {
+    observe(...args) { super.observe(...args); activeResizeObservers.add(this); }
+    disconnect() { super.disconnect(); activeResizeObservers.delete(this); }
+  };
   try {
     const css = load('css'), classes = css.PLAYBAR_CLASSES();
     const early = load('early-game-info'), chrome = load('native-chrome');
@@ -183,6 +189,12 @@ async function browserChecks(sources) {
     check(!document.querySelector('[data-gdl-game-info-button="1"]') && !document.getElementById('gdl-game-info-panel'),
       'An unlinked shortcut immediately retires owned Info without waiting for app-level navigation cleanup');
     unmapped.delete(ids.a); early.syncEarlyLinkedGameInfo(document);
+    const detachedPanel = document.getElementById('gdl-game-info-panel');
+    check(activeResizeObservers.size === 1, 'Only the live game-info panel retains a resize observer');
+    detachedPanel.remove();
+    info.removeNativeInfoPanel(document);
+    check(activeResizeObservers.size === 0,
+      'A panel detached by Steam still releases its resize observer at document cleanup');
     early.disposeEarlyLinkedGameInfo(document); info.removeNativeInfoButton(document); info.removeNativeInfoPanel(document);
     check(!chrome.getCurrentNativeGameInfoForDocument(document, ids.a)
       && !document.querySelector('[data-gdl-game-info-button="1"]'),
@@ -193,7 +205,7 @@ async function browserChecks(sources) {
     audit?.disconnect();
     const output = document.createElement('pre'); output.id = 'playbar-startup-result';
     output.textContent = JSON.stringify({ ok: false, results, error: String(error.stack || error) }); document.body.appendChild(output);
-  } finally { window.MutationObserver = NativeObserver; }
+  } finally { window.MutationObserver = NativeObserver; window.ResizeObserver = NativeResizeObserver; }
 }
 const scratchRoot = path.join(root, 'scratch');
 fs.mkdirSync(scratchRoot, { recursive: true });

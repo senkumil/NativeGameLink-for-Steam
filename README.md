@@ -140,7 +140,7 @@ Enter your own SteamGridDB API key in NativeGameLink settings and enable the aut
 
 ## 🖥️ Big Picture Integration
 
-Optional Big Picture enhancements integrate linked shortcuts into all four detail tabs while preserving Steam's shell and the shortcut's original actions:
+Big Picture automatically integrates linked shortcuts into all four detail tabs while preserving Steam's shell and the shortcut's original actions:
 
 - Activity and news; your stuff, including personal and global achievements, notes and screenshots; community and game information.
 - Components, styles, focus and modals from the owning Steam window, with local fallbacks when a capability is unavailable.
@@ -269,7 +269,8 @@ The [Big Picture implementation and acceptance matrix (Spanish)](docs/BIG_PICTUR
 documents identity, isolation, navigation, capabilities and tests. Run
 `npm run check:big-picture` to verify the integration. All four tabs and their
 flows are implemented; visual 1:1 comparison and physical controller validation
-inside Steam remain pending. Enhancements remain opt-in.
+inside Steam remain pending. See the
+[integration and resource verification report (Spanish)](docs/VERIFICACION_2026-10-18.md).
 
 ---
 

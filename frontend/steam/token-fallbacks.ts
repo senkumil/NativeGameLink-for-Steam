@@ -1,4 +1,9 @@
 export const SPANISH_TOKEN_FALLBACKS: Record<string, string> = {
+	AppBox_NoPlayTimeYet: 'Sin tiempo de juego',
+	AppBox_RecentPlayTime_Hours: 'Últimas dos semanas: %1$s h',
+	AppBox_RecentPlayTime_Minutes: 'Últimas dos semanas: %1$s min',
+	BasicGameCarousel_TotalPlayTime_Hours: 'Tiempo de juego: %1$s h',
+	BasicGameCarousel_TotalPlayTime_Minutes: 'Tiempo de juego: %1$s m',
 	AppDetails_Shortcut_Explanation: 'Alguna información sobre %1$s no está disponible porque no es un juego de Steam o es un mod. No obstante, Steam controla el inicio del juego por ti y, en la mayoría de los casos, la interfaz dentro del juego estará disponible.',
 	AppDetails_SectionTitle_Activity: 'Actividad',
 	AppActivity_StatusUpdate_Post: 'Diles algo sobre este juego a tus amigos...',
@@ -8,6 +13,7 @@ export const SPANISH_TOKEN_FALLBACKS: Record<string, string> = {
 	AppDetails_SectionTitle_Achievements: 'Logros',
 	Achievements_HeaderStats_Earned_Label: '%1$s de %2$s logros conseguidos',
 	AppDetails_PlayerUnlockedPercentAll: '¡Has desbloqueado todos los logros! %1$s/%2$s',
+	AppDetails_PlayerUnlockedPercent: 'Has desbloqueado %1$s/%2$s',
 	Achievements_Tab_MyAchievements: 'Mis logros',
 	Achievements_Tab_GlobalAchievements: 'Logros mundiales',
 	Achievements_GlobalAchievement_PercentUnlockedLabel: '% de todos los jugadores',

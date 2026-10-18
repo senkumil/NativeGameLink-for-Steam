@@ -7,7 +7,7 @@ function M.new(limit)
     return { entries = {}, count = 0, limit = limit, clock = 0 }
 end
 
-local function remove(cache, key)
+function M.remove(cache, key)
     if cache.entries[key] then
         cache.entries[key] = nil
         cache.count = cache.count - 1
@@ -18,7 +18,7 @@ function M.get(cache, key, ttl)
     local entry = cache.entries[key]
     if not entry then return nil end
     if ttl and os.time() - entry.time >= ttl then
-        remove(cache, key)
+        M.remove(cache, key)
         return nil
     end
     cache.clock = cache.clock + 1
@@ -29,7 +29,7 @@ end
 function M.set(cache, key, entry)
     local now = os.time()
     for cached_key, cached in pairs(cache.entries) do
-        if cached.ttl and now - cached.time >= cached.ttl then remove(cache, cached_key) end
+        if cached.ttl and now - cached.time >= cached.ttl then M.remove(cache, cached_key) end
     end
     if not cache.entries[key] then cache.count = cache.count + 1 end
     cache.clock = cache.clock + 1
@@ -42,7 +42,7 @@ function M.set(cache, key, entry)
             if cached.last_used < oldest_used then oldest_key, oldest_used = cached_key, cached.last_used end
         end
         if not oldest_key then break end
-        remove(cache, oldest_key)
+        M.remove(cache, oldest_key)
     end
 end
 

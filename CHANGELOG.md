@@ -1,3 +1,30 @@
+## Unreleased - Big Picture integration and resource lifecycle (2026-10-18)
+
+- Preserve the outgoing tab's passive presentation through Steam's own transition
+  and adopt incoming panels before paint, including rapid tab changes.
+- Match native achievement previews: at most 12 items per row, native ordering,
+  hidden-achievement handling, progress fill and active/inactive icon geometry.
+- Preserve schema ordering through achievement metadata and persistent snapshots.
+- Use Steam's native trading-card section for confirmed account inventory,
+  including owned/missing rows and badge state; keep unknown catalogues neutral.
+- Keep personal notes under the real shortcut name and media under its 64-bit GameID.
+- Fix virtual keyboard reopening, owner changes and failed-request retries.
+- Prevent held controller input from activating a page after leaving an editor,
+  foreign modal or hidden window; restore native focus when leaving achievement search.
+- Navigate linked collections through the owning window history when no global router exists.
+- Resolve Home card ownership from committed Steam props and reuse its native
+  recent/total playtime localization and formatting.
+- Refresh Big Picture from its own live route even when the shared desktop
+  context retains a public app route.
+- Release request invalidation keys, manual-link listeners/retries, detached Info
+  observers, per-document animations and pending cache maintenance on teardown.
+- Bound backend retired-game caches and preserve cache counts across invalidation.
+- Propagate helper launch/timeout failures, release native resources and cancel
+  delayed farmer startup when stop/unload arrives first.
+- Validate complete shortcut IDs before logo layout file access.
+- Add a same-page Big Picture heap soak and backend process/resource checks to
+  the regular verification suite; include the acceptance documentation in packages.
+
 ## v4.0.3 - Dynamic Controller Switching, Native Links Bar & Webpack Polish (2026-09-13)
 
 - **Dynamic Real-Time Controller Switching**:

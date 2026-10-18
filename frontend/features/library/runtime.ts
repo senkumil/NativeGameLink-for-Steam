@@ -35,7 +35,7 @@ import { cancelLinkedShortcutLoading, completeLinkedShortcutLoading, LINKED_LOAD
 import { hydrateLinkedRouteResources } from './hydration';
 import { reprioritizeLinkedGame } from './prefetch';
 import { tryRedirectUnownedMappedGame } from './sidebar-cleanup';
-import { removeNativeInfoButton, resetMainScrollToTop } from './info-panel';
+import { removeNativeInfoButton, removeNativeInfoPanel, resetMainScrollToTop } from './info-panel';
 import { isCurrentLinkedRenderDestination, ownsCurrentLinkedPrimaryLinks } from './render-session';
 export { findNonSteamNotice, hideNoticeQuick } from './notice';
 export interface LibraryRuntimeHost {
@@ -133,7 +133,7 @@ function retireLinkedRouteFromNativePage(doc: Document, generation: number): voi
 	if (currentInjectedDocument === doc) clearCurrentInjection(doc);
 	cancelLinkedShortcutLoading(doc, generation);
 	restoreNativeLibraryStyles(doc);
-	doc.getElementById('gdl-game-info-panel')?.remove(); doc.getElementById('gdl-link-bar')?.remove(); removeNativeGameChrome(doc, true);
+	removeNativeInfoPanel(doc); doc.getElementById('gdl-link-bar')?.remove(); removeNativeGameChrome(doc, true);
 	if (!hasOwnedLibraryChrome(doc) && !isLibraryRouteExitPending(doc)) return;
 	beginLibraryRouteExit(doc, generation);
 	cleanupOwnedLibraryChromeAfterRouteExit(doc);
@@ -147,9 +147,9 @@ export function handleLibraryNavigation(doc: Document): void {
 	if (currentInjectedDocument === doc) injectionGeneration += 1;
 	linkedRenderRetryState.delete(doc);
 	const hadCurrentInjection = currentInjectedDocument === doc, hadOwnedChrome = hasOwnedLibraryChrome(doc);
-	doc.getElementById('gdl-game-info-panel')?.remove();
+	removeNativeInfoPanel(doc);
 	if (isPublicSteamLibraryRoute(doc)) {
-		doc.getElementById('gdl-link-bar')?.remove(); doc.getElementById('gdl-game-info-panel')?.remove(); removeNativeGameChrome(doc, true, false);
+		doc.getElementById('gdl-link-bar')?.remove(); removeNativeGameChrome(doc, true, false);
 		if (hadCurrentInjection) clearCurrentInjection(doc);
 		if (hadCurrentInjection || hadOwnedChrome) {
 			restoreNativeLibraryStyles(doc);

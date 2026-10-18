@@ -1,6 +1,7 @@
 import React from 'react';
 import { loc } from '../../steam/localization';
 import { openSteamNavigationUrl } from '../../steam/navigation';
+import { getNativeWindowInstance } from '../../steam/native-window-store';
 import { LibraryStoreAdapter } from '../../steam/gamepad/stores/LibraryStoreAdapter';
 import { resolveNativeGameInfoComponent } from '../../steam/gamepad/components/AppDetailsNativeComponents';
 import { resolveNativeAppDetailsClasses } from '../../steam/gamepad/components/AppDetailsNativeClasses';
@@ -53,7 +54,15 @@ export function InformationTab(props: InformationProps): React.ReactElement {
 	try { collections = (components.collectionStore || LibraryStoreAdapter.getStore(props.document))?.GetCollectionListForAppID?.(props.shortcut.id >>> 0) || []; } catch {}
 	const CollectionWrapper = components.CollectionWrapper || 'div';
 	const collectionFallback = (collection: any) => <NativeButton {...clickProps(() => {
-		if (isBigPictureActionCurrent(props)) (props.document.defaultView as any)?.g_Router?.history?.push?.(`/library/collection/${encodeURIComponent(collection.id)}`);
+		if (!isBigPictureActionCurrent(props) || collection.id == null) return;
+		const view = props.document.defaultView as any;
+		if (!view || view.closed || view.document !== props.document) return;
+		// Portal-owned CEF documents often have no g_Router. Use the same
+		// exact-window histories that authorize this detail session.
+		const instance = getNativeWindowInstance(props.document);
+		const history = [instance?.History, instance?.m_history, view.tempNavStore?.m_history,
+			view.g_Router?.history, view.g_Router?.m_history].find(value => typeof value?.push === 'function');
+		try { history?.push(`/library/collection/${encodeURIComponent(collection.id)}`); } catch {}
 	})}>{collection.displayName || collection.display_name || collection.name || collection.id}</NativeButton>;
 	const nativeCollection = (collection: any): boolean => {
 		try { return Boolean(components.CollectionCard && Array.isArray(collection.visibleApps)); } catch { return false; }

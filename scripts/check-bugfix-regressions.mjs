@@ -46,6 +46,7 @@ const bigPictureDetails = ['NativeBigPictureDetails.tsx', 'media-modals.tsx', 'o
   'information-tab.tsx', 'detail-views.ts', 'document-primitives.tsx']
   .map(file => read(`frontend/features/big-picture/${file}`)).join('\n');
 const bigPictureNativeResolver = read('frontend/steam/gamepad/components/AppDetailsNativeClasses.ts');
+const bigPictureCarousel = read('frontend/features/big-picture/NativeBigPictureCarousel.tsx');
 const webpackRuntime = read('frontend/steam/modules/SteamWebpackRuntime.ts');
 const documentUIRuntime = read('frontend/steam/gamepad/document-ui-runtime.ts');
 const bpTabs = read('frontend/features/big-picture/tabs.ts');
@@ -222,9 +223,12 @@ assert(webpackRuntime.includes('modules as millenniumWebpackModules') && webpack
 assert(!bigPictureDetails.includes('PanelSection') && !bigPictureDetails.includes('PanelSectionRow') && !bigPictureDetails.includes('Field as NativeComponent'), 'Big Picture no longer renders settings-form rows inside game details');
 assert(bigPictureNativeResolver.includes("ActivityEvent: ['Event'") && bigPictureNativeResolver.includes("Achievement: ['AchievementCarouselItem'") && bigPictureNativeResolver.includes("Community: ['CommunityContentContainer'"), 'Big Picture resolves Steam-owned AppDetails presentation families by semantic class signatures');
 assert(bigPictureDetails.includes('event?.PartnerEventMediumImage_Container') && bigPictureDetails.includes('native?.CommunityItem') && !bigPictureDetails.includes('components.ActivityFeed'), 'activity and community use provider-independent native Steam composition');
-assert(bigPictureNativeResolver.includes('prototype.ScrollToElement') && bigPictureNativeResolver.includes('prototype.UpdateScrollArrows') && /resolveNativeSummaryCarousel\((?:document|props\.document)\)/.test(bigPictureDetails) && !bigPictureDetails.includes('import { Carousel,'), 'Big Picture uses the owning document Steam AppDetails BoxCarousel instead of the unrelated Millennium carousel');
+assert(bigPictureCarousel.includes('prototype?.ScrollToElement') && bigPictureCarousel.includes('prototype?.UpdateScrollArrows')
+  && bigPictureCarousel.includes('resolveBigPictureCarouselParts(doc)') && bigPictureCarousel.includes('steamWebpackRuntime.getAllModules(doc)')
+  && bigPictureDetails.includes('<NativeBigPictureCarousel document={document}') && !bigPictureDetails.includes('import { Carousel,'),
+  'Big Picture uses the owning document Steam AppDetails BoxCarousel instead of the unrelated Millennium carousel');
 assert(bigPictureDetails.includes('event?.AppActivityDay') && bigPictureDetails.includes('event?.AppActivityDate') && bigPictureDetails.includes('event?.PartnerEventTextOnly_Icon'), 'Big Picture activity uses native dated groups and patch-event chrome');
-assert(bigPictureDetails.includes("case 'info': content = <InformationTab") && bigPictureDetails.includes('resolveNativeGameInfoComponent(props.document)')
+assert(bigPictureDetails.includes("case 'info': return <InformationTab") && bigPictureDetails.includes('resolveNativeGameInfoComponent(props.document)')
   && bigPictureDetails.includes('createBigPictureDetailViews(props.document, props.shortcut, props.data.game, true)')
   && bigPictureDetails.includes('<NativeInfo {...views}'), 'Big Picture Game Information uses Steam native composition with local linked-detail views');
 assert(!bigPictureDetails.includes('function InfoTab(') && !bigPictureDetails.includes('gdl-bp-info-root') && !bpDetailsStyles.includes('gdl-bp-info-root'), 'custom Game Information markup/styles are removed so Steam owns exact DLC, collections, layout and focus behavior');
@@ -426,7 +430,7 @@ assert(activitySection.includes('hideSteamVirtualKeyboard(document)') && activit
 assert(virtualKeyboard.includes('SHOW_DEBOUNCE_MS = 350') && virtualKeyboard.includes('VirtualKeyboardMessage'), 'virtual keyboard requests are debounced and retain the GamepadUI parent-message fallback');
 assert(!virtualKeyboard.includes('dispatchEvent(new Event(\'focus\'') && !virtualKeyboard.includes('dispatchEvent(new MouseEvent(\'click\'') && !virtualKeyboard.includes('targetInput.focus()'), 'virtual keyboard service never synthesizes focus/click events that recurse through textarea handlers');
 assert(!virtualKeyboard.includes('m_KeyboardOwners') && !virtualKeyboard.includes('m_bIsInlineVirtualKeyboardOpen') && !virtualKeyboard.includes('UpdateIsShowingVirtualKeyboard'), 'virtual keyboard integration no longer mutates Steam private manager state');
-assert(virtualKeyboard.includes('getNativeWindowInstance(doc || view.document)') && virtualKeyboard.includes('getAllModules(doc)')
+assert(virtualKeyboard.includes('getNativeWindowInstance(targetDoc)') && virtualKeyboard.includes('getAllModules(targetDoc)')
   && virtualKeyboard.includes('cachedHandles = new WeakMap<Window') && nativeWindowStore.includes('instance?.BrowserWindow === view'), 'virtual keyboard handle is resolved and cached per owning CEF realm');
 assert(bpNativeComponents.includes('resolveNativePostTextEntryComponent') && bpNativeComponents.includes('resolveNativeFocusableTextarea'), 'native component resolvers remain available for other Steam surfaces without forcing them into the activity composer');
 assert(!activitySection.includes('onBlur={() =>') && activitySection.includes('gdl-bp-post-entry-active'), 'activity composer remains mounted when the native keyboard temporarily moves focus away');
@@ -453,9 +457,10 @@ const bpTradingCards = read('frontend/features/big-picture/NativeBigPictureTradi
 assert(bpTradingCards.includes('gdl-bp-trading-card') && bpTradingCards.includes('focusable')
   && bpTradingCards.includes('AppDetails_TradingCards_ViewBadgeProgress')
   && tradingCatalog.includes('https://steamcommunity.com/my/gamecards/${props.shortcut.steamAppId}')
-  && bpTradingCards.includes('linkedCardPresentation(props.catalog)') && bpTradingCards.includes('data-gdl-badge-preview="1"')
-  && !bpTradingCards.includes('css?.Unowned') && !bpTradingCards.includes('css?.Owned'),
-  'Linked trading cards remain focusable and share the desktop catalogue badge preview without inventory color restrictions');
+  && bpTradingCards.includes('NativeCards details={{ unAppID: Number(props.steamAppId) }}')
+  && bpTradingCards.includes('css?.Unowned') && bpTradingCards.includes('css?.Owned')
+  && !bpTradingCards.includes('linkedCardPresentation(props.catalog)'),
+  'Known account cards use native presentation and ownership while an unknown public catalogue invents no personal badge state');
 assert(!bigPictureDetails.includes('gdl-bp-info-description') && !bigPictureDetails.includes('gdl-bp-info-feature'), 'NativeBigPictureDetails does not duplicate Steam Game Information focus targets');
 assert(bpDetails.includes('activateNativeGameInfoBridge(doc, state.shortcut, state.data.game)') && bpDetails.includes('deactivateNativeGameInfoBridge(doc)'), 'native Game Information bridge is scoped to the active linked detail page and restored on exit');
 assert(bpNativeInfoBridge.includes('new Proxy(base,') && !bpNativeInfoBridge.includes('if (linked?.details) return linked;'), 'native Game Information preserves the shortcut data and local artwork identity');

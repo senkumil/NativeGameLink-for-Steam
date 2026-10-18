@@ -45,6 +45,7 @@ const sources = Object.fromEntries([
   ['pure-class-factory', 'frontend/steam/gamepad/components/pure-class-factory.ts'],
   ['achievement-comparison', 'frontend/features/big-picture/achievement-comparison.tsx'],
   ['summary', 'frontend/features/big-picture/NativeBigPictureAchievements.tsx'],
+  ['achievement-preview', 'frontend/features/big-picture/achievement-preview.ts'],
   ['owned', 'frontend/features/big-picture/owned-modals.tsx'],
   ['navigation', 'frontend/features/big-picture/gamepad-nav.ts'],
   ['navigation-session', 'frontend/features/big-picture/navigation-session.ts'],
@@ -60,8 +61,9 @@ const sources = Object.fromEntries([
 ].map(([name, file]) => [name, ts.transpileModule(fs.readFileSync(file, 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, jsx: ts.JsxEmit.React },
 }).outputText]));
-export async function runBPBrowserScenario(extraSources = {}, scenario = null) {
+export async function runBPBrowserScenario(extraSources = {}, scenario = null, options = {}) {
 const browser = await chromium.launch({ headless: true,
+  args: options.chromiumArgs || [],
   executablePath: process.env.CLOUD_BROWSER_EXECUTABLE || 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe' });
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
@@ -102,7 +104,7 @@ try {
       observe(...args) { if (!this.active) { observerCount++; this.active = true; } super.observe(...args); }
       disconnect() { if (this.active) { observerCount--; this.active = false; } super.disconnect(); }
     };
-    const attributes = props => Object.fromEntries(Object.entries(props).filter(([name]) => !['focusable', 'onActivate', 'onCancel', 'onButtonDown', 'onOKActionDescription', 'onCancelActionDescription', 'autoFocus', 'noFocusRing'].includes(name)));
+    const attributes = props => Object.fromEntries(Object.entries(props).filter(([name]) => !['focusable', 'onActivate', 'onCancel', 'onCancelButton', 'onButtonDown', 'onOKActionDescription', 'onCancelActionDescription', 'autoFocus', 'noFocusRing'].includes(name)));
     const Focusable = React.forwardRef((props, ref) => {
       const element = React.useRef(null);
       React.useEffect(() => {
@@ -111,6 +113,12 @@ try {
         node.addEventListener('fixture-native-button', props.onButtonDown);
         return () => node.removeEventListener('fixture-native-button', props.onButtonDown);
       }, [props.onButtonDown]);
+      React.useEffect(() => {
+        if (!props.onCancelButton) return;
+        const node = element.current;
+        node.addEventListener('fixture-native-cancel', props.onCancelButton);
+        return () => node.removeEventListener('fixture-native-cancel', props.onCancelButton);
+      }, [props.onCancelButton]);
       return React.createElement('div', { ...attributes(props), ref: node => {
         element.current = node; if (typeof ref === 'function') ref(node); else if (ref) ref.current = node;
       }, tabIndex: props.focusable === false ? undefined : props.tabIndex ?? 0,
@@ -306,7 +314,13 @@ try {
     search().focus();
     modal().querySelector('.gdl-bp-ach-screen').dispatchEvent(new CustomEvent('fixture-native-button', { detail: { button: 5 }, bubbles: true, cancelable: true }));
     await frame(); check(tab('global').getAttribute('aria-selected') === 'true', 'Native shoulders preserve text editor ownership while search is active');
-    tab('global').focus();
+    const nativeCancel = new CustomEvent('fixture-native-cancel', { detail: { is_repeat: false }, bubbles: true, cancelable: true });
+    search().dispatchEvent(nativeCancel); await frame();
+    check(modal() && document.activeElement === tab('global') && nativeCancel.defaultPrevented,
+      'Native controller Back exits search and restores modal tab focus before closing the achievement screen');
+    const repeatedCancel = new CustomEvent('fixture-native-cancel', { detail: { is_repeat: true }, bubbles: true, cancelable: true });
+    tab('global').dispatchEvent(repeatedCancel); await frame();
+    check(modal() && repeatedCancel.defaultPrevented, 'The held native Back repeat is consumed before it can close the modal parent after leaving its editor');
     tab('global').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
     await frame(); check(!modal() && document.activeElement === opener, 'Native Focusable cancel closes the screen and restores its opener');
     nav.disposeBigPictureGamepadNavigation(document);

@@ -4,7 +4,20 @@ return function(deps)
 local fs, util, millennium = deps.fs, deps.util, deps.millennium
 local state = deps.achievement_state
 local M = {}
-local VERSION, TTL, STALE_TTL = 3, 1800, 30 * 86400
+local VERSION, TTL, STALE_TTL = 4, 1800, 30 * 86400
+
+function M.schema_order(value)
+    local n = tonumber(value)
+    return n and n >= 0 and n <= 68719476735 and n == math.floor(n) and n or nil
+end
+local function row_order(row, index)
+    return M.schema_order(row.schema_order)
+        or (type(index) == "number" and index >= 1 and M.schema_order(index - 1) or nil)
+end
+local function native_order(stat, bit)
+    local s, b = M.schema_order(stat), M.schema_order(bit)
+    return s and s <= 2147483647 and b and b < 32 and (s * 32 + b) or nil
+end
 
 function M.icon_url(appid, icon)
     icon = tostring(icon or "")
@@ -43,8 +56,8 @@ function M.client_permissions(appid)
     local schema = read_native_schema(appid)
     if not schema then return {}, false end
     local result, count, all_protected = {}, 0, true
-    for _, stat in pairs(schema.stats) do
-        for _, item in pairs(type(stat) == "table" and type(stat.bits) == "table" and stat.bits or {}) do
+    for stat_key, stat in pairs(schema.stats) do
+        for bit_key, item in pairs(type(stat) == "table" and type(stat.bits) == "table" and stat.bits or {}) do
             if type(item) ~= "table" or type(item.name) ~= "string" or item.name == "" or #item.name > 256
                 or result[item.name] then return {}, false end
             count = count + 1
@@ -52,7 +65,7 @@ function M.client_permissions(appid)
             local permission = item.permission
             local protected = type(permission) == "number" and permission >= 0 and permission <= 2147483647
                 and permission == math.floor(permission) and permission % 4 ~= 0
-            local entry = { name = item.name }
+            local entry = { name = item.name, schema_order = native_order(stat_key, bit_key) }
             if protected then entry.client_writable = false else all_protected = false end
             result[item.name] = entry
         end
@@ -68,6 +81,7 @@ function M.apply_client_permissions(appid, by_name)
         if type(item) == "table" then
             item.client_writable = nil
             if permissions[name] and permissions[name].client_writable == false then item.client_writable = false end
+            item.schema_order = permissions[name] and permissions[name].schema_order or M.schema_order(item.schema_order)
         end
     end
     return by_name
@@ -75,7 +89,9 @@ end
 
 function M.read_cached(path, appid, language, allow_stale)
     local entry = state.decode(path)
-    if type(entry) ~= "table" or entry.version ~= VERSION or tostring(entry.appid) ~= tostring(appid)
+    -- Version 3 has verified identities/text but no source ordering. Refresh it
+    -- normally, retaining that metadata if the schema service is unavailable.
+    if type(entry) ~= "table" or (entry.version ~= VERSION and not (allow_stale and entry.version == 3)) or tostring(entry.appid) ~= tostring(appid)
         or entry.language ~= language or type(entry.by_name) ~= "table" then return nil end
     local age = os.time() - (tonumber(entry.fetched_at) or 0)
     if age < 0 or age > (allow_stale and STALE_TTL or TTL) then return nil end
@@ -95,7 +111,7 @@ end
 
 function M.normalize_rows(appid, rows)
     local result, count = {}, 0
-    for _, row in pairs(type(rows) == "table" and rows or {}) do
+    for index, row in pairs(type(rows) == "table" and rows or {}) do
         if type(row) == "table" then
             local name = row.strID or row.name
             if type(name) == "string" and name ~= "" and #name <= 256 and not result[name] then
@@ -105,7 +121,7 @@ function M.normalize_rows(appid, rows)
                     description = tostring(row.strDescription or row.description or ""),
                     icon = M.icon_url(appid, row.strImage or row.icon),
                     icongray = M.icon_url(appid, row.strImageGray or row.icongray or row.strImage or row.icon),
-                    hidden = row.bHidden == true or row.hidden == true,
+                    hidden = row.bHidden == true or row.hidden == true, schema_order = row_order(row, index),
                     global_percent = tonumber(row.flAchieved or row.global_percent) }
             end
         end
@@ -117,7 +133,7 @@ end
 -- icons, including games that are not owned by the signed-in Steam account.
 function M.normalize_public_rows(appid, rows, icon_url)
     local result, count = {}, 0
-    for _, row in pairs(type(rows) == "table" and rows or {}) do
+    for index, row in pairs(type(rows) == "table" and rows or {}) do
         if type(row) == "table" and type(row.internal_name) == "string" then
             local name = row.internal_name
             if name ~= "" and #name <= 256 and not result[name] then
@@ -129,7 +145,7 @@ function M.normalize_public_rows(appid, rows, icon_url)
                 result[name] = { name = name, title = title ~= "" and title or name,
                     description = type(row.localized_desc) == "string" and row.localized_desc or "",
                     icon = icon, icongray = gray ~= "" and gray or icon,
-                    hidden = row.hidden == true, global_percent = tonumber(row.player_percent_unlocked) }
+                    hidden = row.hidden == true, schema_order = row_order(row, index), global_percent = tonumber(row.player_percent_unlocked) }
             end
         end
     end

@@ -301,8 +301,8 @@ try {
 		|| !artworkBackendSource.includes('return nil, "transient"')
 		|| !artworkBackendSource.includes('transient_error = transient_error')
 		|| !artworkCommunitySource.includes('value.transient_error !== true')
-		|| !artworkCandidatesSource.includes('retired_checked_at')
-		|| artworkCandidatesSource.includes('retired_checked[appid] = true')) {
+		|| !artworkCandidatesSource.includes('now - cached.time < RETIRED_PROFILE_CACHE_SECONDS')
+		|| !artworkCandidatesSource.includes('lru.put(retired_cache, appid, { time = now, profile = profile }, RETIRED_PROFILE_CACHE_LIMIT)')) {
 		fail(path.join(frontendRoot, 'features', 'library', 'library-assets.ts'),
 			'forced artwork refresh must bypass bounded caches and provider failures must remain retryable');
 	}
@@ -1090,7 +1090,7 @@ try {
 		'if (root.parentElement !== panel) panel.appendChild(root)',
 	].every(token => panelMountSource.includes(token))
 		&& detailsSource.includes("observer.observe(strip")
-		&& detailsSource.includes('ensureNativePanelRoot(doc, tabs, nativeTab)')
+		&& detailsSource.includes('ensureNativePanelRoot(doc, tabs, nativeTab, state?.root)')
 		&& detailsSource.includes('removeBigPictureFallbackPanel(doc)');
 	if (!nativePanelMount || `${detailsSource}\n${panelMountSource}`.includes('tabsHost.appendChild(strip)')) {
 		fail(bigPictureDetails,

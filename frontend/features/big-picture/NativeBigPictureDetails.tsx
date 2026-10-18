@@ -7,6 +7,7 @@ import {
 	type NativeAppDetailsClasses,
 } from '../../steam/gamepad/components/AppDetailsNativeClasses';
 import { steamWebpackRuntime } from '../../steam/modules/SteamWebpackRuntime';
+import { getNativeWindowInstance } from '../../steam/native-window-store';
 import {
 	resolveNativeAppDetails,
 	resolveNativeConfigContext,
@@ -312,22 +313,28 @@ function CommunityGrid({ items, classes, owner }: { items: CommunityContentItem[
 function ScreenshotsSection(props: NativeDetailsProps & { classes: NativeAppDetailsClasses }): React.ReactElement | null {
 	// Store promotional images are public metadata, not the user's captures.
 	const screenshots = (props.document.defaultView as any)?.SteamClient?.Screenshots;
-	if (typeof screenshots?.ShowScreenshotsOnDisk !== 'function') return null;
+	const { overview } = createBigPictureDetailViews(props.document, props.shortcut, props.data.game);
+	const gameid = String(overview.gameid || '');
+	if (typeof screenshots?.ShowScreenshotsOnDisk !== 'function' || !/^\d+$/.test(gameid)) return null;
 	return <Section classes={props.classes} label={loc('AppDetails_SectionTitle_Screenshots', 'Capturas y archivos multimedia')} rightColumn>
 		<NativeButton {...clickProps(() => {
-			if (isBigPictureActionCurrent(props)) screenshots.ShowScreenshotsOnDisk(String(props.shortcut.id >>> 0));
+			if (isBigPictureActionCurrent(props)) screenshots.ShowScreenshotsOnDisk(gameid);
 		})}>{loc('ScreenshotManager_ShowOnDisk', 'Mostrar en disco')}</NativeButton>
 	</Section>;
 }
 
 function NotesSection(props: NativeDetailsProps & { classes: NativeAppDetailsClasses }): React.ReactElement {
+	const view = props.document.defaultView as any;
+	const instance = getNativeWindowInstance(props.document);
+	const inheritedHistory = resolveSteamNav(props.document)?.providers.find(provider => provider.kind === 'router-history')?.value;
+	const history = [inheritedHistory, instance?.History, instance?.m_history, view?.tempNavStore?.m_history,
+		view?.g_Router?.history, view?.g_Router?.m_history].find(value => typeof value?.push === 'function');
 	const openNotes = (): void => {
 		if (!isBigPictureActionCurrent(props)) return;
 		try {
-			const client = (props.document.defaultView as any)?.SteamClient;
-			if (client?.GameNotes?.OpenGameNotes) {
-				client.GameNotes.OpenGameNotes(props.shortcut.id);
-			}
+			// This is Steam's AppNotes route, also used by its native BP section.
+			// That page resolves the shortcut's real name for the notes parent.
+			history?.push(`/notes/app/${props.shortcut.id >>> 0}/`);
 		} catch {}
 	};
 
@@ -337,7 +344,7 @@ function NotesSection(props: NativeDetailsProps & { classes: NativeAppDetailsCla
 			label={loc('AppDetails_SectionTitle_GameNotes', 'Notas')}
 			rightColumn
 		>
-			<NativeButton {...clickProps(openNotes)}>
+			<NativeButton disabled={!history} {...clickProps(openNotes)}>
 				{loc('AppDetails_GameNotes_Open', 'Abrir notas del juego')}
 			</NativeButton>
 		</Section>
@@ -657,7 +664,8 @@ export function mountNativeBigPictureDetails(container: HTMLElement, props: Nati
 		state = mounted; nativeRoots.set(container, state);
 	}
 	const changingPanel = Boolean(state.committedOwner && (state.committedOwner.tab !== props.tab
-		|| state.committedOwner.panel !== props.panel));
+		|| state.committedOwner.panel !== props.panel || state.committedOwner.shortcut.id !== props.shortcut.id
+		|| state.committedOwner.shortcut.steamAppId !== props.shortcut.steamAppId || state.committedOwner.generation !== props.generation));
 	state.owner = props;
 	const expected = state;
 	container.hidden = false;

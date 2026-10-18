@@ -102,6 +102,7 @@ const owner = projectionOwner();
 const cache = load('frontend/features/achievements/cache.ts', {});
 const NativeSection = () => null;
 const bp = load('frontend/features/big-picture/NativeBigPictureAchievements.tsx', {
+  './achievement-preview': load('frontend/features/big-picture/achievement-preview.ts', {}),
   react: { default: { createElement: (type, props, ...children) => ({ type, props, children }) } },
   '../../api/backend': { backendLog() {} }, '../../steam/localization': { gdlText: (_key, text) => text, loc: (_key, text) => text },
   '../../steam/gamepad/components/AppDetailsNativeComponents': {

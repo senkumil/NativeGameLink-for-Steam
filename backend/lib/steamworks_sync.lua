@@ -54,7 +54,7 @@ local function get_or_compile_helper()
     end
 
     if not fs.exists(exe_path) and process and process.run_silent then
-        local ps_cmd = string.format('powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command "Add-Type -Path \'%s\' -OutputType WindowsApplication -OutputAssembly \'%s\'"', cs_path, exe_path)
+        local ps_cmd = string.format('powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command "Add-Type -Path \'%s\' -OutputType WindowsApplication -OutputAssembly \'%s\'"', cs_path:gsub("'", "''"), exe_path:gsub("'", "''"))
         process.run_silent(ps_cmd, 10000)
     end
 
@@ -115,7 +115,11 @@ local function run_helper(args_string)
 
     -- Use Win32 CreateProcess with CREATE_NO_WINDOW (0 windows, instant execution)
     if process and process.run_silent then
-        process.run_silent(cmd, args_string:match("^sync ") and 15000 or 12000)
+        local launched, result = process.run_silent(cmd, args_string:match("^sync ") and 15000 or 12000)
+        if launched == false then
+            pcall(os.remove, result_path)
+            return nil, type(result) == "string" and result or "process_launch_failed"
+        end
     else
         pcall(os.execute, cmd)
     end
@@ -202,8 +206,16 @@ function M.sync_steam_account_achievements(request)
         return cjson.encode({ ok = false, error = "invalid_appid" })
     end
 
-    if status_cache and status_cache.entries then
-        status_cache.entries[appid] = nil
+    if status_cache then
+        if deps.ttl_cache.remove then
+            deps.ttl_cache.remove(status_cache, appid)
+        elseif status_cache.entries then
+            -- Compatibility with hosts supplying the original cache adapter.
+            if status_cache.entries[appid] and status_cache.count then
+                status_cache.count = math.max(0, status_cache.count - 1)
+            end
+            status_cache.entries[appid] = nil
+        end
     end
 
     local unlock_list = type(data.unlock) == "table" and data.unlock or {}

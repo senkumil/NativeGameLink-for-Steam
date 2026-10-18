@@ -669,20 +669,26 @@ function M.clear_all_linked_artworks()
     return cjson.encode({ ok = true, removed = removed })
 end
 
-function M.read_logo_layout_images(request)
-    local shortcut_app_id = nil
+local function logo_shortcut_id(request)
+    local raw_id = nil
     if type(request) == "table" then
-        shortcut_app_id = tostring(request.shortcut_app_id or request.appid or ""):match("(%d+)")
+        raw_id = request.shortcut_app_id or request.appid
     elseif type(request) == "string" then
         local ok, parsed = pcall(cjson.decode, request)
-        shortcut_app_id = (ok and type(parsed) == "table" and tostring(parsed.shortcut_app_id or parsed.appid or "")) or request
-        shortcut_app_id = tostring(shortcut_app_id):match("(%d+)")
+        raw_id = (ok and type(parsed) == "table" and (parsed.shortcut_app_id or parsed.appid)) or request
     else
-        shortcut_app_id = tostring(request or ""):match("(%d+)")
+        raw_id = request
     end
-    local id = shortcut_app_id or ""
+    local id = tostring(raw_id or "")
+    local number = tonumber(id)
+    if not id:match("^%d+$") or not number or number < 2147483648 or number > 4294967295 then return nil end
+    return id
+end
+
+function M.read_logo_layout_images(request)
+    local id = logo_shortcut_id(request)
     local account = get_active_account_id()
-    if not id:match("^%d+$") or tonumber(id) < 2147483648 or not account then return cjson.encode({ok=false}) end
+    if not id or not account then return cjson.encode({ok=false}) end
     local root = fs.join(millennium.steam_path(), "userdata", account, "config", "grid")
     local result = {ok=true}
     for _, slot in ipairs({"logo", "hero"}) do
@@ -699,16 +705,7 @@ function M.read_logo_layout_images(request)
 end
 
 function M.read_custom_logo_position(request_param)
-    local shortcut_app_id = nil
-    if type(request_param) == "table" then
-        shortcut_app_id = tostring(request_param.shortcut_app_id or request_param.appid or ""):match("(%d+)")
-    elseif type(request_param) == "string" then
-        local ok, parsed = pcall(cjson.decode, request_param)
-        shortcut_app_id = (ok and type(parsed) == "table" and tostring(parsed.shortcut_app_id or parsed.appid or "")) or request_param
-        shortcut_app_id = tostring(shortcut_app_id):match("(%d+)")
-    else
-        shortcut_app_id = tostring(request_param or ""):match("(%d+)")
-    end
+    local shortcut_app_id = logo_shortcut_id(request_param)
 
     local account_id = get_active_account_id()
     if not shortcut_app_id or not account_id then return cjson.encode({ ok = false, error = not shortcut_app_id and "invalid_shortcut_app_id" or "active_user_not_found" }) end
@@ -730,10 +727,10 @@ function M.save_custom_logo_position(request_param)
         local ok, parsed = pcall(cjson.decode, request_param)
         if ok and type(parsed) == "table" then req = parsed end
     end
-    local shortcut_app_id = req and tostring(req.shortcut_app_id or req.appid or ""):match("(%d+)")
+    local shortcut_app_id = req and logo_shortcut_id(req)
     local pos = req and (req.logo_position or req.logoPosition or req.position)
     local account_id = get_active_account_id()
-    if not shortcut_app_id or tonumber(shortcut_app_id) < 2147483648 or not account_id or type(pos) ~= "table" then
+    if not shortcut_app_id or not account_id or type(pos) ~= "table" then
         return cjson.encode({ ok = false, error = "invalid_params" })
     end
     local grid_dir = fs.join(millennium.steam_path(), "userdata", account_id, "config", "grid")

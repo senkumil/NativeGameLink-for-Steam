@@ -2,6 +2,7 @@ return function(deps)
 local http = deps.http
 local cjson = deps.cjson
 local logger = deps.logger
+local lru = deps.lru_cache
 local USER_AGENT = deps.user_agent or "NativeGameLink-for-Steam/2.0.0"
 local M = {}
 
@@ -15,8 +16,9 @@ local CURATED = {
         portrait_id = 46421, hero_id = 12459, logo_id = 9592, wide_id = 177942,
     },
 }
-local retired_cache, retired_checked_at = {}, {}
+local retired_cache = {}
 local RETIRED_PROFILE_CACHE_SECONDS = 30 * 60
+local RETIRED_PROFILE_CACHE_LIMIT = 96
 
 local function trusted_image_url(value)
     local url = tostring(value or "")
@@ -113,9 +115,10 @@ end
 local function retired_profile(appid)
     if CURATED[appid] then return CURATED[appid] end
     local now = os.time()
-    local checked_at = tonumber(retired_checked_at[appid] or 0)
-    if checked_at > 0 and now - checked_at < RETIRED_PROFILE_CACHE_SECONDS then
-        return type(retired_cache[appid]) == "table" and retired_cache[appid] or nil
+    local cached = retired_cache[appid]
+    if cached and now - cached.time < RETIRED_PROFILE_CACHE_SECONDS then
+        lru.touch(cached)
+        return cached.profile or nil
     end
     local ok, response = pcall(http.get,
         "https://store.steampowered.com/api/appdetails?appids=" .. appid .. "&l=english", {
@@ -132,13 +135,9 @@ local function retired_profile(appid)
     local unavailable = type(app_data) == "table" and (app_data.success == false
         or (type(data) == "table" and data.is_free ~= true and data.price_overview == nil and no_packages and not is_coming_soon))
     if type(app_data) ~= "table" then return nil end
-    retired_checked_at[appid] = now
-    if unavailable then
-        retired_cache[appid] = { title = type(data) == "table" and tostring(data.name or "") or "Steam AppID " .. appid }
-        return retired_cache[appid]
-    end
-    retired_cache[appid] = false
-    return nil
+    local profile = unavailable and { title = type(data) == "table" and tostring(data.name or "") or "Steam AppID " .. appid } or false
+    lru.put(retired_cache, appid, { time = now, profile = profile }, RETIRED_PROFILE_CACHE_LIMIT)
+    return profile or nil
 end
 
 local function default_id(list, wanted_id, wanted_rank)

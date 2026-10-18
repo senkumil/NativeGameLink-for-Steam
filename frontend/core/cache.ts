@@ -40,6 +40,8 @@ const CACHE_MAX_ENTRIES = 320;
 const CACHE_MAX_BYTES = Math.floor(4.25 * 1024 * 1024);
 let lastPruneAt = 0;
 let pruneTimer: ReturnType<typeof setTimeout> | null = null;
+let pruneIdleHandle: number | null = null;
+let maintenanceGeneration = 0;
 let protectedCoreAppIds = new Set<string>();
 
 export function setProtectedCacheAppIds(appIds: Iterable<string | number>): void {
@@ -113,20 +115,35 @@ export function pruneCacheStorage(maxEntries = CACHE_MAX_ENTRIES, maxBytes = CAC
 
 function scheduleCachePrune(): void {
 	if (pruneTimer || Date.now() - lastPruneAt <= 30000) return;
+	const generation = maintenanceGeneration;
 	const run = (): void => {
+		if (generation !== maintenanceGeneration) return;
 		pruneTimer = null;
+		pruneIdleHandle = null;
 		if (Date.now() - lastPruneAt > 30000) pruneCacheStorage();
 	};
 	const requestIdle = (globalThis as typeof globalThis & {
 		requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
 	}).requestIdleCallback;
 	if (requestIdle) {
-		requestIdle(run, { timeout: 1500 });
+		pruneIdleHandle = requestIdle(run, { timeout: 1500 });
 		// A non-null sentinel is enough; requestIdleCallback owns the callback.
 		pruneTimer = -1 as unknown as ReturnType<typeof setTimeout>;
 		return;
 	}
 	pruneTimer = setTimeout(run, 50);
+}
+
+/** Release maintenance callbacks when the plugin is disabled or reloaded. */
+export function disposeCacheMaintenance(): void {
+	maintenanceGeneration += 1;
+	if (pruneIdleHandle !== null) {
+		(globalThis as typeof globalThis & { cancelIdleCallback?: (handle: number) => void })
+			.cancelIdleCallback?.(pruneIdleHandle);
+	} else if (pruneTimer !== null) clearTimeout(pruneTimer);
+	pruneTimer = null;
+	pruneIdleHandle = null;
+	protectedCoreAppIds.clear();
 }
 
 export function cacheRead<T>(key: string, ttlMs = CACHE_TTL.default,

@@ -242,10 +242,10 @@ export function installBigPictureGamepadNavigation(
 
 	const getCurrentTabKey = (): BigPicturePanelTab => {
 		for (const [key, el] of controls.entries()) {
-			if (el.getAttribute('aria-selected') === 'true' || el.classList.contains('gpfocus')) return key;
+			if (el.getAttribute('aria-selected') === 'true') return key;
 		}
 		for (const [key, el] of controls.entries()) {
-			if (el.matches('.active, .selected, [class*="Active"], [class*="Selected"]')) return key;
+			if (el.matches('.gpfocus, .active, .selected, [class*="Active"], [class*="Selected"]')) return key;
 		}
 		return 'activity';
 	};
@@ -314,6 +314,9 @@ export function installBigPictureGamepadNavigation(
 	const isTabStripFocused = (): boolean => {
 		const active = doc.activeElement as HTMLElement | null;
 		if (active && (strip === active || strip.contains(active))) return true;
+		// Steam may keep its tab highlight after a modal/editor restores DOM
+		// focus to our panel. The live target takes precedence over that marker.
+		if (active && (root === active || root.contains(active))) return false;
 		for (const el of controls.values()) {
 			if (el === active || el.contains(active)) return true;
 		}
@@ -322,7 +325,6 @@ export function installBigPictureGamepadNavigation(
 		for (const el of controls.values()) {
 			if (el.matches(':focus, :focus-visible, .gpfocus, [data-focus="true"]')) return true;
 		}
-		if (active && (root === active || root.contains(active))) return false;
 		const marked = root.querySelector<HTMLElement>('.gpfocus, [data-focus="true"]');
 		if (marked && marked.isConnected) return false;
 		return false;
@@ -669,58 +671,68 @@ export function installBigPictureGamepadNavigation(
 	const prevBtn = new Map<number, boolean>();
 	const lastDirTime = new Map<string, number>();
 	const dirHoldTime = new Map<string, number>();
+	const suppressedDirections = new Set<string>();
+	let suppressedScroll = false;
+	const readGamepad = (): Gamepad | null => {
+		try { return Array.from(win.navigator?.getGamepads?.() || []).find(pad => pad?.connected) || null; }
+		catch { return null; }
+	};
+	const readDirections = (pad: Gamepad | null): Array<[string, boolean, 'up' | 'down' | 'left' | 'right']> => [
+		['up', Boolean(pad?.buttons[12]?.pressed || (pad?.axes[1] != null && pad.axes[1] < -0.55)), 'up'],
+		['down', Boolean(pad?.buttons[13]?.pressed || (pad?.axes[1] != null && pad.axes[1] > 0.55)), 'down'],
+		['left', Boolean(pad?.buttons[14]?.pressed || (pad?.axes[0] != null && pad.axes[0] < -0.55)), 'left'],
+		['right', Boolean(pad?.buttons[15]?.pressed || (pad?.axes[0] != null && pad.axes[0] > 0.55)), 'right'],
+	];
+	const observeSuppressedInput = (pad: Gamepad | null): void => {
+		for (const index of [0, 1, 2, 3, 4, 5]) prevBtn.set(index, Boolean(pad?.buttons[index]?.pressed));
+		for (const [name, active] of readDirections(pad)) {
+			if (active) suppressedDirections.add(name); else suppressedDirections.delete(name);
+		}
+		suppressedScroll = Math.abs(pad?.axes[3] || 0) > .25;
+		dirHoldTime.clear(); lastDirTime.clear();
+	};
 
 	const pollGamepads = () => {
 		if (!root.isConnected || !doc.body?.isConnected || !isActive()) {
 			if (gamepadPollTimer != null) { win.clearTimeout(gamepadPollTimer); gamepadPollTimer = null; }
 			return;
 		}
+		const gp = readGamepad();
 		if (hasForeignModal()) {
 			hideFocusRing();
 			// Steam owns this modal. Observe button state without acting, so a
 			// held A/B/bumper cannot become a delayed action after it closes.
-			const nav = win.navigator || window.navigator;
-			const pads = typeof nav?.getGamepads === 'function' ? nav.getGamepads() : [];
-			const pad = Array.from(pads).find(candidate => candidate && candidate.connected);
-			for (const index of [0, 1, 2, 3, 4, 5]) prevBtn.set(index, Boolean(pad?.buttons[index]?.pressed));
-			dirHoldTime.clear(); lastDirTime.clear();
+			observeSuppressedInput(gp);
 			gamepadPollTimer = win.setTimeout(pollGamepads, 250);
 			return;
 		}
 		if (doc.hidden) {
+			hideFocusRing();
+			observeSuppressedInput(gp);
 			gamepadPollTimer = win.setTimeout(pollGamepads, 250);
 			return;
 		}
 		if (isEditableTextTarget(doc.activeElement)) {
-			const nav = win.navigator || window.navigator;
-			const pads = typeof nav?.getGamepads === 'function' ? nav.getGamepads() : [];
-			const activePad = Array.from(pads).find(g => g && g.connected);
-			const backPressed = Boolean(activePad?.buttons[1]?.pressed);
-			if (backPressed && !prevBtn.get(1)) {
+			const backPressed = Boolean(gp?.buttons[1]?.pressed), backWasPressed = prevBtn.get(1);
+			// Observe every control before the editor's exit callback can move
+			// focus; held A/bumper/stick input must not activate the revealed page.
+			observeSuppressedInput(gp);
+			if (backPressed && !backWasPressed) {
 				returnBigPictureFocusToTabs(doc);
 			}
-			prevBtn.set(1, backPressed);
 			gamepadPollTimer = win.setTimeout(pollGamepads, 100);
 			return;
 		}
-		const nav = win.navigator || window.navigator;
-		const gamepads = typeof nav?.getGamepads === 'function' ? nav.getGamepads() : (typeof window.navigator?.getGamepads === 'function' ? window.navigator.getGamepads() : []);
-		const gp = Array.from(gamepads).find(g => g && g.connected);
-
 		if (gp) {
 			const now = Date.now();
 			const navState = getDocNavState(doc);
 			const keyboardOwnsNavigation = now < pollNavigationSuppressedUntil;
 
-			const isUp = Boolean(gp.buttons[12]?.pressed || (gp.axes[1] != null && gp.axes[1] < -0.55));
-			const isDown = Boolean(gp.buttons[13]?.pressed || (gp.axes[1] != null && gp.axes[1] > 0.55));
-			const isLeft = Boolean(gp.buttons[14]?.pressed || (gp.axes[0] != null && gp.axes[0] < -0.55));
-			const isRight = Boolean(gp.buttons[15]?.pressed || (gp.axes[0] != null && gp.axes[0] > 0.55));
-			const dirs: Array<[string, boolean, 'up' | 'down' | 'left' | 'right']> = [
-				['up', isUp, 'up'], ['down', isDown, 'down'], ['left', isLeft, 'left'], ['right', isRight, 'right'],
-			];
-
-			for (const [name, active, dir] of dirs) {
+			for (const [name, active, dir] of readDirections(gp)) {
+				if (suppressedDirections.has(name)) {
+					if (!active) suppressedDirections.delete(name);
+					continue;
+				}
 				if (!active) { dirHoldTime.delete(name); lastDirTime.delete(name); continue; }
 				if (keyboardOwnsNavigation) { dirHoldTime.set(name, now); lastDirTime.set(name, now); continue; }
 				const hold = dirHoldTime.get(name) || 0;
@@ -761,12 +773,13 @@ export function installBigPictureGamepadNavigation(
 			prevBtn.set(5, btnRB);
 
 			const rY = gp.axes[3];
-			if (rY != null && Math.abs(rY) > 0.25 && (getActiveModal() || isInsidePanel())) {
+			if (rY == null || Math.abs(rY) <= .25) suppressedScroll = false;
+			if (!suppressedScroll && rY != null && Math.abs(rY) > 0.25 && (getActiveModal() || isInsidePanel())) {
 				const modal = getActiveModal();
 				const target = modal ? (modal.querySelector('.gdl-bp-news-modal-window, .gdl-bp-ach-screen-list') || modal) : (doc.scrollingElement || doc.documentElement);
 				target?.scrollBy({ top: rY * 16, behavior: 'auto' });
 			}
-		}
+		} else observeSuppressedInput(null);
 
 		gamepadPollTimer = win.setTimeout(pollGamepads, 50);
 	};

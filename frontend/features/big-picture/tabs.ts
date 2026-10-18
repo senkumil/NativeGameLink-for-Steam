@@ -99,7 +99,7 @@ export function findTabTextElement(doc: Document, tab: BigPictureTab): HTMLEleme
 		const text = normalizeUiText(node.textContent || '');
 		if (!aliases.includes(text) || !node.parentElement) continue;
 		const el = node.parentElement;
-		if (el.closest('#gdl-bp-detail-root')) continue;
+		if (el.closest('#gdl-bp-detail-root, [data-gdl-bp-transition-snapshot]')) continue;
 		const rect = el.getBoundingClientRect();
 		if (rect.width > 0 && rect.height > 0) return el;
 	}

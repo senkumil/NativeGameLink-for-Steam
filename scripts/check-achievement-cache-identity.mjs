@@ -137,6 +137,12 @@ equal(percentageCache.localAchievementDataSignature(oldPercentage) === percentag
 const freshCold = loadCache(percentageStorage).getCachedLocalAchievementsForShortcut(steam, shortcutA);
 equal(freshCold.achievements[0].global_percent, 3.5, 'a percentage-only change persists across renderers');
 equal(freshCold.achievements[0].hidden, true, 'hidden status changes also persist');
+const reorderedSchema = { ...freshPercentage, achievements: freshPercentage.achievements.map((item, index) => ({ ...item, schema_order: 1 - index })) };
+equal(percentageCache.localAchievementDataSignature(freshPercentage) === percentageCache.localAchievementDataSignature(reorderedSchema), false,
+  'a schema-order-only metadata update invalidates the preview render signature');
+percentageCache.cacheLocalAchievements(reorderedSchema, shortcutA);
+equal(loadCache(percentageStorage).getCachedLocalAchievementsForShortcut(steam, shortcutA).achievements[0].schema_order, 1,
+  'schema ordering survives persistence and renderer replacement');
 
 const metadataStorage = new Map();
 const metadata = loadCache(metadataStorage);

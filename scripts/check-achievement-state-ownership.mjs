@@ -47,6 +47,7 @@ const currentProjectionTarget = (doc, shortcutId, steamAppId) => Boolean(doc?.de
   && doc.defaultView.document === doc && doc.body?.isConnected && doc.routeId === (Number(shortcutId) >>> 0)
   && doc.steamAppId === String(steamAppId) && mappings[`shortcut:${Number(shortcutId) >>> 0}`] === String(steamAppId));
 const bp = load('frontend/features/big-picture/NativeBigPictureAchievements.tsx', {
+  './achievement-preview': load('frontend/features/big-picture/achievement-preview.ts'),
   react: { default: { createElement: (type, props, ...children) => ({ type, props, children }) } },
   '../../api/backend': { backendLog() {} }, '../../steam/localization': { gdlText: (_key, text) => text, loc: (_key, text) => text },
   '../../steam/gamepad/components/AppDetailsNativeComponents': native, '../achievements/rarity': {},

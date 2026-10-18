@@ -449,12 +449,13 @@ assert(!gamepadNav.includes('performance.now() - start < 500') && gamepadNav.inc
 assert(spatialNav.includes('.gdl-bp-trading-card') && spatialNav.includes("'button'"), 'spatial navigation covers catalog cards and the explicit badge-progress button');
 assert(!spatialNav.includes('.gdl-bp-info-feature') && !spatialNav.includes('.gdl-bp-info-description'), 'custom spatial navigation never claims Steam native Game Information controls');
 const tradingCatalog = bigPictureDetails.slice(bigPictureDetails.indexOf('function TradingCardsSection('), bigPictureDetails.indexOf('function communityItems('));
-assert(tradingCatalog.includes('gdl-bp-trading-card') && tradingCatalog.includes('focusable')
-  && tradingCatalog.includes('AppDetails_TradingCards_ViewBadgeProgress')
+const bpTradingCards = read('frontend/features/big-picture/NativeBigPictureTradingCards.tsx');
+assert(bpTradingCards.includes('gdl-bp-trading-card') && bpTradingCards.includes('focusable')
+  && bpTradingCards.includes('AppDetails_TradingCards_ViewBadgeProgress')
   && tradingCatalog.includes('https://steamcommunity.com/my/gamecards/${props.shortcut.steamAppId}')
-  && !tradingCatalog.includes('native?.Owned') && !tradingCatalog.includes('foil_badge') && !tradingCatalog.includes('BadgeImage')
-  && !/\b(?:nOwned|nLevel|nCardsOwned|rgCards|strIconURL)\b/.test(tradingCatalog),
-  'Trading catalog cards remain focusable and link to official badge progress without invented ownership, foil badges or account counters');
+  && bpTradingCards.includes('linkedCardPresentation(props.catalog)') && bpTradingCards.includes('data-gdl-badge-preview="1"')
+  && !bpTradingCards.includes('css?.Unowned') && !bpTradingCards.includes('css?.Owned'),
+  'Linked trading cards remain focusable and share the desktop catalogue badge preview without inventory color restrictions');
 assert(!bigPictureDetails.includes('gdl-bp-info-description') && !bigPictureDetails.includes('gdl-bp-info-feature'), 'NativeBigPictureDetails does not duplicate Steam Game Information focus targets');
 assert(bpDetails.includes('activateNativeGameInfoBridge(doc, state.shortcut, state.data.game)') && bpDetails.includes('deactivateNativeGameInfoBridge(doc)'), 'native Game Information bridge is scoped to the active linked detail page and restored on exit');
 assert(bpNativeInfoBridge.includes('new Proxy(base,') && !bpNativeInfoBridge.includes('if (linked?.details) return linked;'), 'native Game Information preserves the shortcut data and local artwork identity');

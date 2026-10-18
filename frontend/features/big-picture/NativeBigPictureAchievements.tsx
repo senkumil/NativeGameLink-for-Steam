@@ -20,6 +20,8 @@ import { isCurrentLinkedGamepadTarget } from '../../steam/gamepad/GamepadContext
 import { steamUIModeService } from '../../steam/ui/SteamUIModeService';
 import { openBigPictureAchievementsScreen } from './NativeBigPictureAchievementScreen';
 import { getDocumentReact } from '../../steam/gamepad/document-ui-runtime';
+import { resolveBigPictureAchievementScreenParts } from './achievement-screen-parts';
+import { isRareAchievement } from '../achievements/rarity';
 
 interface AchievementProjection {
 	appId: number; appData: any; owners: Set<Document>; originalDetails: any; installedDetails: any;
@@ -163,15 +165,23 @@ export function syncAchievementsToNativeStore(
 }
 
 export function NativeBigPictureAchievements(props: AchievementsSectionProps): ReactElement | null {
-	const achievements = props.data.achievements;
-	const items = achievements?.achievements || [];
 	const numericAppId = Number(props.shortcut.id || 0);
 	if (!Number.isInteger(numericAppId) || numericAppId < 2147483648 || numericAppId > 4294967295
 		|| getCommittedShortcutSteamAppId(numericAppId) !== String(props.shortcut.steamAppId)
 		|| !isCurrentProjectionOwner(props.document, numericAppId, String(props.shortcut.steamAppId))) {
 		return null;
 	}
-	if (!achievements || getCachedLocalAchievementsForShortcut(props.shortcut.steamAppId, String(numericAppId)) !== achievements) {
+	if (props.data.achievements && (!props.data.achievements.found
+		|| (props.data.achievements.total === 0 && props.data.achievements.achievements.length === 0))) {
+		restoreBigPictureAchievementProjections(numericAppId, props.document);
+		return null;
+	}
+	// Hydration may update the exact shortcut cache before the parent receives
+	// its batched patch. Render that authorized snapshot immediately, never an
+	// empty section caused only by the old props object having another identity.
+	const achievements = getCachedLocalAchievementsForShortcut(props.shortcut.steamAppId, String(numericAppId));
+	const items = achievements?.achievements || [];
+	if (!achievements) {
 		restoreBigPictureAchievementProjections(numericAppId, props.document);
 		return null;
 	}
@@ -183,7 +193,7 @@ export function NativeBigPictureAchievements(props: AchievementsSectionProps): R
 	// Steam's AppID-backed summary opens its own account-backed achievement
 	// route. Use the same section/focus primitives with our explicit opener so
 	// the complete personal/global flow keeps this installation's local state.
-	return <FallbackAchievementsSection {...props} />;
+	return <FallbackAchievementsSection {...props} data={{ ...props.data, achievements }} />;
 }
 
 function FallbackAchievementsSection(props: AchievementsSectionProps): ReactElement | null {
@@ -293,7 +303,6 @@ function FallbackAchievementCarousel({
 	items,
 	classes,
 	name,
-	highlightedNames,
 	isPrioritized,
 	onRequestPriority,
 	onSelect,
@@ -315,12 +324,12 @@ function FallbackAchievementCarousel({
 	if (!ownerReact) return null;
 	const [focused, setFocused] = ownerReact.useState(0);
 	const achievement = classes.Achievement;
+	const NativeIcon = resolveBigPictureAchievementScreenParts(doc, true).Image;
 	if (items.length === 0) return null;
 
 	return (
 		<NativeStrip document={doc} name={name} className={achievement?.SummaryCarouselContainer}>
 			{items.map((item, index) => {
-				const isHighlighted = highlightedNames ? highlightedNames.has(String(item.name)) : false;
 				const isDetailed = isPrioritized && focused === index;
 
 				return (
@@ -341,17 +350,20 @@ function FallbackAchievementCarousel({
 							.filter(Boolean)
 							.join(' ')}
 					>
-						<img
-							className={[
-								achievement?.CarouselIcon,
-								(isDetailed || isHighlighted) && achievement?.Prioritized,
-								item.earned ? achievement?.Achieved : achievement?.NotAchieved,
-							]
-								.filter(Boolean)
-								.join(' ')}
-							src={item.earned ? item.icon : (item.icon_gray || item.icon)}
-							alt={isDetailed ? '' : (item.display_name || item.name)}
-						/>
+						<div className={item.earned ? achievement?.Achieved : achievement?.NotAchieved} data-gdl-achievement-state={item.earned ? 'earned' : 'locked'}>
+							{NativeIcon ? <NativeIcon
+								className={[achievement?.Icon, achievement?.CarouselIcon, isPrioritized && achievement?.Prioritized].filter(Boolean).join(' ')}
+								imgURL={item.earned ? item.icon : (item.icon_gray || item.icon)}
+								glow={item.earned && isRareAchievement(item)} pauseAnimation={!isDetailed}
+								style={item.earned ? undefined : { filter: 'grayscale(1)' }}
+								alt={isDetailed ? '' : (item.display_name || item.name)}
+							/> : <img
+								className={[achievement?.Icon, achievement?.CarouselIcon, isPrioritized && achievement?.Prioritized].filter(Boolean).join(' ')}
+								src={item.earned ? item.icon : (item.icon_gray || item.icon)}
+								alt={isDetailed ? '' : (item.display_name || item.name)}
+								style={item.earned ? undefined : { filter: 'grayscale(1)' }}
+							/>}
+						</div>
 						{isDetailed ? (
 							<div className={achievement?.AchivementCarouselItemDetails}>
 								<div className={achievement?.Name}>{item.display_name || item.name}</div>

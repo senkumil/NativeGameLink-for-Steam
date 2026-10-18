@@ -48,11 +48,15 @@ await runBPBrowserScenario({}, async fixture => {
   const selectedRect = selected.getBoundingClientRect();
   check(selectedRect.top >= listRect.top - 1 && selectedRect.bottom <= listRect.bottom + 1, 'The selected achievement is scrolled into view');
   check(Math.abs(selectedRect.height - 80) < 1, 'Personal rows use the installed native 80px height without an extra wrapper height');
+  check(getComputedStyle(selected.querySelector('img')).filter === 'grayscale(1)',
+    'A locked personal achievement is gray even when its metadata image is not desaturated');
   check(modal.textContent.includes('Locked achievements') && modal.querySelector('[data-gdl-achievements-hidden]')
     && !modal.querySelector('[data-gdl-achievement-name="ACH_49"]'), 'Locked title and concealed aggregate follow native personal grouping');
   const global = modal.querySelector('[data-gdl-achievement-tab="global"]'); global.click(); await frame();
   const globalRow = modal.querySelector('[data-gdl-achievement-name]');
   check(Math.abs(globalRow.getBoundingClientRect().height - 68) < 1, 'Global rows use the installed native 68px height');
+  check(!globalRow.hasAttribute('data-gdl-personal-locked') && getComputedStyle(globalRow.querySelector('img')).filter === 'none',
+    'Global achievement images keep their native color and are not affected by personal locked styling');
   const hidden = modal.querySelector('[data-gdl-achievement-name="ACH_49"]'); hidden.click(); await frame();
   check(modal.textContent.includes('Achievement 49'), 'A hidden global row reveals individually');
   load('owned').disposeBigPictureModals(document); await frame();

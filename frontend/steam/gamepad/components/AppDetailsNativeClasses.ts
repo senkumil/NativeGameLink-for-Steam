@@ -13,6 +13,7 @@ export interface NativeAppDetailsClasses {
 	Achievement: NativeClassModule | null;
 	Community: NativeClassModule | null;
 	TradingCard: NativeClassModule | null;
+	ArtworkModal?: NativeClassModule | null;
 	GameInfo: NativeClassModule | null;
 	GameInfoFrame: NativeClassModule | null;
 	Friends: NativeClassModule | null;
@@ -36,6 +37,7 @@ const signatures: Record<NativeClassFamily, readonly string[]> = {
 	Achievement: ['AchievementCarouselItem', 'CarouselIcon', 'AchivementCarouselItemDetails', 'BasicAppDetailsAchievementsSectionBody'],
 	Community: ['CommunityContentContainer', 'AppOverviewRow', 'CommunityItem', 'PreviewContainer', 'ChildItem'],
 	TradingCard: ['TradingCardCarouselItem', 'CardWrapper', 'Card', 'CardImage', 'Title', 'EmptyCircle'],
+	ArtworkModal: ['ArtworkModal', 'ModalBox', 'ArtworkModalContainer', 'ModalArtCloseButton'],
 	GameInfo: ['Container', 'InnerContainer', 'SectionContainer', 'FeaturesList', 'Description', 'GameDescription', 'Stats', 'AssociationList', 'Release', 'Portrait', 'BoxArt'],
 	GameInfoFrame: ['AppGameInfoContainer', 'GameInfoShadow', 'Glassy', 'SuppressTransition'],
 	Friends: ['FriendsSection', 'FriendsContainer', 'GamepadFriendSectionItem', 'AvatarAndLabel'],

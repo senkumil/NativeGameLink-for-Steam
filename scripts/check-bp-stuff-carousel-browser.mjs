@@ -15,6 +15,8 @@ for (const [id, factory] of Object.entries(factories)) {
   if ((code.includes('ScrollToElement(') && code.includes('fnRenderScrollingDiv'))
     || (code.includes('scrollPadding:') && code.includes('marginLeft=') && code.includes('S1:'))
     || (code.includes('OnForceMeasureFocusRing:') && code.includes('disableFocusRing:'))
+    || (code.includes('imgURL') && code.includes('RareAchievementIconGlowContainerRoot') && code.includes('pauseAnimation'))
+    || code.includes('AchievementIconWrapper:')
     || (code.startsWith('je=>{je.exports=') && ['AchivementCarouselItemDetails:', 'BoxCarouselContents:', 'FocusRingOnHiddenItem:'].some(key => code.includes(key)))) selected[id] = code;
 }
 assert(Object.keys(selected).length >= 6, 'Installed native carousel, focus, spacing and CSS contracts');
@@ -34,6 +36,7 @@ for (const [name, file] of Object.entries({
 
 await runBPBrowserScenario(sources, async fixture => {
   const { React, ReactDOM, dom, load, dependencies, client, root, A, frame, check, req } = fixture;
+  const errors = []; window.addEventListener('error', event => errors.push(String(event.error?.stack || event.message)));
   document.body.classList.add('BasicUI');
   root.style.cssText = 'position:relative;width:1160px;margin:20px auto';
   const registry = Object.fromEntries(Object.entries(load('nativeCarouselFixtures').factories)
@@ -59,7 +62,7 @@ await runBPBrowserScenario(sources, async fixture => {
   };
   Object.assign(nativeReq, { m: registry, d: req.d, n: req.n, r: req.r });
   let identity = nativeReq;
-  const runtime = { getRuntimeIdentity: () => identity, getRequire: () => nativeReq,
+  const runtime = { captureRuntime() {}, getRuntimeIdentity: () => identity, getRequire: () => nativeReq,
     getModuleFactoryCount: () => Object.keys(registry).length, getModuleFactories: () => Object.entries(registry).map(([id, factory]) => ({ id, factory })),
     getAllModules: () => Object.entries(modules).map(([id, value]) => ({ id, exports: value.exports })) };
   dependencies['../../steam/modules/SteamWebpackRuntime'] = { steamWebpackRuntime: runtime };
@@ -110,7 +113,7 @@ await runBPBrowserScenario(sources, async fixture => {
   render(); await frame();
   const strips = () => [...root.querySelectorAll('[data-gdl-bp-carousel]')];
   const tiles = index => [...strips()[index].querySelectorAll('[data-gdl-focus-key]')];
-  check(strips().length === 2 && tiles(0).length === 23 && tiles(1).length === 11, 'Both production summary rows retain every earned and locked tile');
+  check(strips().length === 2 && tiles(0).length === 23 && tiles(1).length === 11, 'Both production summary rows retain every earned and locked tile: ' + errors.join('\n'));
   check(strips().every(row => row.querySelector('[data-gdl-carousel-viewport="1"]')
     && row.querySelector(`.${focusCSS.FocusRingRoot}`)), 'Each strip has its own exact native scroll viewport and native ring provider');
   const nav = load('navigation'), tabs = document.getElementById('tabs');
@@ -118,6 +121,14 @@ await runBPBrowserScenario(sources, async fixture => {
   const realNow = Date.now; let navTime = realNow(); Date.now = () => navTime;
   const arrow = async key => { navTime += 200; document.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })); await frame(); };
   tiles(0)[0].focus(); await frame();
+  await new Promise(resolve => setTimeout(resolve, 200));
+  const icon = tile => tile.querySelector(`.${achievementCSS.CarouselIcon}`);
+  check(tiles(0).every(tile => Math.abs(icon(tile).getBoundingClientRect().width - 74) < 1),
+    'Every icon in the active native row is 74px, including unselected achievements');
+  check(tiles(1).every(tile => Math.abs(icon(tile).getBoundingClientRect().width - 52) < 1),
+    'The inactive native row uses 52px icons instead of enlarging only the selected achievement');
+  check(tiles(1).every(tile => getComputedStyle(icon(tile)).filter === 'grayscale(1)'),
+    'Locked achievements are visibly grayscale even if the supplied gray image is colored');
   let firstWidth = tiles(0)[0].getBoundingClientRect().width;
   check(firstWidth > tiles(0)[1].getBoundingClientRect().width * 3, 'The real Steam Detailed CSS expands the focused tile instead of a fixed-width test mock');
   for (let index = 1; index < tiles(0).length; index++) {
@@ -132,6 +143,10 @@ await runBPBrowserScenario(sources, async fixture => {
     await arrow('ArrowLeft'); check(document.activeElement === tiles(0)[index], `Left returns through earned tile ${index}`);
   }
   await arrow('ArrowDown');
+  await new Promise(resolve => setTimeout(resolve, 200));
+  check(tiles(1).every(tile => Math.abs(icon(tile).getBoundingClientRect().width - 74) < 1)
+    && tiles(0).every(tile => Math.abs(icon(tile).getBoundingClientRect().width - 52) < 1),
+    'Moving down swaps native priority sizing for the entire earned and locked rows');
   check(tiles(1).includes(document.activeElement), 'Down moves to the locked row instead of skipping to a later section');
   const lockedIndex = tiles(1).indexOf(document.activeElement);
   await arrow('ArrowRight'); check(document.activeElement === tiles(1)[lockedIndex + 1], 'Right navigates independently through locked achievements');

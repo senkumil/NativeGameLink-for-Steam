@@ -124,6 +124,7 @@ function ensureScreenStyles(doc: Document): void {
 #gdl-bp-achievements-screen .gdl-bp-ach-avatar{width:32px;height:32px;object-fit:cover}
 #gdl-bp-achievements-screen .gdl-bp-ach-global-label{white-space:nowrap;font-size:12px;font-weight:600;text-transform:uppercase}
 #gdl-bp-achievements-screen .gdl-bp-ach-row{position:relative;scroll-margin:8px;flex-shrink:0}
+#gdl-bp-achievements-screen [data-gdl-personal-locked="1"]>div:first-child>div:first-child img{filter:grayscale(1)}
 #gdl-bp-achievements-screen .gdl-bp-ach-fallback-row{display:flex;align-items:center;gap:8px;min-height:80px;background:#23262e;padding:8px;box-sizing:border-box}
 #gdl-bp-achievements-screen .gdl-bp-ach-fallback-row img{width:64px;height:64px;object-fit:contain;flex:none}
 #gdl-bp-achievements-screen .gdl-bp-ach-fallback-copy{flex:1;min-width:0}
@@ -333,10 +334,11 @@ function AchievementRow({ item, tab, parts, ui, revealed, onReveal, comparison, 
 	const friendProgress = friend && !friend.earned && item.max_progress > 0 ? { flCurrent: friend.progress, flMax: item.max_progress,
 		flPercentage: Math.max(0, Math.min(100, friend.progress * 100 / item.max_progress)) } : undefined;
 	const props = { className: 'gdl-bp-ach-row', 'data-gdl-achievement-name': item.name,
+		'data-gdl-personal-locked': tab === 'mine' && !item.earned ? '1' : undefined,
 		'data-gdl-focus-key': `achievement-${tab}-${item.name}`, tabIndex: 0, onActivate: onReveal, onClick: onReveal,
 		onOKActionDescription: hidden ? loc('Achievements_HiddenAchievementItem_Individual_Reveal', 'Reveal achievement') : null };
 	const fallback = <NativeFocusable {...props} focusable className="gdl-bp-ach-row gdl-bp-ach-fallback-row">
-		{hidden ? <span aria-hidden="true">?</span> : <img loading="lazy" src={icon} alt="" />}
+		{hidden ? <span aria-hidden="true">?</span> : <img loading="lazy" src={icon} alt="" style={!item.earned ? { filter: 'grayscale(1)' } : undefined} />}
 		<div className="gdl-bp-ach-fallback-copy"><div className="gdl-bp-ach-fallback-title">{title}</div><div className="gdl-bp-ach-fallback-description">{description}</div>
 			{item.earned && percent !== null ? <div className="gdl-bp-ach-fallback-detail">{loc('AppDetails_PctUnlocked', '%1$s% of players have this achievement').replace('%1$s', percent.toFixed(1))}</div> : null}
 		</div><div className="gdl-bp-ach-fallback-detail">{item.earned ? <div>{item.earned_time > 0 ? formatLocalUnlockDate(item.earned_time) : loc('AppDetails_Achievements_Unlocked', 'Unlocked')}</div> : null}

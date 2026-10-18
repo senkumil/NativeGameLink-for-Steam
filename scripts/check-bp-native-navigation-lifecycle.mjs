@@ -72,10 +72,16 @@ const React = {
     if (!previous || deps.some((value, offset) => value !== previous.deps[offset])) slots[index] = { value: callback, deps };
     return slots[index].value;
   },
+  useMemo(compute, deps) {
+    const index = cursor++, previous = slots[index];
+    if (!previous || deps.some((value, offset) => value !== previous.deps[offset])) slots[index] = { value: compute(), deps };
+    return slots[index].value;
+  },
   createElement(type, props, ...children) { return { type, props: props || {}, children }; },
 };
 const sandbox = vm.createContext({ exports: {}, React,
   backendLog() {},
+  getCachedLocalAchievementsForShortcut: () => null,
   NativeFocusable: 'Focusable', NativeDetailsBoundary: 'Boundary', SafeTabFallback: 'Fallback',
   BigPictureUIProvider: 'DocumentUIProvider',
   ActivityTab: 'Activity', StuffTab: 'Stuff', CommunityTab: 'Community', InformationTab: 'Info',
@@ -155,7 +161,10 @@ try {
   check(frames.size === 1, 'Native source and active-tree changes coalesce into one post-commit context refresh');
   for (const [id, callback] of frames) { frames.delete(id); callback(); }
 
-  const before = installations; render();
+  const unchangedContent = focusable(element).children[0];
+  const before = installations; const unchangedRender = render();
+  check(focusable(unchangedRender).children[0] === unchangedContent,
+    'Navigation-only shell updates reuse the tab content instead of rebuilding every achievement and card');
   check(installations === before, 'A stable render does not recreate the navigation engine');
   strip = { isConnected: true, parentElement: parent }; render();
   check(installations === before + 1, 'Replacing the native tab strip reinstalls captured input controls in the same panel/tree');

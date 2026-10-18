@@ -4,7 +4,6 @@ import type { CommunityContentItem } from '../../domain/types';
 import { gdlText, loc } from '../../steam/localization';
 import {
 	resolveNativeAppDetailsClasses,
-	resolveNativeSummaryCarousel,
 	type NativeAppDetailsClasses,
 } from '../../steam/gamepad/components/AppDetailsNativeClasses';
 import { steamWebpackRuntime } from '../../steam/modules/SteamWebpackRuntime';
@@ -17,9 +16,11 @@ import {
 } from '../../steam/gamepad/components/AppDetailsNativeComponents';
 import { FriendsSection, FallbackActivitySection } from './activity-section';
 import { NativeBigPictureAchievements } from './NativeBigPictureAchievements';
+import { getCachedLocalAchievementsForShortcut } from '../achievements/cache';
 import { getInstantPlaytimeStats } from '../playtime/service';
 import { isShortcutPlaytimeTrackingEnabled } from '../playtime/playtime-settings';
 import { NativeBigPictureCarousel } from './NativeBigPictureCarousel';
+import { NativeBigPictureTradingCards } from './NativeBigPictureTradingCards';
 import { openSteamNavigationUrl, extractCommunityYoutubeId } from '../../steam/navigation';
 import { installBigPictureGamepadNavigation, returnBigPictureFocusToTabs, performBigPictureSemanticAction, switchBigPictureNativeTab } from './gamepad-nav';
 import { findBigPictureTabStrip } from './tabs';
@@ -194,8 +195,6 @@ function ActivityTab(props: NativeDetailsProps): React.ReactElement {
 }
 
 function AchievementsSection(props: NativeDetailsProps & { classes: NativeAppDetailsClasses; hideIfEmpty?: boolean }): React.ReactElement | null {
-	const NativeCarousel = resolveNativeSummaryCarousel(props.document);
-	const _achievementItem = props.classes.Achievement?.AchievementCarouselItem;
 	return (
 		<NativeBigPictureAchievements
 			{...props}
@@ -207,54 +206,16 @@ function AchievementsSection(props: NativeDetailsProps & { classes: NativeAppDet
 			NativeIcons={NativeIcons}
 			NativeStrip={NativeStrip}
 			NativeDetailsBoundary={NativeDetailsBoundary}
-			NativeCarousel={NativeCarousel}
-			carouselItemClassName={_achievementItem}
 		/>
 	);
 }
 
 function TradingCardsSection(props: NativeDetailsProps & { classes: NativeAppDetailsClasses }): React.ReactElement | null {
-	const catalog = props.data.cards;
-	const cards = catalog?.cards || [];
-	if (cards.length === 0) return null;
-
-	const native = props.classes.TradingCard;
-
-	return (
-		<Section classes={props.classes} label={loc('AppDetails_SectionTitle_TradingCards', gdlText('trading_cards', 'Trading cards'))} bodyClassName={native?.Container} rightColumn>
-			<NativeButton {...clickProps(() => { if (isBigPictureActionCurrent(props)) openSteamNavigationUrl(props.document, `https://steamcommunity.com/my/gamecards/${props.shortcut.steamAppId}`); })}>
-				{loc('AppDetails_TradingCards_ViewBadgeProgress', 'Ver progreso de la insignia')}
-			</NativeButton>
-			<div className={native?.CardsSection}>
-				<NativeStrip name="NativeGameLink Trading Cards" document={props.document} className={native?.SummaryCarouselContainer}>
-					{cards.slice(0, 18).map((card, index) => {
-						const openCard = (): void => showNativeImageModal(props, card.title, card.artwork || card.image, props.classes);
-						// Steam's inventory tile interprets an absent count as Unowned.
-						// A public catalog has no inventory evidence, so retain a neutral
-						// native-style tile with one owner-managed focus target.
-						return (
-							<NativeFocusable
-								key={`${card.title}-${index}`}
-								focusable
-								onActivate={openCard}
-								{...clickProps(openCard)}
-								className={nativeClasses(native?.TradingCardCarouselItem, native?.Clickable, 'gdl-bp-trading-card')}
-							>
-								<div className={native?.CardWrapper}>
-									<div className={nativeClasses(native?.Card, native?.Clickable)}>
-										<div className={native?.CardContainer}>
-											<img className={nativeClasses(native?.CardImage, native?.Loaded)} src={card.image} alt={card.title} width="100" height="130" />
-										</div>
-										<div className={native?.Title}>{card.title}</div>
-									</div>
-								</div>
-							</NativeFocusable>
-						);
-					})}
-				</NativeStrip>
-			</div>
-		</Section>
-	);
+	return <NativeBigPictureTradingCards document={props.document} steamAppId={props.shortcut.steamAppId}
+		catalog={props.data.cards} hydrating={props.hydrating} classes={props.classes} Section={Section} Strip={NativeStrip}
+		isCurrent={() => isBigPictureActionCurrent(props)}
+		onOpenCard={card => showNativeImageModal(props, card.title, card.artwork || card.image, props.classes, true)}
+		onOpenBadge={() => openSteamNavigationUrl(props.document, `https://steamcommunity.com/my/gamecards/${props.shortcut.steamAppId}`)} />;
 }
 
 function communityItems(data: BigPictureDetailData): CommunityContentItem[] {
@@ -391,7 +352,6 @@ function StuffTab(props: NativeDetailsProps): React.ReactElement {
 	const sections = resolveNativeStuffComponents(props.document);
 	const NativeScreenshots = sections.Media;
 	const NativeNotes = sections.Notes;
-	const NativeCards = sections.Cards;
 	const NativeReview = sections.Review;
 	const publicView = createBigPictureDetailViews(props.document, { ...props.shortcut, id: Number(props.shortcut.steamAppId) }, props.data.game);
 	const NativeDLC = sections.DLC;
@@ -415,9 +375,7 @@ function StuffTab(props: NativeDetailsProps): React.ReactElement {
 	return (
 		<>
 			<AchievementsSection {...props} classes={classes} />
-			{NativeCards ? <NativeDetailsBoundary name="cards" fallback={<TradingCardsSection {...props} classes={classes} />}>
-				<NativeCards details={{ unAppID: Number(props.shortcut.steamAppId) }} />
-			</NativeDetailsBoundary> : <TradingCardsSection {...props} classes={classes} />}
+			<TradingCardsSection {...props} classes={classes} />
 			{NativeDLC && publicDetails && props.data.game?.dlc?.length ? (
 				<NativeDetailsBoundary name="dlc" fallback={null}>
 					<NativeDLC details={publicDetails} showRemainder />
@@ -563,15 +521,19 @@ export function NativeBigPictureDetails(props: NativeDetailsProps): React.ReactE
 		if (strip?.parentElement) observer.observe(strip.parentElement, { childList: true });
 		return () => { disposed = true; for (const timer of timers) view.clearTimeout(timer); observer.disconnect(); };
 	}, [props.document, panel, strip, props.generation, props.shortcut.id, props.shortcut.steamAppId, runtimeCurrent]);
+	// Navigation registration/probes update this shell several times. Preserve
+	// its content element while data is unchanged instead of rebuilding every
+	// achievement, card and native section during each focus registration.
+	const achievementSnapshot = getCachedLocalAchievementsForShortcut(props.shortcut.steamAppId, String(props.shortcut.id));
+	const content = React.useMemo(() => {
+		switch (props.tab) {
+			case 'stuff': return <StuffTab {...props} />;
+			case 'community': return <CommunityTab {...props} />;
+			case 'info': return <InformationTab {...props} Boundary={NativeDetailsBoundary} />;
+			default: return <ActivityTab {...props} />;
+		}
+	}, [props.tab, props.shortcut, props.data, props.hydrating, props.document, props.generation, props.panel, runtimeIdentity, achievementSnapshot]);
 	if (!runtimeCurrent) return null;
-
-	let content: React.ReactElement;
-	switch (props.tab) {
-		case 'stuff': content = <StuffTab {...props} />; break;
-		case 'community': content = <CommunityTab {...props} />; break;
-		case 'info': content = <InformationTab {...props} Boundary={NativeDetailsBoundary} />; break;
-		default: content = <ActivityTab {...props} />; break;
-	}
 
 	const nativeAction = (action: 'back' | 'x' | 'y', event: any): boolean => {
 		if (!nativeNavigation || !isBigPictureActionCurrent(props) || event?.defaultPrevented || event?.detail?.is_repeat) return false;
@@ -694,14 +656,20 @@ export function mountNativeBigPictureDetails(container: HTMLElement, props: Nati
 		};
 		state = mounted; nativeRoots.set(container, state);
 	}
+	const changingPanel = Boolean(state.committedOwner && (state.committedOwner.tab !== props.tab
+		|| state.committedOwner.panel !== props.panel));
 	state.owner = props;
 	const expected = state;
 	container.hidden = false;
-	state.handle.render(react.createElement(NativeBigPictureDetails, { ...props, renderSession: state.session, onCommitted: () => {
+	const render = () => state!.handle.render(react.createElement(NativeBigPictureDetails, { ...props, renderSession: state!.session, onCommitted: () => {
 		if (nativeRoots.get(container) !== expected || expected.owner !== props || !expected.session.isCurrent()) return;
 		expected.committedOwner = props;
 		props.onCommitted?.();
 	} }));
+	// A native tab can already be selected while a concurrent root still shows
+	// its previous tab. Commit the replacement before the browser paints it.
+	if (changingPanel && typeof reactDom.flushSync === 'function') reactDom.flushSync(render);
+	else render();
 	return true;
 }
 

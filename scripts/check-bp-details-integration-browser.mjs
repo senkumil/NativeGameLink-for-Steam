@@ -6,8 +6,10 @@ import { runBPBrowserScenario } from './check-bp-achievements-workflow-browser.m
 import { nativeWindowOracle } from './helpers/native-window-oracle.mjs';
 
 const files = {
+  'linked-card-presentation': 'frontend/features/library/linked-card-presentation.ts',
   NativeBigPictureDetails: 'frontend/features/big-picture/NativeBigPictureDetails.tsx',
   NativeBigPictureCarousel: 'frontend/features/big-picture/NativeBigPictureCarousel.tsx',
+  NativeBigPictureTradingCards: 'frontend/features/big-picture/NativeBigPictureTradingCards.tsx',
   details: 'frontend/features/big-picture/details.ts',
   'detail-views': 'frontend/features/big-picture/detail-views.ts',
   'detail-target': 'frontend/features/big-picture/detail-target.ts',
@@ -42,6 +44,7 @@ await runBPBrowserScenario(sources, async fixture => {
     client, root, mapping, A, B, frame, check, listeners } = fixture;
   const logs = [], actions = [], nativeProps = [], modelReads = [];
   const runtime = dependencies['../../steam/modules/SteamWebpackRuntime'].steamWebpackRuntime;
+  dependencies['../library/linked-card-presentation'] = load('linked-card-presentation');
   const originalRuntime = { ...runtime };
   const factoryReads = [];
   const factoryRequire = id => { factoryReads.push(String(id)); return registry[id] && !nativeRegistry[id] ? req(id) : nativeRequire(id); };
@@ -88,7 +91,8 @@ await runBPBrowserScenario(sources, async fixture => {
     '../../steam/css': { PLAYBAR_CLASSES: () => ({}), APP_DETAILS_CLASSES: () => ({}) },
     './PlaybarControllerIcons': { mountPlaybarControllerIcons: () => () => {}, disposePlaybarControllerIcons() {} },
     '../achievements/lifecycle': { ACHIEVEMENT_REFRESH_STORAGE_KEY: 'fixture-achievement-refresh' },
-    '../library/community-items': { getCachedOfficialCommunityItems: () => null, getOfficialCommunityItems: async () => null },
+    '../library/community-items': { getCachedOfficialCommunityItems: () => null, getOfficialCommunityItems: async () => null,
+      normalizeCommunityAssetUrl: value => String(value || '') },
     '../library/artwork': { linkedShortcutPortrait: (_id, appid) => `https://fixture.invalid/${appid}/library_600x900.jpg` },
     '../library/news': { getCachedCommunityContent: () => null, getCachedNews: () => null,
       getCommunityContent: async () => [], getNews: async () => [], eventTypeLabel: () => 'News', newsExcerpt: value => String(value) },
@@ -254,6 +258,43 @@ await runBPBrowserScenario(sources, async fixture => {
   document.querySelector('.gdl-bp-news-modal-close')?.click(); await frame();
   check(!document.getElementById('gdl-bp-news-modal') && document.activeElement === newsCard, 'Closing news returns focus to its card');
 
+  // Exercise the real native tab listener instead of directly rendering a tab.
+  // A requested tab must not mark itself rendered before React receives it.
+  for (const [key, button] of controls) button.setAttribute('aria-selected', String(key === 'stuff'));
+  controls.get('stuff').click();
+  const firstStuffPaint = await new Promise(resolve => requestAnimationFrame(() => resolve(root.textContent)));
+  check(!firstStuffPaint.includes('Production news item') && firstStuffPaint.includes('Catalog'),
+    'The first paint after native tab selection contains Stuff, never the previous Activity tree');
+  await new Promise(resolve => setTimeout(resolve, 65)); await frame();
+  check(details.detailStates.get(document)?.activeTab === 'stuff' && root.querySelector('.gdl-bp-trading-card')
+    && !root.textContent.includes('Production news item'), 'Native Activity-to-Stuff input replaces the old content without waiting for data hydration');
+  const newerAchievements = { ...achievements, achievements: achievements.achievements.map((item, index) => index === 0
+    ? { ...item, display_name: 'Newest cached local achievement', icon: 'https://images.invalid/preloaded-achievement.png' } : item) };
+  cache.cacheLocalAchievements(newerAchievements, '550', String(A));
+  details.renderNativeRoot(document, state); await frame();
+  check(root.textContent.includes('Newest cached local achievement') && root.querySelector('[data-gdl-focus-key^="achievement-summary-"]'),
+    'A newer authorized shortcut cache renders immediately while parent hydration props still contain the previous snapshot');
+  check(document.head.querySelector('link[rel="preload"][as="image"][href$="preloaded-achievement.png"]'),
+    'Visible achievement image requests begin from the owning detail cache without waiting for Stuff to mount');
+  cache.cacheLocalAchievements(achievements, '550', String(A));
+  for (const [key, button] of controls) button.setAttribute('aria-selected', String(key === 'activity'));
+  controls.get('activity').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  const firstActivityPaint = await new Promise(resolve => requestAnimationFrame(() => resolve(root.textContent)));
+  check(firstActivityPaint.includes('Production news item') && !root.querySelector('.gdl-bp-trading-card'),
+    'Keyboard tab selection commits Activity before its first paint');
+  await new Promise(resolve => setTimeout(resolve, 65)); await frame();
+  check(root.textContent.includes('Production news item') && !root.querySelector('.gdl-bp-trading-card'),
+    'Native keyboard activation also replaces Stuff with Activity without stale content');
+  const lateNative = document.createElement('div'); lateNative.textContent = 'Late Steam tab content';
+  lateNative.style.display = 'flex';
+  const lateNativeBefore = lateNative.outerHTML;
+  panel.appendChild(lateNative);
+  const lateNativePaint = await new Promise(resolve => requestAnimationFrame(() => resolve(getComputedStyle(lateNative).display)));
+  check(lateNativePaint === 'none' && !root.hidden,
+    'Native content appended after a linked commit cannot flash beside the active linked tab');
+  lateNative.remove(); await frame();
+  check(lateNative.outerHTML === lateNativeBefore, 'A detached native replacement regains its original visibility properties');
+
   // Steam's actual SP BPM has a document.write popup with no own JavaScript.
   // Its native tree is a portal from SharedJSContext, whose WindowStore binds
   // the popup BrowserWindow. Reproduce that architecture with installed React.
@@ -316,6 +357,19 @@ await runBPBrowserScenario(sources, async fixture => {
     'The native child gets the same paired React and renderer that Steam used for its parent portal');
   check(childNativeActivity.hidden && childRoot.childElementCount > 0 && !logs.some(line => line.includes('failed:')),
     'Only the owned child panel is hidden after its shared renderer commits successfully');
+  childDoc.getElementById('child-stuff').click();
+  const popupStuffPaint = await new Promise(resolve => requestAnimationFrame(() => resolve({
+    parent: childRoot.parentElement?.id, text: childRoot.textContent,
+    nativeHidden: childDoc.querySelector('[data-native-popup-content="stuff"]').hidden,
+    outgoingHidden: childNativeActivity.hidden,
+  })));
+  check(popupStuffPaint.parent === 'child-stuff-Content' && popupStuffPaint.text.includes('Trading cards')
+    && !popupStuffPaint.text.includes('Production news item') && popupStuffPaint.nativeHidden && popupStuffPaint.outgoingHidden,
+    `A real shared React portal tab switch moves and commits the linked Stuff root before the first paint: ${JSON.stringify(popupStuffPaint)}`);
+  childDoc.getElementById('child-activity').click();
+  await new Promise(resolve => requestAnimationFrame(resolve));
+  check(childRoot.parentElement?.id === 'child-activity-Content' && childRoot.textContent.includes('Production news item')
+    && childNativeActivity.hidden, 'Returning to Activity in the real native tab tree never exposes the native replacement');
   const childRequireLease = productionRuntime.getRequire(childDoc);
   const wrongFrame = document.createElement('iframe');
   const wrongLoaded = new Promise(resolve => { wrongFrame.onload = resolve; });
@@ -364,8 +418,8 @@ await runBPBrowserScenario(sources, async fixture => {
   const catalogCard = root.querySelector('.gdl-bp-trading-card');
   check(catalogCard?.textContent.includes('Catalog card') && !catalogCard.querySelector(`.${tradingCardClasses.Owned}`)
     && !catalogCard.classList.contains(tradingCardClasses.Owned), 'Public catalog cards retain unknown ownership instead of borrowing an Owned style');
-  check(![...root.querySelectorAll('img')].some(image => image.src.includes('catalog-max-badge') || image.src.includes('catalog-foil-badge')),
-    'Public maximum and foil badge art never imply a personal earned badge');
+  check(root.querySelector('img[data-gdl-badge-preview="1"][src*="catalog-foil-badge"]'),
+    'Big Picture presents the same foil catalogue badge preview as linked desktop');
   const badgeProgress = [...root.querySelectorAll('button')].find(button => button.textContent.includes('Ver progreso de la insignia'));
   badgeProgress.click(); check(actions.at(-1)?.[2] === 'https://steamcommunity.com/my/gamecards/550',
     'Catalog badge availability provides only the explicit personal badge-progress URL');

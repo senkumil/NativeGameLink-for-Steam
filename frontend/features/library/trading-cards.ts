@@ -10,6 +10,7 @@ import { buildNativeSidebarSection } from './layout';
 import { clearTradingCardPreloads, getTradingCardPreload, preloadTradingCardImage } from './trading-card-preload';
 import { disposeNativeCardPreview, tryOpenNativeCardPreview } from './native-card-preview';
 import { getLinkedSidebarOrder } from './sidebar-order';
+import { linkedCardPresentation } from './linked-card-presentation';
 
 const tradingCardPreviewCleanup = new WeakMap<Document, () => void>();
 const responsiveGridCleanups = new Map<HTMLElement, () => void>();
@@ -660,7 +661,7 @@ export async function renderOfficialTradingCards(
 	if (!cards) return;
 
 	const officialPortrait = `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${steamAppId}/library_600x900.jpg`;
-	const badgeAsset = catalog.foil_badge || catalog.badges?.find(badge => badge.foil) || catalog.badges?.[catalog.badges.length - 1];
+	const badgeAsset = linkedCardPresentation(catalog).badge;
 	const cardFallback = catalog.cards?.[0]?.image || '';
 	const badgeSource = normalizeCommunityAssetUrl(badgeAsset?.image) || cardFallback || officialPortrait;
 	const badgeTitle = badgeAsset?.title || catalog.badges?.[0]?.title || gdlText('cards_found', 'Cards found');

@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import ts from 'typescript';
+import vm from 'node:vm';
 import { runBPBrowserScenario } from './check-bp-achievements-workflow-browser.mjs';
 
 const sources = Object.fromEntries(Object.entries({
@@ -11,6 +12,13 @@ const sources = Object.fromEntries(Object.entries({
 }).map(([name, file]) => [name, ts.transpileModule(fs.readFileSync(file, 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, jsx: ts.JsxEmit.React },
 }).outputText]));
+const chunks = { webpackChunksteamui: [] };
+vm.runInNewContext(fs.readFileSync((process.env.STEAM_UI_PATH || 'C:/Program Files (x86)/Steam/steamui') + '/sp.js', 'utf8'), { self: chunks });
+const artworkFactory = Object.values(Object.assign({}, ...chunks.webpackChunksteamui.map(chunk => chunk[1])))
+  .find(factory => ['ArtworkModal:', 'ModalBox:', 'ArtworkModalContainer:', 'ModalArtCloseButton:'].every(token => String(factory).includes(token)));
+if (!artworkFactory) throw Error('Installed native artwork modal presentation is required');
+const artworkModule = { exports: {} }; artworkFactory(artworkModule);
+sources.artworkCSS = 'exports.classes=' + JSON.stringify(artworkModule.exports) + ';';
 
 await runBPBrowserScenario(sources, async fixture => {
   const { load, dependencies, client, root, A, frame, check } = fixture;
@@ -82,6 +90,27 @@ await runBPBrowserScenario(sources, async fixture => {
     check(document.activeElement === trigger, `${input} restores the captured owned media trigger`);
     check(foreign.outerHTML === foreignBefore, 'Unrelated Steam dialog markup remains byte-for-byte unchanged');
   }
+  document.body.classList.add('BasicUI');
+  document.documentElement.style.setProperty('--basicui-header-height', '56px');
+  document.documentElement.style.setProperty('--gamepadui-current-footer-height', '48px');
+  trigger.focus();
+  const imageURL = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900"><rect width="1600" height="900" fill="blue"/></svg>');
+  media.showNativeImageModal(owner, 'Card artwork', imageURL, { Media: {}, ArtworkModal: load('artworkCSS').classes }, true);
+  await frame();
+  const cardModal = modal(), image = cardModal.querySelector('img'); await image.decode(); await frame();
+  const bounds = cardModal.getBoundingClientRect(), imageBounds = image.getBoundingClientRect();
+  check(cardModal.dataset.gdlBpFullscreen === '1' && bounds.left === 0 && bounds.width === innerWidth
+    && bounds.top === 56 && bounds.bottom === innerHeight - 48, 'Card artwork fills the Steam safe area rather than a centered compact dialog');
+  check(Math.abs(imageBounds.height - 600) < 1 && imageBounds.width > 1000, 'Large card artwork keeps the native 600px height and natural widescreen ratio');
+  const closeButton = cardModal.querySelector('button'), buttonBounds = closeButton.getBoundingClientRect();
+  check(buttonBounds.width > bounds.width * .4 && buttonBounds.width < bounds.width * .6,
+    'The native artwork close button is centered at half screen width');
+  closeButton.click(); await frame();
+  check(!modal() && document.activeElement === trigger, 'Closing full-screen card art restores the exact card trigger');
+  check(listenerCount() === baselineListeners && fixture.observerCount() === baselineObservers,
+    'The full-screen card viewer releases its entire owned lifecycle');
+  check(foreign.outerHTML === foreignBefore, 'Card artwork does not alter unrelated native Steam modals');
+  document.body.classList.remove('BasicUI');
   await wait(550);
   foreign.hidden = false; const visibleForeign = foreign.outerHTML, beforeForeignClose = handleCloses;
   foreign.querySelector('button').focus();

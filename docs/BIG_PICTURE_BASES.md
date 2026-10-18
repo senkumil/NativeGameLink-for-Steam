@@ -309,6 +309,37 @@ runtime. El desplazamiento acompaña la expansión del logro y respeta la escala
 de la interfaz. `check-bp-stuff-carousel-browser.mjs` comprueba estos componentes
 y su limpieza; la prueba del árbol nativo cubre los movimientos laterales.
 
+La prioridad de logros afecta a toda la fila: 74 px en la activa y 52 px en
+la inactiva, según las reglas del cliente. El estado bloqueado envuelve el
+componente de imagen, con escala de grises explícita incluso si el esquema
+entrega una imagen a color. Cambiar de fila actualiza todos sus iconos.
+
+La selección explícita de una pestaña se sincroniza en una microtarea, después
+del evento nativo y antes del siguiente dibujo. El renderer propietario confirma
+los cambios de pestaña/panel de forma síncrona; la primera carga y la hidratación
+conservan su montaje normal. Mientras un panel pertenece al juego vinculado,
+las inserciones nativas tardías se ocultan antes de pintar. Steam conserva el
+panel saliente durante ContentTransition: mover la raíz no restaura ese panel.
+Su visibilidad original se recupera al desmontarlo o al salir del juego vinculado;
+la observación temporal se desconecta cuando termina esa salida.
+
+Las actualizaciones del registro de navegación reutilizan el contenido cuando
+sus datos no cambian. El resumen de logros resuelve solo el componente de imagen;
+las filas y búsqueda de la ventana general se cargan al abrirla. La caché válida
+del acceso directo se muestra aunque el padre aún tenga una instantánea anterior,
+y las imágenes visibles se precargan desde Actividad, con un máximo de 24 enlaces
+propiedad del documento que se retiran al salir del juego vinculado.
+
+Tarjetas permanece accesible en cada juego vinculado, aunque la respuesta
+de insignias nativa esté vacía. El catálogo vinculado se presenta con el mismo
+criterio que la barra lateral de escritorio, independiente del inventario nativo.
+Las tarjetas del catálogo vinculado se muestran a color y con tamaño de 100 px,
+incluidas las no poseídas. La cabecera prioriza la insignia metálica del catálogo
+y conserva los valores de presentación de escritorio: 100 EXP y 0 pendientes.
+Estos valores no acreditan objetos ni un nivel de insignia a la cuenta. Las tarjetas del
+catálogo pueden abrirse individualmente; si faltan recursos se conserva la
+sección, el estado de carga/vacío y el acceso a la página de tarjetas.
+
 La ventana general de logros abre en el logro seleccionado y ocupa el espacio
 entre la cabecera y el pie de Steam. Usa las clases nativas de la portada,
 estadísticas, pestañas y filas, con datos locales del acceso directo y metadatos

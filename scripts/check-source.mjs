@@ -1097,14 +1097,16 @@ try {
 			'Big Picture must augment the active native tabpanel and observe the tablist without moving React-owned controls');
 	}
 
+	const linkedCardsSource = await fs.readFile(path.join(frontendRoot, 'features', 'big-picture', 'NativeBigPictureTradingCards.tsx'), 'utf8');
 	const completeNativeSections = [
-		'resolveNativeAppDetailsClasses', 'NativeCarousel', 'classes.ActivityEvent',
-		'classes.Achievement', 'classes.Community',
-		'PartnerEventMediumImage_Container', 'AchievementCarouselItem', 'CommunityItem',
+		'resolveNativeAppDetailsClasses', 'NativeBigPictureCarousel', 'classes.ActivityEvent',
+		'<NativeBigPictureAchievements', 'classes.Community',
+		'PartnerEventMediumImage_Container', 'CommunityItem',
 		'function ActivityTab(', 'function StuffTab(', 'function CommunityTab(',
 		'function AchievementsSection(', 'function TradingCardsSection(',
-		"AppDetails_SectionTitle_TradingCards",
 	].every(token => nativeDetailsSource.includes(token))
+		&& nativeDetailsSource.includes('<NativeBigPictureTradingCards')
+		&& linkedCardsSource.includes('AppDetails_SectionTitle_TradingCards')
 		&& !nativeDetailsSource.includes('function InfoTab(')
 		&& !nativeDetailsSource.includes('gdl-bp-info-root')
 		&& detailsSource.includes("state.activeTab === 'info'")

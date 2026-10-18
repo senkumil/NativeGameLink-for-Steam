@@ -158,9 +158,13 @@ try {
         const a = first.getBoundingClientRect(), b = ring.getBoundingClientRect();
         return Math.abs(a.left - b.left) < 2 && Math.abs(a.top - b.top) < 2 && Math.abs(a.width - b.width) < 2;
       };
+      const waitForRing = async () => {
+        for (let attempt = 0; attempt < 40 && !alignedRing(); attempt++) await new Promise(resolve => originalSet(resolve, 10));
+      };
+      await waitForRing();
       check(alignedRing(), 'Fallback focus frame uses owner CSS coordinates under Steam UI scaling');
       first.style.width = '500px';
-      await new Promise(resolve => originalSet(resolve, 40));
+      await waitForRing();
       check(alignedRing(), 'Focus frame follows an expanded achievement without another navigation event');
       first.style.width = ''; document.body.style.zoom = ''; now += 600;
 

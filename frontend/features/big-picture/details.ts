@@ -65,12 +65,34 @@ const detailTabObservers = new WeakMap<Document, { strip: HTMLElement; controls:
 const detailRetryTimers = new WeakMap<Document, ReturnType<typeof setTimeout>>();
 const detailRetryCounts = new WeakMap<Document, number>();
 const detailTabSyncTimers = new WeakMap<Document, ReturnType<typeof setTimeout>>();
+const detailTabSyncMicrotasks = new WeakMap<Document, object>();
 const preferredDetailTabs = new WeakMap<Document, { tab: BigPictureTab; until: number }>();
 const detailContextGapSince = new WeakMap<Document, number>();
 const detailPatchTimers = new WeakMap<BigPictureDetailState, ReturnType<typeof setTimeout>>();
 const detailPendingPatches = new WeakMap<BigPictureDetailState, Partial<BigPictureDetailData>>();
 const achievementSyncCleanups = new WeakMap<Document, () => void>();
 const detailMountReports = new WeakMap<Document, string>();
+const achievementImagePreloads = new WeakMap<Document, { source: unknown; links: HTMLLinkElement[] }>();
+
+function preloadDetailAchievementImages(doc: Document, state: BigPictureDetailState): void {
+	const source = getCachedLocalAchievementsForShortcut(state.shortcut.steamAppId, String(state.shortcut.id));
+	if (!doc.head || !source || achievementImagePreloads.get(doc)?.source === source) return;
+	const items = source.achievements || [];
+	const visible = [...items.filter(item => item.earned).slice(0, 12), ...items.filter(item => !item.earned).slice(0, 12)];
+	const urls = new Set(visible.map(item => item.earned ? item.icon : item.icon_gray || item.icon).filter(Boolean));
+	const prior = achievementImagePreloads.get(doc);
+	const retained = new Map(prior?.links.map(link => [link.href, link]) || []);
+	const links: HTMLLinkElement[] = [];
+	for (const url of urls) {
+		const existing = retained.get(url);
+		const link = existing || doc.createElement('link');
+		if (existing) retained.delete(url);
+		else { link.rel = 'preload'; link.as = 'image'; link.href = url; doc.head.appendChild(link); }
+		links.push(link);
+	}
+	for (const link of retained.values()) link.remove();
+	achievementImagePreloads.set(doc, { source, links });
+}
 function reportDetailMount(doc: Document, stage: string): void {
 	if (detailMountReports.get(doc) === stage) return;
 	detailMountReports.set(doc, stage);
@@ -214,6 +236,8 @@ function cachedBigPictureDetailData(shortcut: MappedShortcut, language: string):
 
 function renderNativeRoot(doc: Document, state: BigPictureDetailState): void {
 	if (!isLiveDetailState(doc, state)) return;
+	// Start visible achievement artwork while Activity is open, not on entering Stuff.
+	preloadDetailAchievementImages(doc, state);
 	try {
 		steamWebpackRuntime.captureRuntime(doc);
 		gamepadRuntime.initialize(doc);
@@ -353,13 +377,27 @@ function scheduleDetailRetry(doc: Document): void {
 }
 
 function scheduleTabSync(doc: Document, preferredTab?: BigPictureTab): void {
-	const state = detailStates.get(doc);
 	if (preferredTab) {
 		preferredDetailTabs.set(doc, { tab: preferredTab, until: Date.now() + 700 });
-		if (state) state.activeTab = preferredTab;
+		// Keep activeTab as the rendered tab until refresh compares it with the
+		// requested tab. Updating it here skips the render and leaves stale content.
 	}
 	const pending = detailTabSyncTimers.get(doc);
 	if (pending) clearTimeout(pending);
+	detailTabSyncTimers.delete(doc);
+	if (preferredTab) {
+		// Native React finishes its tab update first; replace the linked tree in
+		// the same pre-paint checkpoint, rather than in a later timer/frame.
+		const token = {};
+		detailTabSyncMicrotasks.set(doc, token);
+		queueMicrotask(() => {
+			if (detailTabSyncMicrotasks.get(doc) !== token) return;
+			detailTabSyncMicrotasks.delete(doc);
+			if (doc.body?.isConnected) void refreshBigPictureShortcutDetails(doc);
+		});
+		return;
+	}
+	if (detailTabSyncMicrotasks.has(doc)) return;
 	const timer = setTimeout(() => {
 		detailTabSyncTimers.delete(doc);
 		if (doc.body?.isConnected) void refreshBigPictureShortcutDetails(doc);
@@ -402,6 +440,7 @@ function bindTabs(doc: Document, strip: HTMLElement, controls: Map<BigPictureTab
 		attributeFilter: ['aria-selected', 'aria-current'],
 	});
 	const dispose = () => {
+		detailTabSyncMicrotasks.delete(doc);
 		observer.disconnect(); strip.removeEventListener('click', input); strip.removeEventListener('keydown', input);
 		for (const [tab, control] of controls) if (control.dataset.gdlBpTab === tab) {
 			const original = prior.get(control);
@@ -417,6 +456,8 @@ function retireLegacyDetailShell(doc: Document): void {
 }
 
 function removeBigPictureDetailsNodes(doc: Document, keepControllerStat = false): void {
+	for (const link of achievementImagePreloads.get(doc)?.links || []) link.remove();
+	achievementImagePreloads.delete(doc);
 	disposeBigPicturePlaybarMetadata(doc);
 	disposeBigPictureModals(doc);
 	achievementSyncCleanups.get(doc)?.();

@@ -155,6 +155,39 @@ const PANEL_SIBLING_MARKER = 'data-gdl-bp-panel-sibling-hidden';
 const panelVisibilitySnapshots = new WeakMap<HTMLElement, Map<HTMLElement, PanelChildVisibility>>();
 const childVisibilityOwners = new WeakMap<HTMLElement, PanelChildVisibility>();
 const ownedPanelsByDocument = new WeakMap<Document, Set<HTMLElement>>();
+const panelCommitObservers = new WeakMap<HTMLElement, { owner: HTMLElement; observer: MutationObserver; retiring: boolean }>();
+const retiringPanels = new WeakMap<Document, { panels: Set<HTMLElement>; observer: MutationObserver }>();
+
+function stopRetiringPanel(panel: HTMLElement): void {
+	const state = retiringPanels.get(panel.ownerDocument);
+	state?.panels.delete(panel);
+	if (state && state.panels.size === 0) { state.observer.disconnect(); retiringPanels.delete(panel.ownerDocument); }
+}
+
+/** Steam keeps the outgoing tab mounted during its slide animation. Preserve
+ * its native visibility lease until that panel actually leaves the DOM. */
+export function retireNativePanelChildren(panel: HTMLElement, root: HTMLElement): void {
+	const watch = panelCommitObservers.get(panel);
+	if (!watch || watch.owner !== root) return;
+	watch.retiring = true;
+	const doc = panel.ownerDocument;
+	let state = retiringPanels.get(doc);
+	if (!state) {
+		const panels = new Set<HTMLElement>();
+		const observer = new MutationObserver(() => {
+			for (const outgoing of [...panels]) {
+				const owner = panelCommitObservers.get(outgoing)?.owner;
+				if (!outgoing.isConnected || !owner?.isConnected
+					|| !isCurrentLinkedGamepadTarget(doc, owner.dataset.gdlShortcutAppId || '', owner.dataset.gdlSteamAppId || '')) {
+					restoreNativePanelChildren(outgoing);
+				}
+			}
+		});
+		observer.observe(doc.body, { childList: true, subtree: true });
+		state = { panels, observer }; retiringPanels.set(doc, state);
+	}
+	state.panels.add(panel);
+}
 
 function restoreAttribute(element: HTMLElement, name: string, value: string | null): void {
 	if (value === null) element.removeAttribute(name);
@@ -162,6 +195,7 @@ function restoreAttribute(element: HTMLElement, name: string, value: string | nu
 }
 
 function forgetEmptyPanel(panel: HTMLElement): void {
+	if (panelCommitObservers.has(panel)) return;
 	if (panelVisibilitySnapshots.get(panel)?.size) return;
 	panelVisibilitySnapshots.delete(panel);
 	const panels = ownedPanelsByDocument.get(panel.ownerDocument);
@@ -186,6 +220,12 @@ function restorePanelChild(element: HTMLElement, snapshot: PanelChildVisibility)
 
 export function restoreNativePanelChildren(panel: HTMLElement | null, owner?: HTMLElement): void {
 	if (!panel) return;
+	const watch = panelCommitObservers.get(panel);
+	if (watch && (!owner || watch.owner === owner)) {
+		stopRetiringPanel(panel);
+		watch.observer.disconnect();
+		panelCommitObservers.delete(panel);
+	}
 	const snapshots = panelVisibilitySnapshots.get(panel);
 	if (!snapshots) return;
 	for (const [element, snapshot] of snapshots) {
@@ -203,7 +243,26 @@ export function restoreAllNativePanelChildren(doc: Document): void {
 	for (const panel of [...(ownedPanelsByDocument.get(doc) || [])]) restoreNativePanelChildren(panel);
 }
 
-export function commitNativePanelRoot(panel: HTMLElement, root: HTMLElement): void {
+export function commitNativePanelRoot(panel: HTMLElement, root: HTMLElement, preserveRetiring = false): void {
+	if (!preserveRetiring) {
+		stopRetiringPanel(panel);
+		const watch = panelCommitObservers.get(panel);
+		if (watch) watch.retiring = false;
+	}
+	const priorWatch = panelCommitObservers.get(panel);
+	if (!priorWatch || priorWatch.owner !== root) {
+		priorWatch?.observer.disconnect();
+		const observer = new MutationObserver(() => {
+			// Steam may append its new tab content after our React commit. Hide
+			// only direct siblings of this still-authorized linked root, before paint.
+			if (!root.isConnected || (root.parentElement !== panel && !panelCommitObservers.get(panel)?.retiring)
+				|| !isCurrentLinkedGamepadTarget(panel.ownerDocument,
+					root.dataset.gdlShortcutAppId || '', root.dataset.gdlSteamAppId || '')) return;
+			commitNativePanelRoot(panel, root, true);
+		});
+		observer.observe(panel, { childList: true });
+		panelCommitObservers.set(panel, { owner: root, observer, retiring: false });
+	}
 	let snapshots = panelVisibilitySnapshots.get(panel);
 	if (!snapshots) panelVisibilitySnapshots.set(panel, snapshots = new Map());
 	let panels = ownedPanelsByDocument.get(panel.ownerDocument);
@@ -411,7 +470,7 @@ export function ensureNativePanelRoot(
 	root.setAttribute('flow-children', 'column');
 	root.setAttribute('focusable', 'false');
 	panel.dataset.gdlBpNativePanel = '1';
-	if (root.parentElement && root.parentElement !== panel) restoreNativePanelChildren(root.parentElement);
+	if (root.parentElement && root.parentElement !== panel) retireNativePanelChildren(root.parentElement, root);
 	if (root.parentElement !== panel) panel.appendChild(root);
 	if (panel.firstChild !== root) panel.insertBefore(root, panel.firstChild);
 	const fallback = doc.getElementById('gdl-bp-detail-fallback-panel');

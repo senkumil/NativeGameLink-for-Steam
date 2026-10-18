@@ -15,6 +15,7 @@ export interface NativeAchievementScreenParts {
 	page: Classes;
 }
 const states = new WeakMap<Document, { identity: object | null; count: number; parts: NativeAchievementScreenParts }>();
+const imageStates = new WeakMap<Document, { identity: object | null; count: number; parts: NativeAchievementScreenParts }>();
 function component(value: any, tokens: string[]): value is ComponentType<any> {
 	return Boolean(value && (typeof value === 'function' || value.$$typeof)
 		&& tokens.every(token => String(value.render || value.type || value).includes(token)));
@@ -23,7 +24,7 @@ function component(value: any, tokens: string[]): value is ComponentType<any> {
 /** Resolve only pure styles and explicit-data presentation exports. Steam's
  * AppID-backed header/screen also fetch account state and must not be mounted
  * for a linked shortcut. Factory signatures survive numeric module-ID changes. */
-export function resolveBigPictureAchievementScreenParts(doc: Document): NativeAchievementScreenParts {
+export function resolveBigPictureAchievementScreenParts(doc: Document, imageOnly = false): NativeAchievementScreenParts {
 	const empty: NativeAchievementScreenParts = { PersonalRow: null, ComparisonRow: null, HiddenRow: null,
 		Image: null, Search: null, row: {}, header: {}, tabs: {}, page: {} };
 	if (!doc.defaultView || doc.defaultView.document !== doc || doc.defaultView.closed) return empty;
@@ -31,9 +32,11 @@ export function resolveBigPictureAchievementScreenParts(doc: Document): NativeAc
 	const req = steamWebpackRuntime.getRequire(doc);
 	if (!req) return empty;
 	const identity = steamWebpackRuntime.getRuntimeIdentity(doc);
+	const count = steamWebpackRuntime.getModuleFactoryCount?.(doc) || 0;
+	const cache = imageOnly ? imageStates : states;
+	const cached = cache.get(doc);
+	if (cached?.identity === identity && cached.count === count) return cached.parts;
 	const factories = steamWebpackRuntime.getModuleFactories?.(doc) || [];
-	const cached = states.get(doc);
-	if (cached?.identity === identity && cached.count === factories.length) return cached.parts;
 	const read = (id: number): any => { try { return req(id); } catch { return null; } };
 	const pure = (legacyId: number, tokens: string[], exclude?: string): Classes => {
 		for (const { factory } of factories) {
@@ -56,6 +59,14 @@ export function resolveBigPictureAchievementScreenParts(doc: Document): NativeAc
 		return !req.m?.[legacyId] || !factories.length ? read(legacyId) : null;
 	};
 	const parts = { ...empty };
+	if (imageOnly) {
+		// The summary needs one image export. Opening a tab must not bootstrap
+		// the general achievement screen, its list rows and search components.
+		const image = presentation(3270, ['imgURL', 'hidden', 'glow'])?._;
+		if (component(image, ['imgURL', 'hidden', 'glow'])) parts.Image = image;
+		cache.set(doc, { identity, count, parts });
+		return parts;
+	}
 	parts.row = pure(18980, ['AchievementListItemBase', 'GlobalAchievementListItem', 'UnlockContainer', 'ProgressFill'], 'HeaderContainer');
 	parts.header = pure(83097, ['StatsBlock', 'BigStat', 'ProgressLabel', 'AchievementSearchHeader', 'Portrait']);
 	parts.tabs = pure(62645, ['Tab', 'Selected', 'TabRow', 'TabTitle']);
@@ -68,6 +79,6 @@ export function resolveBigPictureAchievementScreenParts(doc: Document): NativeAc
 	if (component(image, ['imgURL', 'hidden', 'glow'])) parts.Image = image;
 	const search = presentation(24124, ['strFilter', 'onChangeFilter', 'leftContent', 'zp:'])?.zp;
 	if (component(search, ['strFilter', 'onChangeFilter', 'leftContent'])) parts.Search = search;
-	states.set(doc, { identity, count: factories.length, parts });
+	states.set(doc, { identity, count, parts });
 	return parts;
 }

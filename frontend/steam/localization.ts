@@ -87,6 +87,7 @@ export const SPANISH_TRANSLATIONS: Record<string, string> = {
 	controller_ps5: 'Compatibilidad con DualSense',
 	family_sharing: 'Préstamo familiar',
 	trading_cards: 'Tarjetas',
+	trading_cards_empty: 'No hay tarjetas disponibles para mostrar.',
 	store_page: 'Página de la tienda',
 	historical_record: 'Ficha histórica',
 	information: 'Información',

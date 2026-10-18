@@ -53,6 +53,7 @@ const bp = load('frontend/features/big-picture/NativeBigPictureAchievements.tsx'
   '../shortcuts/registry': { getCommittedShortcutSteamAppId: value => mappings[`shortcut:${value >>> 0}`] || null },
   '../achievements/cache': cache,
   './NativeBigPictureAchievementScreen': { openBigPictureAchievementsScreen() {} },
+  './achievement-screen-parts': { resolveBigPictureAchievementScreenParts: () => ({ Image: null }) },
   '../../steam/gamepad/document-ui-runtime': { getDocumentReact: () => ({}) },
   '../../steam/gamepad/GamepadContext': { isCurrentLinkedGamepadTarget: currentProjectionTarget },
   '../../steam/ui/SteamUIModeService': { steamUIModeService: { isGamepadUI: doc => doc.gamepad === true } },

@@ -22,7 +22,7 @@ try {
   const page = await browser.newPage();
   await page.route('**/*', route => route.abort());
   await page.setContent('<!doctype html><html><body></body></html>');
-  const report = await page.evaluate(sources => {
+  const report = await page.evaluate(async sources => {
     let checks = 0;
     const check = (condition, message) => { if (!condition) throw Error(message); checks++; };
     const noop = () => {};
@@ -118,6 +118,25 @@ try {
     panel.restoreAllNativePanelChildren(document);
     check(f.children.slice(1).every((element, index) => signature(element) === f.before[index + 1]), 'Remaining children restore after removed-node pruning');
     f.host.remove();
+
+    // Native ContentTransition retains an outgoing tab beside the incoming one.
+    // Moving our single root must not reveal the original outgoing Activity.
+    f = fixture();
+    f.root.dataset.gdlShortcutAppId = shortcutId; f.root.dataset.gdlSteamAppId = '550';
+    panel.commitNativePanelRoot(f.host, f.root);
+    const incoming = document.createElement('section'); document.body.appendChild(incoming);
+    panel.retireNativePanelChildren(f.host, f.root); incoming.appendChild(f.root);
+    panel.commitNativePanelRoot(incoming, f.root);
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    check(f.children.every(child => getComputedStyle(child).display === 'none'),
+      'Outgoing native Activity stays hidden while Steam retains both transition panels');
+    const lateOutgoing = document.createElement('div'); lateOutgoing.textContent = 'Late outgoing Activity'; f.host.appendChild(lateOutgoing);
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    check(getComputedStyle(lateOutgoing).display === 'none', 'Late outgoing content is also hidden before painting');
+    f.host.remove(); await new Promise(resolve => requestAnimationFrame(resolve));
+    check(f.children.every((child, index) => signature(child) === f.before[index]) && !lateOutgoing.hidden,
+      'Finishing the native exit releases the detached outgoing panel and its original properties');
+    panel.restoreAllNativePanelChildren(document); incoming.remove();
 
     const foreign = document.createElement('div'); foreign.hidden = true;
     foreign.style.setProperty('display', 'none', 'important'); foreign.setAttribute('aria-hidden', 'true');

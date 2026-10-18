@@ -116,6 +116,7 @@ const bp = load('frontend/features/big-picture/NativeBigPictureAchievements.tsx'
   '../shortcuts/registry': { getCommittedShortcutSteamAppId: value => verified ? mappings[`shortcut:${value >>> 0}`] || null : null },
   '../achievements/cache': cache,
   './NativeBigPictureAchievementScreen': { openBigPictureAchievementsScreen() {} },
+  './achievement-screen-parts': { resolveBigPictureAchievementScreenParts: () => ({ Image: null }) },
   '../../steam/gamepad/document-ui-runtime': { getDocumentReact: () => ({}) },
   '../../steam/gamepad/GamepadContext': { isCurrentLinkedGamepadTarget: (doc, shortcutId, steamAppId) => Boolean(doc?.defaultView
     && !doc.defaultView.closed && doc.defaultView.document === doc && doc.body?.isConnected

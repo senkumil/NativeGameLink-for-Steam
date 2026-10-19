@@ -47,6 +47,7 @@ try {
         escapeHtml: value => String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;'),
         getGameData: async () => null,
         shortcutPathBasename: value => value.split(/[\\/]/).pop(),
+        cleanShortcutPath: value => String(value || '').replace(/^"|"$/g, ''),
         shortcutRuntimeHost: () => ({ getMainWindowDoc: () => document }),
         shouldAutoApplyNoLauncher: () => false,
         getPendingLinkJob: () => null,
@@ -73,7 +74,7 @@ try {
       assert.equal(await overlay.locator('.gdl-manual-link-tracking, .gdl-manual-link-tracking-input').count(), 0,
         'Legacy executable recommendations must not render an executable replacement checkbox');
       assert.equal(await overlay.locator('.gdl-manual-link-exe-summary').innerText(),
-        'Steam will keep launching the executable you selected: SparkingZERO.exe');
+        'Game path: D:\\Games\\SparkingZERO.exe');
       assert.doesNotMatch(await overlay.innerText(), /Shipping\.exe|Use the real game executable|closes after launching/i,
         'The review dialog must not expose replacement-executable instructions');
     };

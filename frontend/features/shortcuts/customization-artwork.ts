@@ -6,8 +6,10 @@ import { bindShortcutArtworkSettings, shortcutArtworkSettingsHtml } from './artw
 import { rememberedShortcutSteamAppId } from './link-history';
 import { documentHasNativeAddNonSteamDialog } from './native-add-guard';
 import { shortcutRuntimeHost } from './host';
-import { markNativeArtworkCustomization } from '../library/artwork';
+import { captureArtworkApplicationCurrent, markNativeArtworkCustomization } from '../library/artwork';
 import { backendLog, saveShortcutArtworkBackend } from '../../api/backend';
+import { writeAssetWithDeadline } from '../library/asset-write';
+import { hasPendingNativeAssetWrites, writeNativeAsset } from '../library/native-asset-write';
 
 type CustomizationSlotKind = 'portrait' | 'hero' | 'logo' | 'wide';
 
@@ -372,6 +374,8 @@ function chooseNativeArtworkFile(
 		const file = input.files?.[0];
 		if (!file) { cleanup(); return; }
 		void (async () => {
+			const currentApplication = captureArtworkApplicationCurrent(shortcutId, steamAppId);
+			const isCurrent = (): boolean => !view.closed && currentApplication();
 			try {
 				const dataUrl = await fileAsDataUrl(file, view);
 				if (!dataUrl || !/^data:image\/(?:png|jpe?g|webp);base64,/i.test(dataUrl)) throw new Error('invalid_image');
@@ -381,14 +385,18 @@ function chooseNativeArtworkFile(
 				const extension = mime.includes('png') ? 'png' : mime.includes('webp') ? 'webp' : 'jpg';
 				const imageType = NATIVE_ARTWORK_IMAGE_TYPES[slot];
 
-				const backendWrite = saveShortcutArtworkBackend({ request_json: JSON.stringify({
+				let backendConfirmedFailure = false;
+				const backendWrite = writeAssetWithDeadline(guard => saveShortcutArtworkBackend({ request_json: JSON.stringify({
 					shortcut_app_id: shortcutId,
 					steam_app_id: steamAppId,
 					image_type: imageType,
 					data_base64: base64,
 					extension,
-				}) }).then(raw => {
+					...guard,
+				}) }), isCurrent).then(raw => {
 					const response = parseBackendResponse(raw);
+					backendConfirmedFailure = response !== null && response?.error !== 'resource_deadline_exceeded'
+						&& response?.error !== 'superseded';
 					return response?.ok === true || response?.saved === true;
 				}).catch(() => false);
 
@@ -397,14 +405,11 @@ function chooseNativeArtworkFile(
 				// file concurrently can make Steam immediately restore the old preview.
 				let saved = await backendWrite;
 				const apps = (window as any).SteamClient?.Apps;
-				if (!saved && typeof apps?.SetCustomArtworkForApp === 'function') {
-					saved = await Promise.race([
-						Promise.resolve(apps.SetCustomArtworkForApp(shortcutId, base64, extension, imageType))
-							.then(result => result !== false).catch(() => false),
-						new Promise<boolean>(resolve => view.setTimeout(() => resolve(false), 5_000)),
-					]);
+				if (!saved && backendConfirmedFailure && isCurrent() && !hasPendingNativeAssetWrites(shortcutId) && typeof apps?.SetCustomArtworkForApp === 'function') {
+					saved = await writeNativeAsset(shortcutId, `artwork-${imageType}`,
+						() => apps.SetCustomArtworkForApp(shortcutId, base64, extension, imageType), isCurrent);
 				}
-				if (!saved) throw new Error('save_failed');
+				if (!saved || !isCurrent()) throw new Error('save_failed');
 
 				markNativeArtworkCustomization(shortcutId, steamAppId);
 				updateNativeArtworkPreview(row, dataUrl);

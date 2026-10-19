@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
+import { assetDeadlineRuntime } from './helpers/asset-deadline-runtime.mjs';
 
 let requests = 0;
 let status = 404;
@@ -14,7 +15,7 @@ const context = vm.createContext({
   fetch: async (_url, { signal }) => ({ ok: true, status: 200,
     blob: () => new Promise((_, reject) => signal.addEventListener('abort', () => reject(new Error('aborted')))),
   }),
-  require: () => ({ fetchArtworkImageBackend: async () => {
+  require: () => ({ ...assetDeadlineRuntime({ setTimeout: callback => setTimeout(callback, 10) }), fetchArtworkImageBackend: async () => {
     requests++;
     return JSON.stringify({ ok: false, status });
   } }),

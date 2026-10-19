@@ -70,10 +70,10 @@ function scope() {
   const list = new Element('_nativeSidebar'), icon = new Element('_nativeIcon');
   icon.parentElement = list;
   const details = new Element('_details');
-  const sidebarRecords = [{ target: list, addedNodes: [icon], removedNodes: [] }];
-  const detailsRecords = [{ target: details, addedNodes: [new Element('_newDetails')], removedNodes: [] }];
+  const sidebarRecords = [{ type: 'childList', target: list, addedNodes: [icon], removedNodes: [] }];
+  const detailsRecords = [{ type: 'childList', target: details, addedNodes: [new Element('_newDetails')], removedNodes: [] }];
   const owned = new Element('_owned'); owned.id = 'gdl-new-content';
-  const ownedRecords = [{ target: details, addedNodes: [owned], removedNodes: [] }];
+  const ownedRecords = [{ type: 'childList', target: details, addedNodes: [owned], removedNodes: [] }];
   const mixedOwnedRecords = [...sidebarRecords, ...ownedRecords];
   const mixedDetailsRecords = [...mixedOwnedRecords, ...detailsRecords];
   const globals = { window: win, HTMLElement: Element, Element, MutationObserver: win.MutationObserver,
@@ -105,7 +105,8 @@ const infoTarget = load('frontend/features/library/info-button-target.ts', {
 }, info.globals);
 const infoModule = load('frontend/features/library/info-panel.ts', {
   '../../core/text': {}, '../../core/dom': domSignals, '../../steam/css': { PLAYBAR_CLASS_MODULE: () => ({ native: false, classes: {} }), LIBRARY_SIDEBAR_CLASSES: () => ({ Container: '_nativeSidebar' }) },
-  '../../steam/localization': {}, '../../steam/native-dom': { elementsWithCssModuleClass: classElements, closestWithCssModuleClass: closestClass },
+  '../../steam/localization': {}, '../../steam/native-dom': { elementsWithCssModuleClass: classElements, closestWithCssModuleClass: closestClass,
+    hasCssModuleClass: (element, css) => element.classList.contains(css) },
   './native-route': { isPublicSteamLibraryRoute: doc => Boolean(doc.publicRoute), routedSteamAppId: doc => doc.routeId ?? null },
   '../../steam/library-details': nativeDetails,
   '../shortcuts/registry': { getCommittedShortcutSteamAppId: id => linkedInfo.get(id) || null },

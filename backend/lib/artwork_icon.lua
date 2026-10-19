@@ -1,6 +1,6 @@
 return function(deps)
 local fs = deps.fs
-local M, epochs = {}, {}
+local M, epochs, write_sequence = {}, {}, 0
 
 local chars, lookup, bchars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/", {}, {}
 for index = 1, #chars do
@@ -93,21 +93,38 @@ function M.validate(body, ext)
     return false
 end
 
-function M.write(grid_dir, shortcut_app_id, ext, body)
+function M.write(grid_dir, shortcut_app_id, ext, body, is_current)
     ext = tostring(ext or ""):lower(); if ext == "jpeg" then ext = "jpg" end
     if ext ~= "tga" and ext ~= "png" and ext ~= "ico" and ext ~= "jpg" then return nil, "invalid_extension" end
     if not M.validate(body, ext) then return nil, "invalid_image" end
+    local current, reason = true, nil
+    if is_current then current, reason = is_current() end
+    if not current then return nil, reason or "superseded" end
+    write_sequence = write_sequence + 1
     local filepath, temp_path, backup_path = fs.join(grid_dir, shortcut_app_id .. "_icon." .. ext), nil, nil
-    temp_path, backup_path = filepath .. ".tmp", filepath .. ".bak"
+    local suffix = ".gdl-" .. tostring(write_sequence)
+    temp_path, backup_path = filepath .. suffix .. ".tmp", filepath .. suffix .. ".bak"
     local file = io.open(temp_path, "wb"); if not file then return nil, "open_failed" end
     local wrote, write_error = file:write(body); local closed, close_error = file:close()
     if not wrote or not closed then os.remove(temp_path); return nil, tostring(write_error or close_error or "write_failed") end
-    os.remove(backup_path)
-    local had_previous = fs.exists(filepath); if had_previous then os.rename(filepath, backup_path) end
+    if is_current then current, reason = is_current() end
+    if not current then os.remove(temp_path); return nil, reason or "superseded" end
+    local had_previous = fs.exists(filepath)
+    if had_previous and not os.rename(filepath, backup_path) then os.remove(temp_path); return nil, "backup_failed" end
+    if is_current then current, reason = is_current() end
+    if not current then
+        os.remove(temp_path); if had_previous then os.rename(backup_path, filepath) end
+        return nil, reason or "superseded"
+    end
     local renamed, rename_error = os.rename(temp_path, filepath)
     if not renamed then
         os.remove(temp_path); if had_previous and fs.exists(backup_path) then os.rename(backup_path, filepath) end
         return nil, tostring(rename_error or "rename_failed")
+    end
+    if is_current then current, reason = is_current() end
+    if not current then
+        os.remove(filepath); if had_previous and fs.exists(backup_path) then os.rename(backup_path, filepath) end
+        return nil, reason or "superseded"
     end
     os.remove(backup_path)
     for _, old_ext in ipairs({ "tga", "ico", "jpg", "jpeg", "png" }) do

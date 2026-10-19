@@ -17,7 +17,13 @@ function queueHarness(shared = new Map()) {
   backendLog() {}, shortcutRuntimeHost: () => ({ getMainWindowDoc: () => ({ defaultView: { localStorage: storage } }) }),
   findMappingForShortcut: () => state.mapped, getFactoryResetEpoch: () => state.epoch,
   isFactoryEpochCurrent: epoch => epoch === state.epoch, isFactoryResetInProgress: () => false,
-  linkShortcutToSteam: async options => { state.calls.push(options.shortcutAppId); state.inputs.push(options); return state.result(options); },
+  linkShortcutToSteam: async options => {
+   state.calls.push(options.shortcutAppId); state.inputs.push(options);
+   const result = await state.result(options);
+   if (result.ok) state.mapped = options.steamAppId;
+   return result.ok && !Object.hasOwn(result, 'setup')
+    ? { ...result, setup: { artworkComplete: true, iconApplied: true } } : result;
+  },
  }, { window: { dispatchEvent() {} }, CustomEvent: class {}, setTimeout: () => 1, clearTimeout() {} });
  return { api, state, shared };
 }
@@ -39,6 +45,7 @@ const input = (id, extra = {}) => ({ shortcutAppId: id, title: 'Same Game', stea
  assert.equal(api.cancelPendingLinkJobs(3000000002, 'Same Game'), 1);
  assert.ok(api.getPendingLinkJob(a.id));
  assert.equal(api.getPendingLinkJob(b.id), null);
+ assert.equal(api.getLinkJobCompletion(b.id, b.createdAt), false, 'Cancellation never masquerades as completion');
 }
 {
  const { api, state } = queueHarness();
@@ -86,6 +93,16 @@ const input = (id, extra = {}) => ({ shortcutAppId: id, title: 'Same Game', stea
   assert.equal(Object.hasOwn(state.inputs[0], key), false, `Legacy queue payload must not forward ${key}`);
  }
 }
+{
+ const interrupted = { ...input(3000000001), id: 'interrupted-running', status: 'running', phase: 'assets',
+  attempts: 0, createdAt: 1, sessionId: 'terminated-cef-session' };
+ const { api, state } = queueHarness(new Map([['gdl-pending-link-jobs-v1', JSON.stringify([interrupted])]]));
+ assert.equal(api.getPendingLinkJob(interrupted.id).status, 'queued', 'A running job belongs only to the renderer that started it');
+ state.result = async () => ({ ok: true });
+ await api.processPendingLinkJobs();
+ assert.equal(state.calls.length, 1, 'A renderer restart resumes interrupted running work');
+ assert.equal(api.getPendingLinkJob(interrupted.id), null);
+}
 for (const error of ['invalid_appid', 'Error: refusing_to_modify_native_steam_app', 'shortcut_identity_ambiguous', 'shortcut_identity_changed']) {
  const { api, state } = queueHarness();
  state.result = async () => ({ ok: false, error });
@@ -94,6 +111,41 @@ for (const error of ['invalid_appid', 'Error: refusing_to_modify_native_steam_ap
  assert.equal(api.getPendingLinkJob(job.id).status, 'failed');
  await api.processPendingLinkJobs();
  assert.equal(state.calls.length, 1);
+}
+{
+ const { api, state } = queueHarness();
+ let finish;
+ state.result = options => new Promise(resolve => { finish = resolve; options.onPhase('assets'); });
+ const job = api.enqueueLinkJob(input(3000000001, { repairResources: true }));
+ const work = api.processPendingLinkJobs();
+ assert.equal(api.getPendingLinkJob(job.id).status, 'running', 'The current renderer must expose the actual running state');
+ assert.equal(api.getPendingLinkJob(job.id).phase, 'assets', 'Background setup publishes its active phase to an open dialog');
+ state.mapped = '100';
+ finish({ ok: true, setup: { artworkComplete: true, iconApplied: true } });
+ await work;
+ assert.equal(api.getPendingLinkJob(job.id), null);
+ assert.equal(api.getLinkJobCompletion(job.id, job.createdAt), true, 'Only verified successful queue retirement records completion');
+}
+{
+ const { api, state } = queueHarness();
+ state.result = async () => ({ ok: true, shortcutAppId: 3000000002, setup: { artworkComplete: true, iconApplied: true } });
+ const job = api.enqueueLinkJob(input(3000000001));
+ await api.processPendingLinkJobs();
+ assert.equal(api.getLinkJobCompletion(job.id, job.createdAt), true);
+ assert.equal(api.getLinkJobCompletedShortcutAppId(job.id, job.createdAt), 3000000002,
+  'Completion keeps the final regenerated shortcut ID even when retirement is its only event');
+}
+{
+ const { api, state } = queueHarness();
+ state.result = async () => ({ ok: true, setup: { artworkComplete: false, iconApplied: true } });
+ const job = api.enqueueLinkJob(input(3000000001));
+ await api.processPendingLinkJobs();
+ assert.equal(api.getPendingLinkJob(job.id).repairResources, true, 'Partial foreground recovery becomes a durable resource repair');
+ assert.equal(api.getLinkJobCompletion(job.id, job.createdAt), undefined, 'A committed identity alone cannot show Ready');
+ state.result = async () => ({ ok: true, setup: { artworkComplete: true, iconApplied: true } });
+ api.enqueueLinkJob(input(3000000001, { repairResources: true }));
+ await api.processPendingLinkJobs();
+ assert.equal(api.getLinkJobCompletion(job.id, job.createdAt), true);
 }
 {
  const { api, state } = queueHarness();
@@ -106,6 +158,48 @@ for (const error of ['invalid_appid', 'Error: refusing_to_modify_native_steam_ap
  api.enqueueLinkJob(input(3000000001, { repairResources: true }));
  await api.processPendingLinkJobs();
  assert.equal(api.getPendingLinkJob(job.id), null);
+}
+{
+ const timers = new Map(), requests = [], snapshots = [];
+ let timerId = 0;
+ const { refreshShortcutRecordsFromBackend: refresh, getAllShortcutRecords: records } = load('frontend/features/shortcuts/registry.ts', {
+  backendLog() {}, getSteamAppStore: () => null, replaceFallbackShortcutApps: value => snapshots.push(value),
+  listShortcutsBackend: () => new Promise(resolve => requests.push(resolve)),
+ }, { setTimeout: (callback, delay) => { const id = ++timerId; timers.set(id, { callback, delay }); return id; },
+  clearTimeout: id => timers.delete(id) });
+ const first = refresh();
+ assert.equal(refresh(), first, 'Concurrent VDF readers share one bounded backend request');
+ assert.equal(requests.length, 1);
+ const deadline = Array.from(timers.values()).find(timer => timer.delay === 1800);
+ assert.ok(deadline, 'A stalled VDF RPC has an internal deadline');
+ deadline.callback();
+ await first;
+ const second = refresh();
+ assert.equal(requests.length, 2, 'A stalled VDF RPC does not poison all future shortcut refreshes');
+ requests[1]({ shortcuts: [{ shortcut_app_id: 3000000002, title: 'Current shortcut', exe_path: 'current.exe' }] });
+ await second;
+ requests[0]({ shortcuts: [{ shortcut_app_id: 3000000001, title: 'Obsolete shortcut', exe_path: 'old.exe' }] });
+ await Promise.resolve(); await Promise.resolve();
+ assert.deepEqual(Array.from(records(), item => item.id), [3000000002], 'An expired VDF response cannot resurrect a pre-rename shortcut');
+ assert.equal(snapshots.length, 1, 'Only the current VDF snapshot reaches Steam fallback identity');
+}
+{
+ const doc = { defaultView: {} }, app = { exe: 'C:/Games/Battlefield 3/bf3.exe' };
+ let refreshes = 0, lookups = 0;
+ const { LinkOrchestrator } = load('frontend/features/shortcuts/link-orchestrator.ts', {
+  refreshShortcutRecordsFromBackend: () => { refreshes++; return new Promise(() => {}); },
+  getShortcutAppById: (id, owner) => { lookups++; assert.equal(owner, doc); return id === 3000000001 ? app : null; },
+  getAllShortcutRecords: owner => { assert.equal(owner, doc); return []; },
+  shortcutExecutableIdentity: value => String(value || '').toLowerCase(), readShortcutOverviewField: value => value.exe,
+ });
+ const tx = { isCurrent: () => true };
+ assert.equal(await LinkOrchestrator.resolveIdentity(tx,
+  { doc, title: 'bf3', shortcutAppId: 3000000001, shortcutExecutable: app.exe }, 'Battlefield 3'), 3000000001);
+ assert.equal(lookups, 1);
+ assert.equal(refreshes, 0, 'A concrete live ID and matching executable never wait on the VDF/HTTP queue');
+ await assert.rejects(LinkOrchestrator.resolveIdentity(tx,
+  { doc, title: 'bf3', shortcutAppId: 3000000001, shortcutExecutable: 'different.exe' }, 'Battlefield 3'), /shortcut_identity_changed/);
+ assert.equal(refreshes, 0, 'A known executable mismatch fails before any backend delay or mutation');
 }
 {
  const records = [];
@@ -150,7 +244,7 @@ function identityHarness() {
  const selectedExe = 'C:/Games/SparkingZERO/SparkingZERO.exe';
  const selectedStartDir = 'C:/Games/SparkingZERO';
  const replacementExe = 'C:/Games/SparkingZERO/Binaries/Win64/SparkingZERO-Win64-Shipping.exe';
- const state = { writes: [], neutralized: [], renames: 0, mapping: null, edition: null };
+ const state = { writes: [], neutralized: [], renames: 0, mapping: null, edition: null, mappingAccepted: true };
  let record = { id: originalId, title: 'Original shortcut', app: {
   display_name: 'Original shortcut', strShortcutExe: selectedExe, strShortcutStartDir: selectedStartDir,
  } };
@@ -177,7 +271,7 @@ function identityHarness() {
   isShortcutDismissed: () => false, undismissShortcut() {},
   shortcutMappingKey: id => `shortcut:${id}`, titleMappingKey: title => `title:${title}`,
   normalizeTitle: value => value.toLowerCase(),
-  updateMappingsChecked: async mapping => { state.mapping = mapping; return true; },
+  updateMappingsChecked: async mapping => { state.mapping = mapping; return state.mappingAccepted; },
   neutralizeSteamAppIdFileBackend: async ({ request_json }) => { state.neutralized.push(JSON.parse(request_json)); },
   fetchPlaytimeStatsBatch: async () => new Map(),
   shortcutRuntimeHost: () => ({}),
@@ -200,7 +294,62 @@ function identityHarness() {
  const options = { shortcutAppId: originalId, title: 'Original shortcut', currentTitle: 'Original shortcut',
   steamAppId: '1790600', shortcutExecutable: selectedExe, trackingExecutable: replacementExe,
   trackingStartDir: 'C:/Games/SparkingZERO/Binaries/Win64', deferAssetSync: true, refreshLibrary: false };
- return { state, options, selectedExe, selectedStartDir, renamedId, linking, LinkOrchestrator };
+ return { state, options, selectedExe, selectedStartDir, renamedId, linking, LinkOrchestrator, globals };
+}
+{
+ const { state, options, globals, linking } = identityHarness();
+ const ownerApps = globals.window.SteamClient.Apps;
+ options.doc = { defaultView: { SteamClient: { Apps: ownerApps } } };
+ globals.window.SteamClient = { Apps: { SetShortcutName() { throw new Error('wrong_steam_renderer'); } } };
+ const result = await linking.linkShortcutToSteam(options);
+ assert.equal(result.ok, true, 'A manual popup uses the Steam bridge belonging to its document');
+ assert.equal(state.renames, 1, 'The document bridge applies the official title instead of silently accepting a failed foreign bridge');
+}
+for (const acknowledgement of ['never', 'acknowledged']) {
+ const originalId = 3000000001, freshId = 3000000002, exe = 'C:/Games/Battlefield 3/bf3.exe';
+ const records = [{ id: originalId, app: { display_name: 'bf3', strShortcutExe: exe } }];
+ let renameCalls = 0;
+ const { LinkOrchestrator } = load('frontend/features/shortcuts/link-orchestrator.ts', {
+  getShortcutAppById: id => records.find(record => record.id === id)?.app,
+  getAllShortcutRecords: () => records,
+  refreshShortcutRecordsFromBackend: async () => {},
+  readShortcutOverviewField: (app, ...keys) => keys.map(key => app?.[key]).find(Boolean) || '',
+  shortcutExecutableIdentity: value => String(value || '').toLowerCase(),
+  getOptimalLauncherSkipArg: () => null, backendLog() {}, rememberOriginalShortcutTitle() {}, getShortcutEdition: () => null,
+ }, { window: { SteamClient: { Apps: { SetShortcutName() {
+  renameCalls++; return acknowledgement === 'never' ? new Promise(() => {}) : Promise.resolve();
+ } } } }, setTimeout: callback => { queueMicrotask(callback); return 1; }, clearTimeout() {} });
+ const tx = { initialShortcutAppId: originalId, resolvedShortcutAppId: originalId, targetSteamAppId: '1238820', isCurrent: () => true };
+ const options = { title: 'bf3', shortcutExecutable: exe }, data = { name: 'Battlefield 3' };
+ await assert.rejects(LinkOrchestrator.mutateShortcutIdentity(tx, options, data, data.name), /shortcut_rename_pending/,
+  `${acknowledgement}: the old row cannot falsely confirm the official title`);
+ await assert.rejects(LinkOrchestrator.mutateShortcutIdentity(tx, options, data, data.name), /shortcut_rename_pending/);
+ await assert.rejects(LinkOrchestrator.mutateShortcutIdentity(tx, options, data, 'Another Game'), /shortcut_rename_pending/,
+  'A new target cannot race an unobserved previous Steam rename');
+ assert.equal(renameCalls, 1, 'Retrying a stalled Steam bridge intent never issues a second overlapping rename');
+ records.push({ id: freshId, app: { display_name: data.name, strShortcutExe: exe } });
+ const recovered = await LinkOrchestrator.mutateShortcutIdentity(tx, options, data, data.name);
+ assert.equal(recovered.nameReady, true);
+ assert.equal(recovered.resolvedShortcutId, freshId, 'A late canonical row is recovered even while the stale old row remains visible');
+ assert.equal(renameCalls, 1, 'Observing a late rename completes identity without another bridge mutation');
+}
+{
+ const originalId = 3000000001, freshId = 3000000002, exe = 'E:/Juegos/Battlefield 3/bf3.exe';
+ const records = [{ id: originalId, app: { display_name: 'bf3', strShortcutExe: exe } }];
+ let refreshes = 0;
+ const { LinkOrchestrator } = load('frontend/features/shortcuts/link-orchestrator.ts', {
+  getShortcutAppById: id => records.find(record => record.id === id)?.app,
+  getAllShortcutRecords: () => records,
+  refreshShortcutRecordsFromBackend: async () => { refreshes++; records.push({ id: freshId, app: { display_name: 'Battlefield 3', strShortcutExe: exe } }); },
+  readShortcutOverviewField: (app, ...keys) => keys.map(key => app?.[key]).find(Boolean) || '',
+  shortcutExecutableIdentity: value => String(value || '').toLowerCase(),
+  getOptimalLauncherSkipArg: () => null, backendLog() {}, rememberOriginalShortcutTitle() {}, getShortcutEdition: () => null,
+ }, { window: { SteamClient: { Apps: { SetShortcutName: async () => {} } } },
+  setTimeout: callback => { queueMicrotask(callback); return 1; }, clearTimeout() {} });
+ const tx = { initialShortcutAppId: originalId, resolvedShortcutAppId: originalId, targetSteamAppId: '1238820', isCurrent: () => true };
+ const result = await LinkOrchestrator.mutateShortcutIdentity(tx, { title: 'bf3', shortcutExecutable: exe }, { name: 'Battlefield 3' }, 'Battlefield 3');
+ assert.equal(result.resolvedShortcutId, freshId, 'A backend-only startup registry can confirm the post-rename ID without getting stuck on its old snapshot');
+ assert.equal(refreshes, 1, 'Only an unobserved live rename needs the bounded VDF fallback refresh');
 }
 for (const entry of ['synchronizeShortcutOfficialIdentity', 'linkShortcutToSteam']) {
  const { state, options, selectedExe, selectedStartDir, renamedId, linking } = identityHarness();
@@ -212,6 +361,14 @@ for (const entry of ['synchronizeShortcutOfficialIdentity', 'linkShortcutToSteam
  assert.equal(state.mapping.set[`shortcut:${renamedId}`], options.steamAppId, `${entry} commits the regenerated identity`);
  assert.deepEqual(state.neutralized, [{ exe_path: selectedExe, start_dir: selectedStartDir }],
   `${entry} filesystem maintenance uses the preserved selected executable`);
+}
+{
+ const { state, options, linking, renamedId } = identityHarness();
+ state.mappingAccepted = false;
+ const result = await linking.linkShortcutToSteam(options);
+ assert.equal(result.ok, false);
+ assert.equal(result.error, 'mapping_identity_update_failed');
+ assert.equal(result.shortcutAppId, renamedId, 'A post-rename error preserves the confirmed new identity for the durable retry');
 }
 {
  const { state, LinkOrchestrator, options } = identityHarness();
@@ -250,7 +407,7 @@ for (const entry of ['synchronizeShortcutOfficialIdentity', 'linkShortcutToSteam
   detectGameCandidatesLocalBackend: async ({ request_json }) => { requests.push(JSON.parse(request_json)); return candidates; },
   detectGameCandidatesBackend: async ({ request_json }) => { requests.push(JSON.parse(request_json)); return candidates; },
   backendLog() {},
- }, { window: {}, setTimeout: () => 1 });
+ }, { window: {}, setTimeout: () => 1, clearTimeout() {} });
  const context = await detection.buildShortcutDetectionContext(null, 'SparkingZERO', 3000000001);
  assert.equal(context.exePath, selectedExe, 'Detection preserves the selected launcher executable');
  assert.equal(context.startDir, selectedStartDir);
@@ -291,4 +448,4 @@ for (const entry of ['synchronizeShortcutOfficialIdentity', 'linkShortcutToSteam
  timeout(); assert.equal(await pending, false);
  assert.equal(image.onload, null);
 }
-console.log('Link reliability passed: duplicate identity, cancellation races, interrupted-session recovery, terminal errors, incomplete icons, candidate warnings, invalid IDs, selected executable preservation, legacy payload isolation, original-executable detection, bounded image decoding.');
+console.log('Link reliability passed: duplicate identity, cancellation races, verified queue completion and final IDs, running phases, interrupted-session recovery, bounded recoverable VDF RPC, owner-document identity, stalled rename safety and late recovery, terminal errors, incomplete icons, candidate warnings, invalid IDs, selected executable preservation, legacy payload isolation, original-executable detection, bounded image decoding.');

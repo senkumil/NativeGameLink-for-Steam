@@ -33,11 +33,11 @@ function detectionTitleHint(title: string): string {
 	return hint.trim() || String(title || '').trim();
 }
 
-async function withDetectionBudget<T>(promise: Promise<T>, timeoutMs: number): Promise<T | null> {
-	return await Promise.race<T | null>([
-		promise.catch((): null => null),
-		new Promise<null>(resolve => setTimeout(() => resolve(null), timeoutMs)),
-	]);
+export function withDetectionBudget<T>(promise: Promise<T>, timeoutMs: number): Promise<T | null> {
+	return new Promise(resolve => {
+		const timer = setTimeout(() => resolve(null), timeoutMs);
+		promise.then(value => { clearTimeout(timer); resolve(value); }, () => { clearTimeout(timer); resolve(null); });
+	});
 }
 
 function readShortcutPathFromProperties(doc: Document, shortcutAppId: number): { exePath: string; startDir: string; launchOptions: string } {
@@ -145,7 +145,7 @@ export async function buildShortcutDetectionContext(
 		try {
 			const resolver = appsApi?.GetShortcutDataForPath;
 			if (typeof resolver === 'function') {
-				const resolved = await resolver(exePath);
+				const resolved = await withDetectionBudget(Promise.resolve(resolver(exePath)), 400);
 				exePath = cleanShortcutPath(resolved?.strExePath || exePath);
 				launchOptions = String(resolved?.strArguments || resolved?.strCmdline || launchOptions || '').trim();
 			}
@@ -229,7 +229,7 @@ import { mergeCandidateLists } from './candidate-merger';
 export async function detectShortcutCandidatesLocal(context: ShortcutDetectionContext): Promise<ShortcutDetectionResult | null> {
 	const titleHint = detectionTitleHint(context.title);
 	try {
-		const raw = await detectGameCandidatesLocalBackend({
+		const raw = await withDetectionBudget(detectGameCandidatesLocalBackend({
 			request_json: JSON.stringify({
 				title: titleHint,
 				exe_path: context.exePath,
@@ -238,7 +238,7 @@ export async function detectShortcutCandidatesLocal(context: ShortcutDetectionCo
 				shortcut_app_id: String(context.shortcutAppId),
 				phase: 'local',
 			}),
-		});
+		}), 1800);
 		const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
 		if (!parsed || typeof parsed !== 'object') return null;
 		const result = parseDetectionResult(parsed);
@@ -259,11 +259,11 @@ export async function enrichShortcutCandidatesRemote(
 	recoveryMode = false,
 ): Promise<ShortcutDetectionResult | null> {
 	if (signal?.aborted) return null;
-	const language = await getSteamLanguage().catch((): string => 'english');
+	const language = await withDetectionBudget(getSteamLanguage(), 400) || 'english';
 	if (signal?.aborted) return null;
 	const titleHint = detectionTitleHint(context.title);
 	try {
-		const raw = await detectGameCandidatesBackend({
+		const raw = await withDetectionBudget(detectGameCandidatesBackend({
 			request_json: JSON.stringify({
 				title: titleHint,
 				exe_path: context.exePath,
@@ -275,7 +275,7 @@ export async function enrichShortcutCandidatesRemote(
 				local_candidates: (localCandidates || []).slice(0, 6),
 				recovery_mode: recoveryMode,
 			}),
-		});
+		}), 6500);
 		if (signal?.aborted) return null;
 		const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
 		if (!parsed || typeof parsed !== 'object') return null;
@@ -290,7 +290,7 @@ export async function enrichShortcutCandidatesRemote(
 }
 
 export async function detectShortcutCandidates(context: ShortcutDetectionContext): Promise<ShortcutDetectionResult | null> {
-	const language = await getSteamLanguage().catch((): string => 'english');
+	const language = await withDetectionBudget(getSteamLanguage(), 400) || 'english';
 	const titleHint = detectionTitleHint(context.title);
 	const cacheKey = [DETECTION_MODEL_VERSION, context.shortcutAppId, titleHint, context.exePath, context.startDir, context.launchOptions, language].join('|');
 	try {

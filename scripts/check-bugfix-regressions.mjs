@@ -8,6 +8,7 @@ const detectionTs = read('frontend/features/shortcuts/detection.ts');
 const properties = read('frontend/features/shortcuts/properties.ts');
 const propertiesStyle = read('frontend/features/shortcuts/properties-style.ts');
 const manualLink = read('frontend/features/shortcuts/manual-link.ts');
+const manualLinkProgress = read('frontend/features/shortcuts/manual-link-progress.ts');
 const factoryReset = read('frontend/features/shortcuts/factory-reset.ts');
 const factoryUi = read('frontend/settings/FactoryResetSection.tsx');
 const unlinking = read('frontend/features/shortcuts/unlinking.ts');
@@ -194,7 +195,7 @@ assert(achievementProperties.includes('simulate_percent: 0') && !achievementProp
 assert(manualLink.includes('let enrichmentComplete = !loading'), 'manual link distinguishes searching from a final no-match result');
 assert(manualLink.includes("enrichmentComplete ? 'warning' : 'active'"), 'searching state cannot render as a warning');
 assert(!manualLink.includes('gdl-manual-link-result'), 'link result duplication removed; one status box remains');
-assert(manualLink.includes('PENDING_LINK_JOBS_CHANGED_EVENT') && !manualLink.includes('setInterval(refreshQueuedState'), 'background link status updates from queue events instead of one-second polling');
+assert(manualLink.includes('observeManualLinkJob') && manualLinkProgress.includes('PENDING_LINK_JOBS_CHANGED_EVENT') && !manualLink.includes('setInterval(refreshQueuedState'), 'background link status updates from queue events instead of one-second polling');
 assert(manualLink.includes("'2 · Prepare'") && manualLink.includes("'3 · Finish'"), 'link progress labels are simplified without duplicating Ready');
 assert(manualLink.includes("gdlText('link_status_preparing', 'Preparing game…')") && manualLink.includes("gdlText('link_status_applying_resources', 'Applying resources…')"), 'active link status uses action text instead of repeating progress labels');
 
@@ -237,7 +238,7 @@ assert(!bigPictureDetails.includes('function InfoTab(') && !bigPictureDetails.in
 
 // Removed/delisted artwork must not pay for a long chain of speculative Steam
 // CDN 404s before using a SteamGridDB recommendation that is already available.
-assert(artwork.includes('legacy ? 2500 : 12000'), 'known legacy titles use a short Steam metadata wait budget');
+assert(artwork.includes('legacy ? 2500 : 8_000'), 'known legacy titles use a short Steam metadata wait budget');
 assert(artwork.includes('legacyCommunityFirst') && artwork.includes('communityAroundProbes'), 'legacy artwork places resolved community assets before speculative CDN probes');
 assert(heroResolver.includes('preferCommunityBeforeDirectProbes'), 'Hero resolver has a retired-title fast path without weakening active-game Base-first policy');
 
@@ -261,7 +262,7 @@ assert(!newsLua.includes('appid == "221430"') && !newsLua.includes("appid == '22
 // only the modal leaves the Promise running; terminating Steam promotes a staged
 // intent into the normal retry queue on the next CEF session.
 assert(linkQueue.includes("status: 'staged' | 'queued' | 'running' | 'failed'") && linkQueue.includes('SESSION_ID'), 'durable link queue distinguishes same-session staged intents from resumable queued jobs');
-assert(linkQueue.includes('stageLinkJobForRecovery') && linkQueue.includes("sameSessionStage ? 'staged' : 'queued'"), 'interrupted staged links are promoted to queued on the next Steam session');
+assert(linkQueue.includes('stageLinkJobForRecovery') && linkQueue.includes("sameSessionStage ? 'staged' : sameSessionRunning ? 'running' : 'queued'") && linkQueue.includes("job.sessionId === SESSION_ID"), 'interrupted staged and running links are promoted to queued on the next Steam session');
 assert(manualLink.includes('stageLinkJobForRecovery({'), 'manual linking stages recovery before starting the foreground transaction');
 assert(properties.includes('stageLinkJobForRecovery({'), 'Properties linking stages recovery before starting the foreground transaction');
 assert(bulkLink.includes('stageLinkJobForRecovery({'), 'bulk linking stages each selected target before its identity mutation');

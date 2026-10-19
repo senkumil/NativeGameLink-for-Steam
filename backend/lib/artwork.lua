@@ -10,6 +10,91 @@ local lru = deps.lru_cache
 local icon_files = deps.artwork_icon
 local USER_AGENT = deps.user_agent or "NativeGameLink-for-Steam/2.0.0"
     local M = {}
+-- IPC cannot cancel a native HTTP download. Fence every mutation, including
+-- callbacks that finish after the frontend has stopped waiting. Generations
+-- are monotonically increasing safe integers supplied by the frontend; keep
+-- their high-water mark so a delayed older RPC cannot reclaim a newer slot.
+local resource_writes, resource_write_sequence = {}, 0
+local function resource_now_ms()
+    return deps.now_ms and deps.now_ms() or os.time() * 1000.0
+end
+local function begin_resource_write(request, shortcut_app_id, slot)
+    local expires = tonumber(request.expires_at_ms)
+    local generation = tonumber(request.resource_generation)
+    if (request.expires_at_ms == nil) ~= (request.resource_generation == nil)
+        or request.expires_at_ms ~= nil and (not expires or expires ~= expires or expires <= 0 or expires > 9007199254740991)
+        or request.resource_generation ~= nil and (not generation or generation ~= generation
+            or generation < 0 or generation > 9007199254740991 or generation ~= math.floor(generation)) then
+        return nil, "invalid_resource_deadline"
+    end
+    if expires and resource_now_ms() >= expires then return nil, "resource_deadline_exceeded" end
+    local key = tostring(shortcut_app_id) .. ":" .. tostring(slot)
+    local previous = resource_writes[key]
+    if previous and previous.generation and (not generation or generation < previous.generation
+        or previous.invalidated and generation == previous.generation) then
+        return nil, "superseded"
+    end
+    local owner = { generation = generation or (previous and previous.generation), expires = expires }
+    resource_writes[key] = owner
+    local function current()
+        if resource_writes[key] ~= owner then return false, "superseded" end
+        if expires and resource_now_ms() >= expires then return false, "resource_deadline_exceeded" end
+        return true
+    end
+    return current, nil, owner
+end
+local function invalidate_resource_writes(shortcut_app_id, slots)
+    for _, slot in ipairs(slots or { 0, 1, 2, 3, 4, "logo_position" }) do
+        local key = tostring(shortcut_app_id) .. ":" .. tostring(slot)
+        local previous = resource_writes[key]
+        resource_writes[key] = { generation = previous and previous.generation, invalidated = true }
+    end
+end
+local function resource_http_timeout(request, maximum)
+    local expires = tonumber(request.expires_at_ms)
+    return expires and math.max(1, math.min(maximum, math.ceil((expires - resource_now_ms()) / 1000))) or maximum
+end
+local function write_resource_file(target, body, is_current)
+    resource_write_sequence = resource_write_sequence + 1
+    local suffix = ".gdl-" .. tostring(resource_write_sequence)
+    local temp, backup = target .. suffix .. ".tmp", target .. suffix .. ".bak"
+    local current, reason = is_current()
+    if not current then return nil, reason end
+    local file = io.open(temp, "wb")
+    if not file then return nil, "open_failed" end
+    local wrote, write_error = file:write(body)
+    local closed, close_error = file:close()
+    if not wrote or not closed then os.remove(temp); return nil, tostring(write_error or close_error or "write_failed") end
+    current, reason = is_current()
+    if not current then os.remove(temp); return nil, reason end
+    local had_previous = fs.exists(target)
+    if had_previous then
+        local backed_up = os.rename(target, backup)
+        if not backed_up then os.remove(temp); return nil, "backup_failed" end
+    end
+    -- A native filesystem call can itself be slow. Recheck after backing up
+    -- and restore the previous resource if the request expired meanwhile.
+    current, reason = is_current()
+    if not current then
+        os.remove(temp)
+        if had_previous then os.rename(backup, target) end
+        return nil, reason
+    end
+    local moved = os.rename(temp, target)
+    if not moved then
+        os.remove(temp)
+        if had_previous then os.rename(backup, target) end
+        return nil, "commit_failed"
+    end
+    current, reason = is_current()
+    if not current then
+        os.remove(target)
+        if had_previous then os.rename(backup, target) end
+        return nil, reason
+    end
+    os.remove(backup)
+    return target
+end
 local function get_active_account_id()
     if util and util.get_active_account_id then
         return util.get_active_account_id()
@@ -224,7 +309,7 @@ function M.fetch_library_assets(request_json)
     local url = "https://api.steamcmd.net/v1/info/" .. appid
     local ok_http, res = pcall(http.get, url, {
         headers = { ["Accept"] = "application/json" },
-        timeout = 20,
+        timeout = resource_http_timeout(request, 20),
     })
     if not ok_http or not res or res.status ~= 200 or not res.body then
         logger:info("Library assets lookup failed for " .. appid .. " (HTTP "
@@ -400,6 +485,8 @@ function M.save_shortcut_artwork(request_json)
     if shortcut_app_id == "" or not image_type or image_type < 0 or image_type > 3 then
         return cjson.encode({ ok = false, error = "invalid_request" })
     end
+    local write_is_current, guard_error = begin_resource_write(request, shortcut_app_id, math.floor(image_type))
+    if not write_is_current then return cjson.encode({ ok = false, error = guard_error }) end
 
     local body = nil
     local url = tostring(request.url or "")
@@ -409,7 +496,7 @@ function M.save_shortcut_artwork(request_json)
                 ["Accept"] = "image/png,image/jpeg,image/webp,*/*",
                 ["User-Agent"] = USER_AGENT,
             },
-            timeout = 20,
+            timeout = resource_http_timeout(request, 20),
         })
         if ok_http and res and res.status == 200 and res.body and #res.body > 100 then
             body = res.body
@@ -418,6 +505,8 @@ function M.save_shortcut_artwork(request_json)
         end
     end
 
+    local current, reason = write_is_current()
+    if not current then return cjson.encode({ ok = false, error = reason }) end
     if not body then
         local raw_data = request.data_base64 or request.image_base64 or request.base64 or ""
         if raw_data ~= "" then
@@ -449,15 +538,8 @@ function M.save_shortcut_artwork(request_json)
     local suffixes = { [0] = "p", [1] = "_hero", [2] = "_logo", [3] = "" }
     local suffix = suffixes[math.floor(image_type)]
     local target = fs.join(grid_dir, shortcut_app_id .. suffix .. "." .. ext)
-    local temp = target .. ".tmp"
-    local file = io.open(temp, "wb")
-    if not file then return cjson.encode({ ok = false, error = "open_failed" }) end
-    local wrote = file:write(body)
-    local closed = file:close()
-    if not wrote or not closed then os.remove(temp); return cjson.encode({ ok = false, error = "write_failed" }) end
-    if fs.exists(target) then os.remove(target) end
-    local moved = os.rename(temp, target)
-    if not moved then os.remove(temp); return cjson.encode({ ok = false, error = "commit_failed" }) end
+    local saved, write_error = write_resource_file(target, body, write_is_current)
+    if not saved then return cjson.encode({ ok = false, error = write_error }) end
     for _, old_ext in ipairs({ "png", "jpg", "jpeg", "webp" }) do
         local old = fs.join(grid_dir, shortcut_app_id .. suffix .. "." .. old_ext)
         if old ~= target and fs.exists(old) then os.remove(old) end
@@ -478,9 +560,12 @@ function M.save_shortcut_icon(request_json)
     if shortcut_app_id == "" or steam_app_id == "" then
         return cjson.encode({ error = "invalid_appid" })
     end
+	local resource_is_current, guard_error = begin_resource_write(request, shortcut_app_id, 4)
+	if not resource_is_current then return cjson.encode({ saved = false, error = guard_error }) end
 	local icon_epoch = icon_files.begin(shortcut_app_id)
 	local function icon_write_is_current()
-		return icon_files.is_current(shortcut_app_id, icon_epoch)
+		if not icon_files.is_current(shortcut_app_id, icon_epoch) then return false, "superseded" end
+		return resource_is_current()
 	end
 
     local account_id = get_active_account_id()
@@ -497,15 +582,17 @@ function M.save_shortcut_icon(request_json)
     if icon_url ~= "" and icon_url:match("^https?://") then
         local ok_http, res = pcall(deps.binary_http.get, icon_url, {
             headers = { ["Accept"] = "image/png,image/jpeg,image/x-icon,*/*", ["User-Agent"] = USER_AGENT },
-            timeout = 15,
+            timeout = resource_http_timeout(request, 15),
         })
         if ok_http and res and res.status == 200 and res.body and #res.body > 100 then
             local ext = tostring(request.extension or "png"):lower()
             if res.body:byte(1) == 137 and res.body:sub(2, 4) == "PNG" then ext = "png"
             elseif res.body:byte(1) == 255 and res.body:byte(2) == 216 then ext = "jpg"
             end
-            if icon_write_is_current() then
-                local filepath, write_error = icon_files.write(grid_dir, shortcut_app_id, ext, res.body)
+            local current, reason = icon_write_is_current()
+            if not current then return cjson.encode({ saved = false, error = reason }) end
+            if current then
+                local filepath, write_error = icon_files.write(grid_dir, shortcut_app_id, ext, res.body, icon_write_is_current)
                 if filepath then
                     logger:info("Official shortcut icon saved from URL: " .. filepath)
                     return cjson.encode({ saved = true, path = filepath, extension = ext, source = icon_url })
@@ -518,8 +605,9 @@ function M.save_shortcut_icon(request_json)
     if icon_base64 ~= "" then
         local ext = tostring(request.extension or request.icon_extension or "png"):lower()
         local body = icon_files.decode_base64(icon_base64)
-		if not icon_write_is_current() then return cjson.encode({ error = "superseded" }) end
-        local filepath, write_error = icon_files.write(grid_dir, shortcut_app_id, ext, body)
+		local current, reason = icon_write_is_current()
+		if not current then return cjson.encode({ saved = false, error = reason }) end
+        local filepath, write_error = icon_files.write(grid_dir, shortcut_app_id, ext, body, icon_write_is_current)
         if filepath then
             logger:info("Official shortcut icon saved from frontend payload: " .. filepath)
             return cjson.encode({ saved = true, path = filepath, extension = ext, source = tostring(request.source or "frontend") })
@@ -528,9 +616,12 @@ function M.save_shortcut_icon(request_json)
         return cjson.encode({ error = "icon_payload_failed", detail = write_error })
     end
 
+    local current, reason = icon_write_is_current()
+    if not current then return cjson.encode({ saved = false, error = reason }) end
     local encoded_assets = M.fetch_library_assets(cjson.encode({
         steam_app_id = steam_app_id,
         language = language,
+        expires_at_ms = request.expires_at_ms,
     }))
     local ok_assets, resolved = pcall(cjson.decode, tostring(encoded_assets or ""))
     local candidates = ok_assets and type(resolved) == "table" and resolved.shortcut_icons or nil
@@ -539,12 +630,14 @@ function M.save_shortcut_icon(request_json)
     end
 
     for _, candidate in ipairs(candidates) do
+        local current, reason = icon_write_is_current()
+        if not current then return cjson.encode({ saved = false, error = reason }) end
         local url = type(candidate) == "table" and tostring(candidate.url or "") or ""
         local ext = type(candidate) == "table" and tostring(candidate.extension or ""):lower() or ""
         if (url:match("^https://cdn%.cloudflare%.steamstatic%.com/steamcommunity/public/images/apps/%d+/[0-9a-f]+%.[a-z]+$")
                 or url:match("^https://shared%.fastly%.steamstatic%.com/community_assets/images/apps/%d+/[0-9a-f]+%.[a-z]+$"))
             and (ext == "tga" or ext == "png" or ext == "ico" or ext == "jpg") then
-            local ok_http, res = pcall(deps.binary_http.get, url, { timeout = 20 })
+            local ok_http, res = pcall(deps.binary_http.get, url, { timeout = resource_http_timeout(request, 20) })
             if ok_http and res and res.status == 200 and res.body and #res.body > 100 then
                 if not icon_files.validate(res.body, ext) then
                     -- Steam publishes several icon candidates for the same app. Some
@@ -554,8 +647,9 @@ function M.save_shortcut_icon(request_json)
                     logger:info("Skipped unusable official icon candidate for " .. steam_app_id
                         .. " ext=" .. ext)
                 else
-					if not icon_write_is_current() then return cjson.encode({ error = "superseded" }) end
-                    local filepath, write_error = icon_files.write(grid_dir, shortcut_app_id, ext, res.body)
+					local current, reason = icon_write_is_current()
+					if not current then return cjson.encode({ saved = false, error = reason }) end
+                    local filepath, write_error = icon_files.write(grid_dir, shortcut_app_id, ext, res.body, icon_write_is_current)
                     if filepath then
                         logger:info("Official shortcut icon saved: " .. filepath)
                         return cjson.encode({ saved = true, path = filepath, extension = ext, source = url })
@@ -575,7 +669,7 @@ function M.save_shortcut_icon(request_json)
     return cjson.encode({ error = "icon_download_failed" })
 end
 
-local function remove_grid_files(grid_dir, sid, suffixes)
+local function remove_grid_files(grid_dir, sid, suffixes, is_current)
     local removed, sid_str = 0, tostring(sid or ""):match("(%d+)") or ""
     if not fs.exists(grid_dir) or sid_str == "" then return 0 end
     local sid_num = tonumber(sid_str)
@@ -587,14 +681,20 @@ local function remove_grid_files(grid_dir, sid, suffixes)
     end
     for _, id in ipairs(ids) do
         for _, suffix in ipairs(suffixes) do
-            for _, ext in ipairs({ "jpg", "jpeg", "png", "tga", "ico" }) do
+            for _, ext in ipairs({ "jpg", "jpeg", "png", "tga", "ico", "webp" }) do
                 local filepath = fs.join(grid_dir, id .. suffix .. "." .. ext)
-                if fs.exists(filepath) then os.remove(filepath); removed = removed + 1 end
+                if fs.exists(filepath) then
+                    if is_current then local current, reason = is_current(); if not current then return removed, reason end end
+                    os.remove(filepath); removed = removed + 1
+                end
             end
         end
         if has_logo_or_all then
             local json_path = fs.join(grid_dir, id .. ".json")
-            if fs.exists(json_path) then os.remove(json_path); removed = removed + 1 end
+            if fs.exists(json_path) then
+                if is_current then local current, reason = is_current(); if not current then return removed, reason end end
+                os.remove(json_path); removed = removed + 1
+            end
         end
     end
     return removed
@@ -602,16 +702,18 @@ end
 
 function M.clear_artwork_except_icon(shortcut_app_id)
 	icon_files.invalidate(shortcut_app_id)
+    invalidate_resource_writes(shortcut_app_id)
     local account_id = get_active_account_id()
     if not account_id then return cjson.encode({ error = "Could not determine active Steam user" }) end
     return cjson.encode({ removed = remove_grid_files(fs.join(millennium.steam_path(), "userdata", account_id, "config", "grid"), tostring(shortcut_app_id), { "p", "_hero", "_logo", "" }), icon_preserved = true })
 end
 
-function M.clear_artwork(shortcut_app_id)
-	icon_files.invalidate(shortcut_app_id)
-    local account_id = get_active_account_id()
-    if not account_id then return cjson.encode({ error = "Could not determine active Steam user" }) end
-    return cjson.encode({ removed = remove_grid_files(fs.join(millennium.steam_path(), "userdata", account_id, "config", "grid"), tostring(shortcut_app_id), { "p", "_hero", "_logo", "_icon", "" }) })
+function M.clear_artwork(shortcut_app_id, expires_at_ms, resource_generation)
+    local request = type(shortcut_app_id) == "table" and shortcut_app_id or {
+        shortcut_app_id = shortcut_app_id, expires_at_ms = expires_at_ms, resource_generation = resource_generation,
+    }
+    request.slots = { 0, 1, 2, 3, 4 }
+    return M.clear_artwork_slots(cjson.encode(request))
 end
 
 -- Relinking stages replacement artwork before publishing the new mapping. Only
@@ -635,9 +737,33 @@ function M.clear_artwork_slots(request_json)
         end
     end
     if #suffixes == 0 then return cjson.encode({ ok = true, removed = 0, slots = {} }) end
+    local guards = {}
+    if request.resource_generation ~= nil or request.expires_at_ms ~= nil then
+        for _, slot in ipairs(slots) do
+            local current, reason, owner = begin_resource_write(request, shortcut_app_id, slot)
+            if not current then return cjson.encode({ ok = false, error = reason }) end
+            owner.invalidated = true
+            guards[#guards + 1] = current
+        end
+        if seen[2] then
+            local current, reason, owner = begin_resource_write(request, shortcut_app_id, "logo_position")
+            if not current then return cjson.encode({ ok = false, error = reason }) end
+            owner.invalidated = true
+            guards[#guards + 1] = current
+        end
+    else
+        invalidate_resource_writes(shortcut_app_id, slots)
+        if seen[2] then invalidate_resource_writes(shortcut_app_id, { "logo_position" }) end
+    end
+    if seen[4] then icon_files.invalidate(shortcut_app_id) end
+    local function clear_is_current()
+        for _, guard in ipairs(guards) do local current, reason = guard(); if not current then return false, reason end end
+        return true
+    end
     local account_id = get_active_account_id()
     if not account_id then return cjson.encode({ ok = false, error = "active_user_not_found" }) end
-    local removed = remove_grid_files(fs.join(millennium.steam_path(), "userdata", account_id, "config", "grid"), shortcut_app_id, suffixes)
+    local removed, reason = remove_grid_files(fs.join(millennium.steam_path(), "userdata", account_id, "config", "grid"), shortcut_app_id, suffixes, clear_is_current)
+    if reason then return cjson.encode({ ok = false, removed = removed, error = reason }) end
     return cjson.encode({ ok = true, removed = removed, slots = slots })
 end
 
@@ -657,6 +783,7 @@ function M.clear_all_linked_artworks()
                     local sid = tostring(shortcut_id):match("(%d+)$")
                     if sid then
 						icon_files.invalidate(sid)
+                        invalidate_resource_writes(sid)
                         removed = removed + remove_grid_files(grid_dir, sid, { "p", "_hero", "_logo", "_icon", "" })
                         local json_path = fs.join(grid_dir, sid .. ".json")
                         if fs.exists(json_path) then os.remove(json_path) end
@@ -733,14 +860,14 @@ function M.save_custom_logo_position(request_param)
     if not shortcut_app_id or not account_id or type(pos) ~= "table" then
         return cjson.encode({ ok = false, error = "invalid_params" })
     end
+    local write_is_current, guard_error = begin_resource_write(req, shortcut_app_id, "logo_position")
+    if not write_is_current then return cjson.encode({ ok = false, error = guard_error }) end
     local grid_dir = fs.join(millennium.steam_path(), "userdata", account_id, "config", "grid")
     if not fs.exists(grid_dir) then pcall(fs.create_dir_all, grid_dir) end
     local json_path = fs.join(grid_dir, shortcut_app_id .. ".json")
     local payload = cjson.encode({ nVersion = 1, logoPosition = pos })
-    local f = io.open(json_path, "w")
-    if not f then return cjson.encode({ ok = false, error = "open_failed" }) end
-    f:write(payload)
-    f:close()
+    local saved, write_error = write_resource_file(json_path, payload, write_is_current)
+    if not saved then return cjson.encode({ ok = false, error = write_error }) end
     return cjson.encode({ ok = true, exists = true, path = json_path })
 end
 

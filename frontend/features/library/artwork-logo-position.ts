@@ -1,6 +1,8 @@
 import { backendLog, readCustomLogoPositionBackend, saveCustomLogoPositionBackend } from '../../api/backend';
 import { layoutFingerprint, readLogoLayout, STEAM_DEFAULT_LOGO_POSITION, type SteamLogoPinPosition } from './logo-layout';
 import { saveNativeShortcutLogoPosition } from './native-logo-position';
+import { readAssetWithDeadline } from './asset-deadline';
+import { writeAssetWithDeadline } from './asset-write';
 
 export type { SteamLogoPinPosition };
 
@@ -98,6 +100,7 @@ function legacyAutomaticPosition(position: SteamLogoPosition): boolean {
 async function applyPosition(
 	shortcutAppId: number, steamAppId: string, rawPosition: unknown, force: boolean,
 	fallbackPin: SteamLogoPinPosition, source: string, isCurrent: () => boolean, suppliedLayout?: LogoLayout,
+	deadlineMs = Number.POSITIVE_INFINITY,
 ): Promise<boolean> {
 	if (!isCurrent()) return false;
 	if (!force && isLogoPositionVerified(shortcutAppId, steamAppId)) return true;
@@ -110,7 +113,11 @@ async function applyPosition(
 	// artwork choice must not borrow an adjustment from the previously installed logo.
 	const unknownNewPair = force && !suppliedLayout && (source === 'community' || source === 'user_selection');
 	try {
-		let response: any = await readCustomLogoPositionBackend({ shortcut_app_id: String(shortcutAppId) });
+		let response: any = await readAssetWithDeadline(readCustomLogoPositionBackend({ shortcut_app_id: String(shortcutAppId) }),
+			Math.min(4_000, deadlineMs - Date.now()));
+		// An unavailable read cannot establish whether Steam's current position
+		// was adjusted by the user. Retry later without overwriting that position.
+		if (response === null) return false;
 		for (let attempt = 0; attempt < 3 && typeof response === 'string'; attempt++) response = JSON.parse(response);
 		if (!isCurrent()) return false;
 		const actual = response?.ok && response?.exists ? response.logo_position : null;
@@ -120,7 +127,8 @@ async function applyPosition(
 		let layout = suppliedLayout;
 		if (!unknownNewPair && !layout?.key && (manual || reset || hasAdjustment || changedInSteam || previousForGame?.source === 'manual')) {
 			try {
-				const installed = await readLogoLayout(shortcutAppId);
+				const installed = await readAssetWithDeadline(readLogoLayout(shortcutAppId), Math.min(4_000, deadlineMs - Date.now()));
+				if (!installed) return false;
 				if (layout) {
 					const logo = layout.logo || installed.logo, hero = layout.hero || installed.hero;
 					layout = { logo, hero, key: layoutFingerprint(logo, hero) };
@@ -150,12 +158,21 @@ async function applyPosition(
 		// Keep disk and Steam's own custom-image cache on the same final position.
 		// No image decoding, hero analysis or second automatic sizing pass occurs.
 		if (!same(actual, position)) {
-			try { await saveCustomLogoPositionBackend({ request_json: JSON.stringify({ shortcut_app_id: String(shortcutAppId), logo_position: position }) }); }
+			try {
+				const raw = await writeAssetWithDeadline(guard => saveCustomLogoPositionBackend({ request_json: JSON.stringify({
+					shortcut_app_id: String(shortcutAppId), logo_position: position, ...guard,
+				}) }), isCurrent, deadlineMs);
+				if (raw === null) return false;
+				let saved: any = raw;
+				for (let attempt = 0; attempt < 3 && typeof saved === 'string'; attempt++) saved = JSON.parse(saved);
+				if (saved?.ok === false || saved?.error) return false;
+			}
 			catch (error) { backendLog(`Disk logo position save error for ${shortcutAppId}: ${String(error)}`); }
 		}
 		if (!isCurrent()) return false;
 		for (let attempt = 0; attempt < 3; attempt++) {
-			const accepted = await saveNativeShortcutLogoPosition(shortcutAppId, position, isCurrent);
+			const accepted = await saveNativeShortcutLogoPosition(shortcutAppId, position, isCurrent,
+				Math.min(5_000, deadlineMs - Date.now()));
 			if (!isCurrent()) return false;
 			if (accepted) {
 				markSaved(shortcutAppId, steamAppId, position, source, pairKey);
@@ -174,6 +191,7 @@ async function applyPosition(
 export function applyLogoPosition(
 	shortcutAppId: number, steamAppId: string, rawPosition: unknown, force: boolean,
 	fallbackPin: SteamLogoPinPosition, source: string, isCurrent: () => boolean, layout?: LogoLayout,
+	deadlineMs = Number.POSITIVE_INFINITY,
 ): Promise<boolean> {
 	if (!Number.isInteger(shortcutAppId) || shortcutAppId < 2147483648 || shortcutAppId > 4294967295
 		|| !/^\d+$/.test(steamAppId) || !isCurrent()) return Promise.resolve(false);
@@ -186,9 +204,13 @@ export function applyLogoPosition(
 	// bridge call, so an older completion can never become the final disk/cache write.
 	const request: PositionRequest = { steamAppId, signature, official: Boolean(rawPosition), manual, cancelled: false, layout, promise: Promise.resolve(false) };
 	positionRequests.set(shortcutAppId, request);
-	const current = (): boolean => positionRequests.get(shortcutAppId) === request && !request.cancelled && isCurrent();
-	request.promise = Promise.resolve(active?.promise).catch(() => false)
-		.then(() => applyPosition(shortcutAppId, steamAppId, rawPosition, force, fallbackPin, source, current, layout))
+	const current = (): boolean => positionRequests.get(shortcutAppId) === request && !request.cancelled
+		&& Date.now() < deadlineMs && isCurrent();
+	const work = Promise.resolve(active?.promise).catch(() => false)
+		.then(() => applyPosition(shortcutAppId, steamAppId, rawPosition, force, fallbackPin, source, current, layout, deadlineMs));
+	request.promise = (Number.isFinite(deadlineMs)
+		? readAssetWithDeadline(work, deadlineMs - Date.now()).then(result => result === true)
+		: work)
 		.finally(() => { if (positionRequests.get(shortcutAppId) === request) positionRequests.delete(shortcutAppId); });
 	return request.promise;
 }

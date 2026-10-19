@@ -7,7 +7,7 @@ import { gdlText } from '../../steam/localization';
 import { getShortcutAppById, readShortcutOverviewField, shortcutExecutableIdentity } from '../../steam/shortcuts';
 import {
 	applyOfficialShortcutIcon, getModernLibraryAssets, invalidateLibraryAssetCaches,
-	refreshModernLibraryAssets, reserveShortcutArtworkTarget, resolveShortcutIdAfterRename, spoofArtwork, type ArtworkApplyResult,
+	refreshModernLibraryAssets, reserveShortcutArtworkTarget, spoofArtwork, type ArtworkApplyResult,
 } from '../library/artwork';
 import {
 	clearShortcutArtworkForAppIdChange,
@@ -36,6 +36,48 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, errorCode: strin
 			error => { clearTimeout(timer); reject(error); },
 		);
 	});
+}
+
+interface PendingShortcutRename {
+	name: string;
+	previousId: number;
+	idsBeforeRename: Set<number>;
+	promise: Promise<unknown>;
+}
+const pendingShortcutRenames = new Map<string, PendingShortcutRename>();
+
+function shortcutDisplayName(app: any): string {
+	return String(app?.display_name || app?.m_strDisplayName || app?.strDisplayName || '').trim();
+}
+
+/** The bridge can acknowledge a rename before Steam publishes the new row.
+ * Confirm the official title and executable together; an old existing row is
+ * insufficient evidence and must never receive the final mapping. */
+async function confirmShortcutRename(
+	tx: LinkTransaction, options: OrchestratorLinkOptions, name: string,
+	previousId: number, idsBeforeRename: Set<number>, expectedExecutable: string,
+): Promise<number> {
+	const expected = shortcutExecutableIdentity(expectedExecutable);
+	let stableCandidate = 0;
+	for (const wait of [0, 50, 100, 180, 300, 500, 800]) {
+		if (wait) await new Promise(resolve => setTimeout(resolve, wait));
+		// When the live app store is still hydrating, the VDF registry must also
+		// observe Steam's rename; reusing its pre-rename snapshot cannot confirm it.
+		if (wait === 500) await refreshShortcutRecordsFromBackend();
+		if (!tx.isCurrent()) throw new Error('transaction_aborted');
+		const matches = (app: any): boolean => shortcutDisplayName(app) === name
+			&& (!expected || shortcutExecutableIdentity(readShortcutOverviewField(
+				app, 'strShortcutExe', 'm_strShortcutExe', 'shortcut_exe', 'strExePath',
+			)) === expected);
+		if (matches(getShortcutAppById(previousId, options.doc || undefined))) return previousId;
+		const candidates = getAllShortcutRecords(options.doc)
+			.filter(record => !idsBeforeRename.has(record.id) && matches(record.app));
+		if (candidates.length > 1) throw new Error('shortcut_identity_ambiguous');
+		const candidate = candidates[0]?.id || 0;
+		if (candidate && candidate === stableCandidate) return candidate;
+		stableCandidate = candidate;
+	}
+	throw new Error('shortcut_rename_pending');
 }
 
 export interface OrchestratorLinkOptions {
@@ -72,17 +114,12 @@ export class LinkOrchestrator {
 		const initialId = options.shortcutAppId || 0;
 		const executableHint = options.shortcutExecutable || '';
 
-		const waits = [0, 100, 250, 500, 900, 1500, 2500];
-		await refreshShortcutRecordsFromBackend().catch((): void => {});
 		const expectedExecutable = shortcutExecutableIdentity(executableHint);
-
-		for (const wait of waits) {
+		const resolveLiveIdentity = (): number | null => {
 			if (!tx.isCurrent()) throw new Error('transaction_aborted');
-			if (wait) await new Promise(resolve => setTimeout(resolve, wait));
-			if (wait >= 900) await refreshShortcutRecordsFromBackend().catch((): void => {});
 			if (initialId) {
 				const exact = Number(initialId);
-				const app = Number.isFinite(exact) && exact >= 2147483648 ? getShortcutAppById(exact) : null;
+				const app = Number.isFinite(exact) && exact >= 2147483648 ? getShortcutAppById(exact, options.doc || undefined) : null;
 				if (app) {
 					const executable = shortcutExecutableIdentity(readShortcutOverviewField(
 						app, 'strShortcutExe', 'm_strShortcutExe', 'shortcut_exe', 'strExePath',
@@ -96,7 +133,7 @@ export class LinkOrchestrator {
 					}
 				}
 			}
-			const records = getAllShortcutRecords().filter(record => record.id >= 2147483648);
+			const records = getAllShortcutRecords(options.doc).filter(record => record.id >= 2147483648);
 			if (expectedExecutable) {
 				const matches = records.filter(record => shortcutExecutableIdentity(readShortcutOverviewField(
 					record.app, 'strShortcutExe', 'm_strShortcutExe', 'shortcut_exe', 'strExePath',
@@ -106,7 +143,7 @@ export class LinkOrchestrator {
 					tx.resolvedShortcutAppId = matches[0].id;
 					return matches[0].id;
 				}
-				continue; // Never substitute a different executable just because the title matches.
+				return null; // Never substitute a different executable just because the title matches.
 			}
 			const names = new Set([title, canonicalName].map(value => String(value || '').trim().toLowerCase()).filter(Boolean));
 			const matches = records.filter(record => names.has(String(record.title || '').trim().toLowerCase()));
@@ -114,6 +151,24 @@ export class LinkOrchestrator {
 			if (matches.length === 1) {
 				tx.resolvedShortcutAppId = matches[0].id;
 				return matches[0].id;
+			}
+			return null;
+		};
+		// A known live shortcut is authoritative. Read the document owning the
+		// confirmation before waiting for an unrelated backend/VDF request.
+		const immediate = resolveLiveIdentity();
+		if (immediate) return immediate;
+		await refreshShortcutRecordsFromBackend().catch((): void => {});
+		const waits = [0, 100, 250, 500, 900, 1500, 2500];
+		for (const wait of waits) {
+			if (!tx.isCurrent()) throw new Error('transaction_aborted');
+			if (wait) await new Promise(resolve => setTimeout(resolve, wait));
+			const live = resolveLiveIdentity();
+			if (live) return live;
+			if (wait >= 900) {
+				await refreshShortcutRecordsFromBackend().catch((): void => {});
+				const refreshed = resolveLiveIdentity();
+				if (refreshed) return refreshed;
 			}
 		}
 
@@ -176,9 +231,8 @@ export class LinkOrchestrator {
 		const staleIds = new Set<number>([originalShortcutId, shortcutAppId]);
 		const officialName = String(canonicalName || data.name || options.title).trim();
 
-		const apps = (window as any).SteamClient?.Apps;
+		const apps = (options.doc?.defaultView as any)?.SteamClient?.Apps || (window as any).SteamClient?.Apps;
 		let noLauncherConfigured = false;
-		let nameApplied = false;
 		let nameReady = false;
 
 		const skipArg = getOptimalLauncherSkipArg(tx.targetSteamAppId);
@@ -197,9 +251,10 @@ export class LinkOrchestrator {
 				}
 			} catch {}
 		}
+		if (!tx.isCurrent()) throw new Error('transaction_aborted');
 
-		const shortcutBeforeRename = getShortcutAppById(shortcutAppId);
-		const currentName = String(shortcutBeforeRename?.display_name
+		const shortcutBeforeRename = getShortcutAppById(shortcutAppId, options.doc || undefined);
+		let currentName = String(shortcutBeforeRename?.display_name
 			|| shortcutBeforeRename?.m_strDisplayName
 			|| shortcutBeforeRename?.strDisplayName
 			|| options.title
@@ -211,47 +266,61 @@ export class LinkOrchestrator {
 
 		const expectedExecutable = readShortcutOverviewField(
 			shortcutBeforeRename, 'strShortcutExe', 'm_strShortcutExe', 'shortcut_exe', 'strExePath',
-		);
+		) || options.shortcutExecutable || '';
+		const renameKey = shortcutExecutableIdentity(expectedExecutable) || `shortcut:${shortcutAppId}`;
+		let pendingRename = pendingShortcutRenames.get(renameKey);
+		if (pendingRename) {
+			const intent = pendingRename;
+			const observed = getAllShortcutRecords(options.doc).filter(record =>
+				(record.id === intent.previousId || !intent.idsBeforeRename.has(record.id))
+				&& shortcutDisplayName(record.app) === intent.name
+				&& (!expectedExecutable || shortcutExecutableIdentity(readShortcutOverviewField(
+					record.app, 'strShortcutExe', 'm_strShortcutExe', 'shortcut_exe', 'strExePath',
+				)) === shortcutExecutableIdentity(expectedExecutable)));
+			if (observed.length > 1) throw new Error('shortcut_identity_ambiguous');
+			if (observed.length === 1) {
+				shortcutAppId = observed[0].id;
+				tx.resolvedShortcutAppId = shortcutAppId;
+				staleIds.add(shortcutAppId);
+				currentName = intent.name;
+				pendingShortcutRenames.delete(renameKey);
+				pendingRename = undefined;
+			}
+		}
 		const nameNeedsUpdate = Boolean(officialName && officialName !== currentName);
 
 		if (!nameNeedsUpdate) {
 			nameReady = Boolean(officialName);
 		} else if (typeof apps?.SetShortcutName === 'function') {
-			const idsBeforeRename = new Set(getAllShortcutRecords().map(record => record.id));
-			try {
-				await withTimeout(Promise.resolve(apps.SetShortcutName(shortcutAppId, officialName)), 6000, 'shortcut_rename_pending');
-				nameApplied = true;
-				shortcutAppId = await resolveShortcutIdAfterRename(
-					officialName, shortcutAppId, idsBeforeRename, expectedExecutable,
-				);
-				tx.resolvedShortcutAppId = shortcutAppId;
-				staleIds.add(shortcutAppId);
-				if (currentName) {
-					rememberOriginalShortcutTitle(shortcutAppId, currentName);
-				}
-				if (originalShortcutId !== shortcutAppId) {
-					const editionMeta = getShortcutEdition(originalShortcutId);
-					if (editionMeta) {
-						saveShortcutEdition(shortcutAppId, editionMeta);
-					}
-				}
-				const renamedShortcut = getShortcutAppById(shortcutAppId);
-				const renamedTitle = String(renamedShortcut?.display_name
-					|| renamedShortcut?.m_strDisplayName
-					|| renamedShortcut?.strDisplayName
-					|| '').trim();
-				nameReady = renamedTitle === officialName
-					|| (nameApplied && Boolean(getShortcutAppById(shortcutAppId)));
-			} catch (error) {
-				backendLog('Official shortcut rename error: ' + error);
-				if (getShortcutAppById(shortcutAppId)) {
-					nameReady = true;
-				} else if (String(error).includes('shortcut_rename_pending')) {
-					throw error;
-				}
+			const idsBeforeRename = new Set(getAllShortcutRecords(options.doc).map(record => record.id));
+			// Retain a stalled bridge intent. A retry may observe its result, but
+			// cannot issue another rename (or rename to another target) while the
+			// first call could still mutate Steam later.
+			if (pendingRename && pendingRename.name !== officialName) throw new Error('shortcut_rename_pending');
+			if (!pendingRename) {
+				if (pendingShortcutRenames.size >= 64) throw new Error('shortcut_rename_pending');
+				pendingRename = { name: officialName, previousId: shortcutAppId, idsBeforeRename,
+					promise: Promise.resolve().then(() => apps.SetShortcutName(shortcutAppId, officialName)) };
+				pendingShortcutRenames.set(renameKey, pendingRename);
+				const intent = pendingRename;
+				void intent.promise.catch(() => {
+					if (pendingShortcutRenames.get(renameKey) === intent) pendingShortcutRenames.delete(renameKey);
+				});
 			}
-		} else {
+			try { await withTimeout(pendingRename.promise, 6000, 'shortcut_rename_pending'); }
+			catch (error) { backendLog('Official shortcut rename acknowledgement pending: ' + error); }
+			shortcutAppId = await confirmShortcutRename(tx, options, officialName, pendingRename.previousId, pendingRename.idsBeforeRename, expectedExecutable);
+			if (pendingShortcutRenames.get(renameKey) === pendingRename) pendingShortcutRenames.delete(renameKey);
+			tx.resolvedShortcutAppId = shortcutAppId;
+			staleIds.add(shortcutAppId);
+			if (currentName) rememberOriginalShortcutTitle(shortcutAppId, currentName);
 			nameReady = true;
+		} else {
+			throw new Error('shortcut_rename_pending');
+		}
+		if (originalShortcutId !== shortcutAppId) {
+			const editionMeta = getShortcutEdition(originalShortcutId);
+			if (editionMeta) saveShortcutEdition(shortcutAppId, editionMeta);
 		}
 
 		return {
@@ -274,6 +343,7 @@ export class LinkOrchestrator {
 		options: OrchestratorLinkOptions,
 	): Promise<void> {
 		tx.phase = 'committing_mapping';
+		if (!tx.isCurrent()) throw new Error('transaction_aborted');
 		if (isShortcutDismissed(shortcutAppId)) throw new Error('link_cancelled_by_unlink');
 
 		const mappingSet: Record<string, string> = { [shortcutMappingKey(shortcutAppId)]: tx.targetSteamAppId };
@@ -303,7 +373,7 @@ export class LinkOrchestrator {
 
 		rememberShortcutSteamAppId(shortcutAppId, tx.targetSteamAppId);
 
-		const shortcutObj = getShortcutAppById(shortcutAppId);
+		const shortcutObj = getShortcutAppById(shortcutAppId, options.doc || undefined);
 		const shortcutExe = readShortcutOverviewField(shortcutObj, 'strShortcutExe', 'm_strShortcutExe', 'shortcut_exe', 'strExePath') || options.shortcutExecutable || '';
 		const shortcutStartDir = readShortcutOverviewField(shortcutObj, 'strShortcutStartDir', 'm_strShortcutStartDir', 'shortcut_start_dir', 'strStartDir');
 
@@ -409,17 +479,17 @@ export class LinkOrchestrator {
 				: (appIdChanged ? refreshModernLibraryAssets(steamAppId) : getModernLibraryAssets(steamAppId));
 			void assetWarmup.catch((): void => {});
 
-			// Step 2: Validate candidate
-			const { data, canonicalName } = await this.validateCandidate(tx, options);
+			// Metadata and shortcut discovery are read-only and independent. A slow
+			// Steam request must not add its entire wait to the VDF startup window.
+			options.onPhase?.('identity');
+			const [{ data, canonicalName }] = await Promise.all([
+				this.validateCandidate(tx, options),
+				this.resolveIdentity(tx, options, options.canonicalNameHint || title),
+			]);
 			if (!tx.isCurrent()) throw new Error('transaction_aborted');
 			void getNews(steamAppId, undefined, data).catch((): null => null);
 
-			// Step 1: Resolve identity
-			await this.resolveIdentity(tx, options, canonicalName);
-			if (!tx.isCurrent()) throw new Error('transaction_aborted');
-
 			onStatus(gdlText('linked_updating', '✓ Match verified for "{name}". Applying name, icon and artwork...', { name: canonicalName || title }), '#5ba32b');
-			options.onPhase?.('identity');
 
 			// Step 3: Mutate identity
 			const identityResult = await this.mutateShortcutIdentity(tx, options, data, canonicalName);
@@ -470,7 +540,7 @@ export class LinkOrchestrator {
 				clearStaleArtwork: replacingArtwork,
 			});
 			if (!tx.isCurrent()) throw new Error('transaction_aborted');
-			if (replacingArtwork && !options.deferAssetSync) {
+			if (replacingArtwork && !options.deferAssetSync && !assetResult.artwork.missing.includes('timeout')) {
 				await clearUnreplacedShortcutArtwork(finalShortcutId, assetResult.artwork.slots, assetResult.iconApplied);
 			}
 
@@ -523,7 +593,11 @@ export class LinkOrchestrator {
 				? gdlText('shortcut_rename_pending', 'Steam is updating the shortcut identity. NativeGameLink will finish the link in the background without using the previous entry.')
 				: gdlText('save_failed', 'Could not complete the link. It remains unlinked and can be retried.'),
 				error === 'shortcut_rename_pending' ? '#e5ad37' : '#ff6b6b');
-			return { ok: false, error };
+			const resolvedShortcutId = Number(tx.resolvedShortcutAppId || 0);
+			return { ok: false, error,
+				...(resolvedShortcutId >= 2147483648 && (initialId >= 2147483648 || resolvedShortcutId !== 2147483648)
+					? { shortcutAppId: resolvedShortcutId } : {}),
+			};
 		} finally {
 			releaseArtworkReservation();
 		}

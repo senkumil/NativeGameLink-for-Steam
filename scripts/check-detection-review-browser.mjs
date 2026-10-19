@@ -5,6 +5,7 @@ import { chromium } from 'playwright';
 
 const sources = Object.fromEntries(Object.entries({
   detection: 'frontend/features/shortcuts/detection.ts', manual: 'frontend/features/shortcuts/manual-link.ts',
+  progress: 'frontend/features/shortcuts/manual-link-progress.ts',
   merger: 'frontend/features/shortcuts/candidate-merger.ts', shortcuts: 'frontend/steam/shortcuts.ts',
   details: 'frontend/steam/library-details.ts', modal: 'frontend/core/modal.ts',
   properties: 'frontend/features/shortcuts/properties.ts',
@@ -15,6 +16,7 @@ const sources = Object.fromEntries(Object.entries({
 const browser = await chromium.launch({ headless: true, channel: process.env.PLAYWRIGHT_CHANNEL || 'msedge' });
 try {
   const page = await browser.newPage();
+  const pageErrors = []; page.on('pageerror', error => pageErrors.push(error.message));
   await page.route('https://**', route => route.abort());
   await page.setContent('<main>Isolated shortcut review; no Steam account or network</main>');
   const report = await page.evaluate(async sources => {
@@ -43,16 +45,19 @@ try {
       RetryingRequestCache: class { get(_key, loader) { return loader(); } clear() {} },
       expandCandidatesWithEditions: values => values,
       getShortcutDetailsBackend: async () => { state.events.push('context'); state.detailsCalls++; return state.details(); },
-      detectGameCandidatesLocalBackend: async ({ request_json }) => { const request = JSON.parse(request_json); state.events.push('local'); state.requests.push(request); return { candidates: state.local(request) }; },
+      detectGameCandidatesLocalBackend: async ({ request_json }) => { const request = JSON.parse(request_json); state.events.push('local'); state.requests.push(request); return { candidates: await state.local(request) }; },
       detectGameCandidatesBackend: async ({ request_json }) => { const request = JSON.parse(request_json); state.requests.push(request); const value = await state.remote(request); return Array.isArray(value) ? { candidates: value } : value; },
       getAllShortcutRecords: () => [record], shortcutAlreadyLinked: () => false, findMappingForShortcut: () => null,
       isShortcutDismissed: () => false, undismissShortcut() {},
       shortcutRuntimeHost: () => ({ getMainWindowDoc: () => document }),
+      navigateToLibraryShortcut: (_doc, shortcutId) => { state.navigated = shortcutId; },
       getGameData: async appid => { state.officialCalls.push(appid); return null; },
-      getPendingLinkJob: () => null, shouldAutoApplyNoLauncher: () => false,
+      getPendingLinkJob: () => state.job || null, getLinkJobCompletion: () => state.completed,
+      getLinkJobCompletedShortcutAppId: () => state.completed ? state.completedId || id : null,
+      PENDING_LINK_JOBS_CHANGED_EVENT: 'gdl:pending-link-jobs-changed', shouldAutoApplyNoLauncher: () => false,
       isShortcutIdentityMutationInProgress: () => false, clearShortcutEdition() {}, saveShortcutEdition() {},
       stageLinkJobForRecovery() {}, cancelPendingLinkJobs: (...args) => state.cancelled.push(args),
-      enqueueLinkJob: input => { state.queued.push(input); return { id: 'fixture-job' }; },
+      enqueueLinkJob: input => { state.queued.push(input); state.completed = undefined; return state.job = { ...input, id: 'fixture-job', createdAt: Date.now(), status: 'queued', attempts: 0 }; },
       linkShortcutToSteam: async input => { state.links.push(input); return state.linkResult(); },
       getCachedGameData: () => null, subscribeMappings: () => () => {}, SHORTCUT_PROPERTIES_STYLE: '',
       rememberedShortcutSteamAppId: () => state.remembered || '',
@@ -65,7 +70,7 @@ try {
       const exports = {}; modules[key] = exports;
       const require = spec => {
         const selected = { './detection': 'detection', './candidate-merger': 'merger', '../../steam/shortcuts': 'shortcuts',
-          '../../steam/library-details': 'details', '../../core/modal': 'modal' }[spec];
+          '../../steam/library-details': 'details', '../../core/modal': 'modal', './manual-link-progress': 'progress' }[spec];
         return selected ? load(selected) : mocks;
       };
       new Function('require', 'exports', sources[key])(require, exports); return exports;
@@ -109,11 +114,13 @@ try {
     check(state.requests[0].exe_path === exe && state.requests[0].start_dir === folder && state.requests[0].title === 'bf3',
       'The first production backend request preserves E:\\Juegos\\Battlefield 3\\bf3.exe and its folder');
     check(title() === 'Steam game detected' && name() === strong.name, 'Actual path evidence can immediately present the correct BF3 review');
+    check(modal().querySelector('.gdl-manual-link-exe-summary').textContent === `Game path: ${exe}`, 'Review displays the complete original executable path rather than a basename or title');
     releaseContext({ exe_path: exe, start_dir: folder });
     await waitFor(() => state.requests.some(request => request.phase === 'remote'), 'Remote phase did not run');
     await new Promise(resolve => setTimeout(resolve, 20));
     check(state.requests.every(request => request.exe_path === exe && request.start_dir === folder), 'Both local phases and remote enrichment retain the original full launch definition');
     check(selected().value === strong.appid && selected().options[1].value === strong.appid, 'A 7-point remote result cannot displace stronger local BF3 evidence');
+    check(state.requests.filter(request => request.phase === 'local').length === 1, 'Unchanged full executable context reuses its first local detection instead of repeating the same IPC');
     close();
 
     // Weak candidates remain available for deliberate manual selection.
@@ -171,6 +178,12 @@ try {
     close(); releaseContext({ exe_path: exe, start_dir: folder });
     await new Promise(resolve => setTimeout(resolve, 30));
     check(!modal() && state.requests.length === 1 && state.detailsCalls === 1, 'Closing review cancels publication and further detection after pending launch context resolves');
+    state.requests = []; state.details = () => new Promise(resolve => { releaseContext = resolve; });
+    manual.requestManualShortcutLink(id, 'bf3', document);
+    await waitFor(() => modal() && state.requests.length, 'Manual cancellation fixture did not start');
+    close(); releaseContext({ exe_path: exe, start_dir: folder });
+    await new Promise(resolve => setTimeout(resolve, 30));
+    check(!modal(), 'A manually opened review also stays closed when delayed context arrives');
 
     // Terminal identity failures must not queue a different executable for retry.
     record.app = { appid: id, display_name: 'bf3', strShortcutExe: exe, strShortcutStartDir: folder };
@@ -184,6 +197,57 @@ try {
         `${thrown ? 'Thrown' : 'Returned'} ${code} preserves explicit selection and original executable without automatic queue retry`);
       close();
     }
+
+    // Real modal progress must distinguish durable completion, failure and cancellation.
+    manual.showShortcutManualLinkModal(document, context, { candidates: [strong] });
+    let finishLink;
+    state.linkResult = () => new Promise(resolve => { finishLink = resolve; });
+    confirm().click(); await waitFor(() => finishLink, 'Pending foreground operation missing');
+    const initialStatus = modal().querySelector('.gdl-manual-link-status').textContent;
+    modal()._updateCandidates([weak], true); modal()._markEnrichmentComplete();
+    modal()._updateContext({ ...context, exePath: '', startDir: '' });
+    check(selected().value === strong.appid && confirm().disabled && selected().disabled && modal().querySelector('.gdl-manual-link-status').textContent === initialStatus,
+      'Late detection and context results cannot replace selection, clear progress or re-enable controls during linking');
+    check(modal().querySelector('.gdl-manual-link-exe-summary').textContent === `Game path: ${exe}`, 'Empty late context cannot erase a known full executable path');
+    check(![...modal().querySelectorAll('[data-step]')].some(step => step.style.color === 'rgb(164, 208, 7)'), 'No stage is marked complete before the foreground link is confirmed');
+    finishLink({ ok: true, shortcutAppId: id, setup: { artworkComplete: false, iconApplied: true } });
+    await waitFor(() => state.job && !modal().querySelector('.gdl-manual-link-cancel').disabled, 'Partial setup was not queued');
+    check(!modal().querySelector('.gdl-manual-link-status').textContent.includes('Linked.') && confirm().disabled, 'Partial setup remains pending without a premature linked/success message');
+    const latePaste = modal().querySelector('.gdl-manual-link-manual-appid'); latePaste.value = weak.appid; latePaste.dispatchEvent(new Event('input', { bubbles: true }));
+    check(latePaste.value === '' && confirm().disabled, 'A late clipboard input cannot replace or re-enable a queued link selection');
+    state.job.status = 'failed'; window.dispatchEvent(new Event('gdl:pending-link-jobs-changed'));
+    check(!confirm().disabled && confirm().style.display !== 'none' && !selected().disabled, 'Failed background resources restore a visible retry action and unlock selection');
+    close();
+    const enqueueFixture = async () => {
+      state.job = null; state.completed = undefined;
+      manual.showShortcutManualLinkModal(document, context, { candidates: [strong] });
+      state.linkResult = () => ({ ok: false, error: 'steam_api_timeout' }); confirm().click();
+      await waitFor(() => state.job, 'Background fixture did not queue');
+    };
+    await enqueueFixture(); state.job = null; state.completed = false;
+    window.dispatchEvent(new Event('gdl:pending-link-jobs-changed'));
+    check(!confirm().disabled && !modal().querySelector('.gdl-manual-link-status').textContent.includes('✓ Ready'), 'Removing or cancelling a queue job never reports a successful setup'); close();
+    await enqueueFixture(); state.job = null; state.completed = true; state.completedId = id + 1;
+    window.dispatchEvent(new Event('gdl:pending-link-jobs-changed'));
+    check(confirm().style.display === 'none' && modal().querySelector('.gdl-manual-link-status').textContent.includes('✓ Ready'), 'Verified queue completion alone finishes the dialog and hides the link action'); close();
+    check(state.navigated === id + 1, 'Finishing after a rename opens the final regenerated shortcut ID'); state.completedId = null;
+    await enqueueFixture(); const removedModal = modal(); close();
+    manual.showShortcutManualLinkModal(document, context, { candidates: [weak] });
+    state.job = null; state.completed = true; window.dispatchEvent(new Event('gdl:pending-link-jobs-changed'));
+    check(!removedModal.isConnected && !modal().querySelector('.gdl-manual-link-status').textContent.includes('✓ Ready') && confirm().style.display !== 'none', 'A closed modal releases its watcher and cannot complete a replacement dialog'); close();
+    state.job = null; state.completed = undefined; state.queued = [];
+
+    // Simulate unresponsive read-only IPC without spending real timeout budgets.
+    const originalTimeout = window.setTimeout;
+    window.setTimeout = (callback, delay, ...args) => originalTimeout(callback, [1800, 6500].includes(delay) ? 30 : delay, ...args);
+    let finishLocal;
+    state.local = () => new Promise(resolve => { finishLocal = resolve; });
+    check(await detection.detectShortcutCandidatesLocal(context) === null, 'Unresponsive local detection ends within its budget instead of leaving the modal searching forever');
+    finishLocal([weak]); state.local = () => [strong];
+    check((await detection.detectShortcutCandidatesLocal(context)).candidates[0].appid === strong.appid, 'A timed-out local request cannot poison the next successful detection');
+    state.remote = () => new Promise(() => {});
+    check(await detection.enrichShortcutCandidatesRemote(context, [strong]) === null, 'Unresponsive remote enrichment ends without blocking manual linking or preserving a forever-loading state');
+    window.setTimeout = originalTimeout; state.remote = () => [weak];
 
     const propertiesApi = load('properties');
     const mountProperties = () => {
@@ -255,5 +319,6 @@ try {
     return { checks: results.length, results };
   }, sources);
   assert(report.checks >= 25);
+  assert.deepEqual(pageErrors, [], 'Production modal event handlers must not throw browser errors');
   console.log(`Detection review browser passed: ${report.checks} checks; real modal/Properties, BF3 full-path/context retry, 7-point review, owner isolation, explicit/manual selection, confidence contradictions and terminal identity errors.`);
 } finally { await browser.close(); }

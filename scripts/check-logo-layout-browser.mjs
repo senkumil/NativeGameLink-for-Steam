@@ -50,7 +50,7 @@ for (const alias of [nativeSaveAliases.version, nativeSaveAliases.cacheVersion])
   assert(new RegExp(`\\b${alias}=1(?:[,;])`).test(storeFactory), 'The installed native logo/cache version is one');
 }
 assert(storeFactory.includes(`${nativeSaveAliases.key}="customimage"`), 'The installed native logo cache key is customimage');
-const sources = Object.fromEntries(['logo-layout', 'artwork-logo-position', 'native-logo-position', 'steam-bridge'].map(name => [name,
+const sources = Object.fromEntries(['logo-layout', 'artwork-logo-position', 'native-logo-position', 'steam-bridge', 'asset-deadline', 'asset-write', 'native-asset-write'].map(name => [name,
   ts.transpileModule(fs.readFileSync(path.join(root, `frontend/features/library/${name}.ts`), 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
   }).outputText,

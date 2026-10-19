@@ -2,7 +2,9 @@ import { backendLog, saveShortcutIconBackend } from '../../api/backend';
 import { getPreferences } from '../../core/preferences';
 import { steamLanguageSync } from '../../steam/localization';
 import { getCommunityArtwork } from './artwork-community';
-import { imageUrlToBase64 } from './artwork-image';
+import { decodeArtworkImage, imageUrlToBase64 } from './artwork-image';
+import { writeAssetWithDeadline } from './asset-write';
+import { hasPendingNativeAssetWrites, writeNativeAsset } from './native-asset-write';
 import { getModernLibraryAssets, getResolvedLibraryAssets } from './library-assets';
 import { waitForSteamBridge } from './steam-bridge';
 
@@ -39,27 +41,20 @@ function iconExtensionFromDataUrl(dataUrl: string, fallback: string): string {
 }
 
 async function imageDataUrlToPng(dataUrl: string): Promise<string | null> {
-	return await new Promise(resolve => {
-		const img = new Image();
-		img.onload = () => {
-			try {
-				const width = Math.max(1, img.naturalWidth || img.width || 32);
-				const height = Math.max(1, img.naturalHeight || img.height || 32);
-				const canvas = document.createElement('canvas');
-				canvas.width = width;
-				canvas.height = height;
-				const ctx = canvas.getContext('2d');
-				if (!ctx) { resolve(null); return; }
-				ctx.clearRect(0, 0, width, height);
-				ctx.drawImage(img, 0, 0, width, height);
-				resolve(canvas.toDataURL('image/png'));
-			} catch {
-				resolve(null);
-			}
-		};
-		img.onerror = () => resolve(null);
-		img.src = dataUrl;
-	});
+	const img = await decodeArtworkImage(dataUrl);
+	if (!img) return null;
+	try {
+		const width = Math.max(1, img.naturalWidth || img.width || 32);
+		const height = Math.max(1, img.naturalHeight || img.height || 32);
+		const canvas = document.createElement('canvas');
+		canvas.width = width;
+		canvas.height = height;
+		const ctx = canvas.getContext('2d');
+		if (!ctx) return null;
+		ctx.clearRect(0, 0, width, height);
+		ctx.drawImage(img, 0, 0, width, height);
+		return canvas.toDataURL('image/png');
+	} catch { return null; }
 }
 
 function iconCandidatePriority(ext: string): number {
@@ -156,12 +151,17 @@ export function clearShortcutIconInFlight(shortcutAppId?: number): void {
 }
 
 export async function applyOfficialShortcutIconOnce(shortcutAppId: number, steamAppId: string, force = false): Promise<boolean> {
+	if (hasPendingNativeAssetWrites(shortcutAppId)) return false;
 	const sessionKey = `${shortcutAppId}:${steamAppId}`;
 	if (!force && (appliedShortcutIcons.has(sessionKey) || shortcutIconMarkerMatches(shortcutAppId, steamAppId))) {
 		appliedShortcutIcons.add(sessionKey);
 		return true;
 	}
 	const generation = shortcutIconGeneration(shortcutAppId);
+	const isCurrent = (): boolean => shortcutIconGenerationIsCurrent(shortcutAppId, generation);
+	const saveIcon = (request: Record<string, unknown>): Promise<string | null> => hasPendingNativeAssetWrites(shortcutAppId)
+		? Promise.resolve(null) : writeAssetWithDeadline(guard =>
+			saveShortcutIconBackend({ request_json: JSON.stringify({ ...request, ...guard }) }), isCurrent);
 	try {
 		const apps = (window as any).SteamClient?.Apps;
 		const applyIconPath = async (path: string): Promise<boolean> => {
@@ -169,7 +169,7 @@ export async function applyOfficialShortcutIconOnce(shortcutAppId: number, steam
 			for (let attempt = 0; attempt < 2; attempt += 1) {
 				if (!shortcutIconGenerationIsCurrent(shortcutAppId, generation)) return false;
 				try {
-					const accepted = await waitForSteamBridge(apps.SetShortcutIcon(shortcutAppId, path), 5000);
+					const accepted = await writeNativeAsset(shortcutAppId, 'icon', () => apps.SetShortcutIcon(shortcutAppId, path), isCurrent);
 					if (accepted) {
 						if (!shortcutIconGenerationIsCurrent(shortcutAppId, generation)) return false;
 						try { await waitForSteamBridge(apps.RequestIconDataForApp?.(shortcutAppId), 1500); } catch {}
@@ -200,29 +200,27 @@ export async function applyOfficialShortcutIconOnce(shortcutAppId: number, steam
 		const payload = await fetchOfficialShortcutIconPayload(candidates);
 		if (!shortcutIconGenerationIsCurrent(shortcutAppId, generation)) return false;
 		if (payload) {
-			const saved = JSON.parse(await saveShortcutIconBackend({
-				request_json: JSON.stringify({
+			const saved = JSON.parse(await saveIcon({
 					shortcut_app_id: String(shortcutAppId),
 					steam_app_id: steamAppId,
 					language: steamLanguageSync() || 'english',
 					icon_base64: payload.base64,
 					extension: payload.extension,
 					source: payload.source,
-				}),
-			}));
+			}) || 'null');
 			if (!shortcutIconGenerationIsCurrent(shortcutAppId, generation)) return false;
 			if (saved?.saved && saved?.path) {
 				if (await applyIconPath(String(saved.path))) return true;
+				if (hasPendingNativeAssetWrites(shortcutAppId)) return false;
 			}
 		}
 
-		const response = JSON.parse(await saveShortcutIconBackend({
-			request_json: JSON.stringify({
+		const response = JSON.parse(await saveIcon({
 				shortcut_app_id: String(shortcutAppId),
 				steam_app_id: steamAppId,
 				language: steamLanguageSync() || 'english',
-			}),
-		}));
+		}) || 'null');
+		if (!isCurrent()) return false;
 		if (response?.saved && response?.path) {
 			return await applyIconPath(String(response.path));
 		}
@@ -239,27 +237,24 @@ export async function applyOfficialShortcutIconOnce(shortcutAppId: number, steam
 				if (dataUrl) {
 					const commaIdx = dataUrl.indexOf(',');
 					const base64 = commaIdx >= 0 ? dataUrl.substring(commaIdx + 1) : dataUrl;
-					const raw = await saveShortcutIconBackend({
-						request_json: JSON.stringify({
+					const raw = await saveIcon({
 							shortcut_app_id: String(shortcutAppId),
 							steam_app_id: steamAppId,
 							icon_base64: base64,
 							extension: 'png',
 							source: 'steamgriddb',
-						}),
 					});
-					try { commSaved = JSON.parse(raw); } catch {}
+					try { commSaved = raw ? JSON.parse(raw) : null; } catch {}
 				}
+				if (!isCurrent()) return false;
 				if (!commSaved?.saved && community.icon) {
-					const raw = await saveShortcutIconBackend({
-						request_json: JSON.stringify({
+					const raw = await saveIcon({
 							shortcut_app_id: String(shortcutAppId),
 							steam_app_id: steamAppId,
 							url: community.icon,
 							source: 'steamgriddb',
-						}),
 					});
-					try { commSaved = JSON.parse(raw); } catch {}
+					try { commSaved = raw ? JSON.parse(raw) : null; } catch {}
 				}
 				if (!shortcutIconGenerationIsCurrent(shortcutAppId, generation)) return false;
 				if (commSaved?.saved && commSaved?.path) {

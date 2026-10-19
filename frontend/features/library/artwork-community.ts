@@ -2,6 +2,7 @@ import { backendLog, fetchCommunityArtworkBackend, fetchCommunityArtworkCandidat
 import { getPreferences, steamGridDbApiKeyCandidates } from '../../core/preferences';
 import { RetryingRequestCache } from '../../core/request-cache';
 import { isLegacyGame } from './legacy-games';
+import { readAssetWithDeadline } from './asset-deadline';
 
 export interface CommunityArtworkAssets {
 	found?: boolean;
@@ -51,9 +52,9 @@ export async function retiredCommunityArtworkPreferred(steamAppId: string): Prom
 	if (isLegacyGame(steamAppId)) return true;
 	try {
 		return await retiredPreferenceRequests.get(steamAppId, async () => {
-			const raw = await fetchCommunityArtworkCandidatesBackend({ request_json: JSON.stringify({
+			const raw = await readAssetWithDeadline(fetchCommunityArtworkCandidatesBackend({ request_json: JSON.stringify({
 				steam_app_id: steamAppId, eligibility_only: true,
-			}) });
+			}) }), 4_000);
 			const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
 			return parsed && typeof parsed === 'object' ? parsed.eligible === true : null;
 		}) ?? false;
@@ -70,11 +71,11 @@ export async function getCommunityArtwork(steamAppId: string): Promise<Community
 	const key = `${steamAppId}:${apiKeyFingerprint(preferences.steamGridDbApiKey)}`;
 	try {
 		const result = await communityArtworkRequests.get(key, async () => {
-			const raw = await fetchCommunityArtworkBackend({ request_json: JSON.stringify({
+			const raw = await readAssetWithDeadline(fetchCommunityArtworkBackend({ request_json: JSON.stringify({
 				steam_app_id: steamAppId,
 				api_key: preferences.steamGridDbApiKey,
 				api_keys: steamGridDbApiKeyCandidates(preferences.steamGridDbApiKey),
-			}) });
+			}) }), 8_000);
 			const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
 			return parsed && typeof parsed === 'object' && !parsed.error
 				? parsed as CommunityArtworkAssets : null;

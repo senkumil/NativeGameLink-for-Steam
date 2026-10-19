@@ -9,6 +9,15 @@ import { normalizeSteamGameData } from './steam-game-data';
 export const gameDataCache: GameDataCache = {};
 const MAX_GAME_DATA_CACHE_KEYS = 64;
 
+/** Release read-only IPC deduplication when Millennium stops replying. Late
+ * replies are consumed without reaching the source or localized caches. */
+function readGameDataWithDeadline<T>(request: Promise<T>, timeoutMs: number): Promise<T | null> {
+	return new Promise(resolve => {
+		const timer = setTimeout(() => resolve(null), timeoutMs);
+		request.then(value => { clearTimeout(timer); resolve(value); }, () => { clearTimeout(timer); resolve(null); });
+	});
+}
+
 export interface CachedGameDataSnapshot {
 	data: SteamGameData;
 	fresh: boolean;
@@ -119,7 +128,7 @@ const sourceGameDataRequests = new RetryingRequestCache<SteamGameData>({
 function getSourceGameData(steamAppId: string, language: string): Promise<SteamGameData | null> {
 	const normalizedLanguage = String(language || 'english').toLowerCase();
 	return sourceGameDataRequests.get(gameDataLanguageKey(steamAppId, normalizedLanguage), async () => {
-		const raw = await fetchGameData({ steam_app_id: steamAppId, language: normalizedLanguage });
+		const raw = await readGameDataWithDeadline(fetchGameData({ steam_app_id: steamAppId, language: normalizedLanguage }), 4000);
 		const parsed = raw ? JSON.parse(raw) : null;
 		return parsed && !parsed.error ? normalizeSteamGameData(parsed) : null;
 	});
@@ -154,7 +163,7 @@ export async function getCanonicalGameData(steamAppId: string): Promise<SteamGam
 }
 
 export async function getGameData(steamAppId: string, requestedLanguage?: string): Promise<SteamGameData | null> {
-	const language = String(requestedLanguage || await getSteamLanguage().catch(() => 'english') || 'english').toLowerCase();
+	const language = String(requestedLanguage || await readGameDataWithDeadline(getSteamLanguage(), 400) || steamLanguageSync() || 'english').toLowerCase();
 	const languageKey = gameDataLanguageKey(steamAppId, language);
 	if (gameDataCache[languageKey]) {
 		const memory = normalizeSteamGameData(gameDataCache[languageKey]);

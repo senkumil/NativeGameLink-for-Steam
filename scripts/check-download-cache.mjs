@@ -2,9 +2,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
+import { assetDeadlineRuntime } from './helpers/asset-deadline-runtime.mjs';
 let calls=0,now=0,fail=false;
 let payload='A'.repeat(1024);
-const ctx=vm.createContext({exports:{},URL,AbortController,setTimeout,clearTimeout,Date:{now:()=>now},require:()=>({fetchArtworkImageBackend:async()=>{
+const ctx=vm.createContext({exports:{},URL,AbortController,setTimeout,clearTimeout,Date:{now:()=>now},require:()=>({...assetDeadlineRuntime(),fetchArtworkImageBackend:async()=>{
  calls++;await new Promise(resolve=>setImmediate(resolve));
  return JSON.stringify(fail?{ok:false,status:503}:{ok:true,mime:'image/png',data_base64:payload});
 }})});

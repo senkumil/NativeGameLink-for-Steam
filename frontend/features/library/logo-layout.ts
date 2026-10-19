@@ -1,4 +1,5 @@
 import { readLogoLayoutImagesBackend } from '../../api/backend';
+import { readAssetWithDeadline } from './asset-deadline';
 
 export type SteamLogoPinPosition = 'BottomLeft' | 'UpperLeft' | 'CenterCenter' | 'UpperCenter' | 'BottomCenter';
 
@@ -15,7 +16,7 @@ export function layoutFingerprint(logo: string, hero: string): string {
 
 /** Image pairs identify explicit manual adjustments, never automatic sizing. */
 export async function readLogoLayout(shortcutAppId: number): Promise<{ logo: string; hero: string; key: string }> {
-	let result: any = await readLogoLayoutImagesBackend({ shortcut_app_id: String(shortcutAppId) });
+	let result: any = await readAssetWithDeadline(readLogoLayoutImagesBackend({ shortcut_app_id: String(shortcutAppId) }), 4_000);
 	for (let i = 0; i < 3 && typeof result === 'string'; i++) result = JSON.parse(result);
 	const logo = String(result?.logo || '');
 	const hero = String(result?.hero || '');

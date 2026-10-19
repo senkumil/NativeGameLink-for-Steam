@@ -1,4 +1,28 @@
 import { fetchArtworkImageBackend } from '../../api/backend';
+import { readAssetWithDeadline } from './asset-deadline';
+
+/** CEF occasionally never emits load/error after a display/window transition.
+ * Detach both handlers on every outcome so an obsolete decode cannot resume
+ * canvas work after the caller has retried or changed the linked game. */
+export function decodeArtworkImage(dataUrl: string): Promise<HTMLImageElement | null> {
+	return new Promise(resolve => {
+		const image = new Image();
+		let settled = false;
+		const finish = (decoded: boolean): void => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			image.onload = null;
+			image.onerror = null;
+			if (!decoded) { try { image.src = ''; } catch {} }
+			resolve(decoded ? image : null);
+		};
+		const timer = setTimeout(() => finish(false), 4_000);
+		image.onload = () => finish(true);
+		image.onerror = () => finish(false);
+		try { image.src = dataUrl; } catch { finish(false); }
+	});
+}
 
 const missingImages = new Map<string, number>();
 export function imageUrlKnownMissing(url: string): boolean {
@@ -22,11 +46,18 @@ async function downloadImage(url: string): Promise<string | null> {
 	if (/^data:image\/(?:png|jpe?g|webp);base64,[A-Za-z0-9+/=\s]+$/i.test(url)) return url;
 	const fetchWithTimeout = async (value: string, timeoutMs = 4000): Promise<{ ok: boolean; status: number; blob: Blob | null }> => {
 		const controller = new AbortController();
+		const deadline = Date.now() + timeoutMs;
 		const timer = setTimeout(() => controller.abort(), timeoutMs);
 		try {
-			const response = await fetch(value, { signal: controller.signal });
+			// Abort is advisory in some CEF/provider implementations. Bound the
+			// complete headers/body read even when that signal is ignored.
+			const response = await readAssetWithDeadline(fetch(value, { signal: controller.signal }), timeoutMs);
+			if (!response) return { ok: false, status: 0, blob: null };
 			if (!response.ok) return { ok: false, status: response.status, blob: null };
-			return { ok: true, status: response.status, blob: await response.blob() };
+			const remaining = deadline - Date.now();
+			if (remaining <= 0) return { ok: false, status: 0, blob: null };
+			const blob = await readAssetWithDeadline(response.blob(), remaining);
+			return { ok: Boolean(blob), status: response.status, blob };
 		} catch {
 			return { ok: false, status: 0, blob: null };
 		} finally {
@@ -37,9 +68,22 @@ async function downloadImage(url: string): Promise<string | null> {
 	const blobToDataUrl = (blob: Blob): Promise<string | null> => new Promise(resolve => {
 		if (!blob || blob.size < 100) { resolve(null); return; }
 		const reader = new FileReader();
-		reader.onloadend = () => resolve((reader.result as string) || null);
-		reader.onerror = () => resolve(null);
-		reader.readAsDataURL(blob);
+		let settled = false;
+		const finish = (value: string | null): void => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			reader.onloadend = null;
+			reader.onerror = null;
+			resolve(value);
+		};
+		const timer = setTimeout(() => {
+			finish(null);
+			try { reader.abort(); } catch {}
+		}, 4_000);
+		reader.onloadend = () => finish(typeof reader.result === 'string' ? reader.result : null);
+		reader.onerror = () => finish(null);
+		try { reader.readAsDataURL(blob); } catch { finish(null); }
 	});
 	const isSteamCdn = url.includes('steamstatic.com') || url.includes('steampowered.com');
 	if (!isSteamCdn) {
@@ -63,7 +107,8 @@ async function downloadImage(url: string): Promise<string | null> {
 	}
 	// Steam CEF may reject external hosts due to CORS. Use backend as authoritative loader.
 	try {
-		const raw = await fetchArtworkImageBackend({ request_json: JSON.stringify({ url }) });
+		const raw = await readAssetWithDeadline(fetchArtworkImageBackend({ request_json: JSON.stringify({ url }) }), 8_000);
+		if (raw === null) return null;
 		let value: any = raw;
 		for (let attempt = 0; attempt < 3 && typeof value === 'string'; attempt += 1) value = JSON.parse(value);
 		rememberMissingImage(url, Number(value?.status));
@@ -106,7 +151,9 @@ export function imageUrlToBase64(url: string): Promise<string | null> {
 			imageCacheBytes += value.length * 2;
 		}
 		return value;
-	}).finally(() => imageTransfers.delete(url));
+	}).finally(() => {
+		if (imageTransfers.get(url) === request) imageTransfers.delete(url);
+	});
 	imageTransfers.set(url, request);
 	return request;
 }
@@ -125,88 +172,82 @@ export function imageUrlToBase64(url: string): Promise<string | null> {
  */
 export async function normalizeCommunityLogoDataUrl(dataUrl: string): Promise<string | null> {
 	if (!dataUrl) return null;
-	return await new Promise(resolve => {
-		const image = new Image();
-		image.onload = () => {
-			try {
-				const srcW = Math.max(1, image.naturalWidth || image.width);
-				const srcH = Math.max(1, image.naturalHeight || image.height);
-				const tempCanvas = document.createElement('canvas');
-				tempCanvas.width = srcW;
-				tempCanvas.height = srcH;
-				const tempCtx = tempCanvas.getContext('2d');
-				if (!tempCtx) { resolve(dataUrl); return; }
-				tempCtx.drawImage(image, 0, 0, srcW, srcH);
-				const imgData = tempCtx.getImageData(0, 0, srcW, srcH);
-				const data = imgData.data;
+	const image = await decodeArtworkImage(dataUrl);
+	if (!image) return dataUrl;
+	try {
+		const srcW = Math.max(1, image.naturalWidth || image.width);
+		const srcH = Math.max(1, image.naturalHeight || image.height);
+		const tempCanvas = document.createElement('canvas');
+		tempCanvas.width = srcW;
+		tempCanvas.height = srcH;
+		const tempCtx = tempCanvas.getContext('2d');
+		if (!tempCtx) { return dataUrl; }
+		tempCtx.drawImage(image, 0, 0, srcW, srcH);
+		const imgData = tempCtx.getImageData(0, 0, srcW, srcH);
+		const data = imgData.data;
 
-				let minX = srcW, minY = srcH, maxX = 0, maxY = 0;
-				let hasVisibleAlpha = false;
+		let minX = srcW, minY = srcH, maxX = 0, maxY = 0;
+		let hasVisibleAlpha = false;
 
-				for (let y = 0; y < srcH; y += 1) {
-					for (let x = 0; x < srcW; x += 1) {
-						const alpha = data[(y * srcW + x) * 4 + 3];
-						if (alpha > 10) {
-							hasVisibleAlpha = true;
-							if (x < minX) minX = x;
-							if (x > maxX) maxX = x;
-							if (y < minY) minY = y;
-							if (y > maxY) maxY = y;
-						}
-					}
+		for (let y = 0; y < srcH; y += 1) {
+			for (let x = 0; x < srcW; x += 1) {
+				const alpha = data[(y * srcW + x) * 4 + 3];
+				if (alpha > 10) {
+					hasVisibleAlpha = true;
+					if (x < minX) minX = x;
+					if (x > maxX) maxX = x;
+					if (y < minY) minY = y;
+					if (y > maxY) maxY = y;
 				}
-
-				if (!hasVisibleAlpha || minX > maxX || minY > maxY) {
-					minX = 0; minY = 0; maxX = srcW - 1; maxY = srcH - 1;
-				}
-
-				const visibleW = maxX - minX + 1;
-				const visibleH = maxY - minY + 1;
-				const excessivePadding = (visibleW < srcW * 0.85) || (visibleH < srcH * 0.85);
-
-				let cropX = 0, cropY = 0, cropW = srcW, cropH = srcH;
-				if (excessivePadding) {
-					const padX = Math.max(4, Math.round(visibleW * 0.04));
-					const padY = Math.max(4, Math.round(visibleH * 0.04));
-					cropX = Math.max(0, minX - padX);
-					cropY = Math.max(0, minY - padY);
-					cropW = Math.min(srcW - cropX, (maxX - minX + 1) + padX * 2);
-					cropH = Math.min(srcH - cropY, (maxY - minY + 1) + padY * 2);
-				}
-
-				const maxWidth = 1280;
-				const maxHeight = 720;
-				let destW = cropW;
-				let destH = cropH;
-
-				if (destW > maxWidth || destH > maxHeight) {
-					const scale = Math.min(maxWidth / destW, maxHeight / destH);
-					destW = Math.max(1, Math.round(destW * scale));
-					destH = Math.max(1, Math.round(destH * scale));
-				}
-
-				if (!excessivePadding && destW === srcW && destH === srcH) {
-					resolve(dataUrl);
-					return;
-				}
-
-				const outCanvas = document.createElement('canvas');
-				outCanvas.width = destW;
-				outCanvas.height = destH;
-				const outCtx = outCanvas.getContext('2d');
-				if (!outCtx) { resolve(dataUrl); return; }
-				outCtx.clearRect(0, 0, destW, destH);
-				outCtx.imageSmoothingEnabled = true;
-				outCtx.imageSmoothingQuality = 'high';
-				outCtx.drawImage(tempCanvas, cropX, cropY, cropW, cropH, 0, 0, destW, destH);
-				resolve(outCanvas.toDataURL('image/png'));
-			} catch {
-				resolve(dataUrl);
 			}
-		};
-		image.onerror = () => resolve(dataUrl);
-		image.src = dataUrl;
-	});
+		}
+
+		if (!hasVisibleAlpha || minX > maxX || minY > maxY) {
+			minX = 0; minY = 0; maxX = srcW - 1; maxY = srcH - 1;
+		}
+
+		const visibleW = maxX - minX + 1;
+		const visibleH = maxY - minY + 1;
+		const excessivePadding = (visibleW < srcW * 0.85) || (visibleH < srcH * 0.85);
+
+		let cropX = 0, cropY = 0, cropW = srcW, cropH = srcH;
+		if (excessivePadding) {
+			const padX = Math.max(4, Math.round(visibleW * 0.04));
+			const padY = Math.max(4, Math.round(visibleH * 0.04));
+			cropX = Math.max(0, minX - padX);
+			cropY = Math.max(0, minY - padY);
+			cropW = Math.min(srcW - cropX, (maxX - minX + 1) + padX * 2);
+			cropH = Math.min(srcH - cropY, (maxY - minY + 1) + padY * 2);
+		}
+
+		const maxWidth = 1280;
+		const maxHeight = 720;
+		let destW = cropW;
+		let destH = cropH;
+
+		if (destW > maxWidth || destH > maxHeight) {
+			const scale = Math.min(maxWidth / destW, maxHeight / destH);
+			destW = Math.max(1, Math.round(destW * scale));
+			destH = Math.max(1, Math.round(destH * scale));
+		}
+
+		if (!excessivePadding && destW === srcW && destH === srcH) {
+			return dataUrl;
+		}
+
+		const outCanvas = document.createElement('canvas');
+		outCanvas.width = destW;
+		outCanvas.height = destH;
+		const outCtx = outCanvas.getContext('2d');
+		if (!outCtx) { return dataUrl; }
+		outCtx.clearRect(0, 0, destW, destH);
+		outCtx.imageSmoothingEnabled = true;
+		outCtx.imageSmoothingQuality = 'high';
+		outCtx.drawImage(tempCanvas, cropX, cropY, cropW, cropH, 0, 0, destW, destH);
+		return outCanvas.toDataURL('image/png');
+	} catch {
+		return dataUrl;
+	}
 }
 
 /** Normalize community artwork to Steam's native canvas for each slot. */
@@ -221,35 +262,30 @@ export async function normalizeCommunityArtworkDataUrl(dataUrl: string, imageTyp
 	};
 	const baseTarget = targetByType[imageType];
 	if (!baseTarget) return dataUrl;
-	return await new Promise(resolve => {
-		const image = new Image();
-		image.onload = () => {
-			try {
-				const sourceWidth = Math.max(1, image.naturalWidth || image.width || baseTarget.width);
-				const sourceHeight = Math.max(1, image.naturalHeight || image.height || baseTarget.height);
-				const is2x = sourceWidth >= baseTarget.width * 1.4 || sourceHeight >= baseTarget.height * 1.4;
-				const target = is2x
-					? { width: baseTarget.width * 2, height: baseTarget.height * 2, fit: baseTarget.fit }
-					: baseTarget;
-				const scale = target.fit === 'cover'
-					? Math.max(target.width / sourceWidth, target.height / sourceHeight)
-					: Math.min(target.width / sourceWidth, target.height / sourceHeight);
-				const drawWidth = Math.max(1, Math.round(sourceWidth * scale));
-				const drawHeight = Math.max(1, Math.round(sourceHeight * scale));
-				const canvas = document.createElement('canvas');
-				canvas.width = target.width;
-				canvas.height = target.height;
-				const context = canvas.getContext('2d');
-				if (!context) { resolve(dataUrl); return; }
-				context.clearRect(0, 0, target.width, target.height);
-				context.imageSmoothingEnabled = true;
-				context.imageSmoothingQuality = 'high';
-				context.drawImage(image, Math.round((target.width - drawWidth) / 2),
-					Math.round((target.height - drawHeight) / 2), drawWidth, drawHeight);
-				resolve(canvas.toDataURL('image/png'));
-			} catch { resolve(dataUrl); }
-		};
-		image.onerror = () => resolve(dataUrl);
-		image.src = dataUrl;
-	});
+	const image = await decodeArtworkImage(dataUrl);
+	if (!image) return dataUrl;
+	try {
+		const sourceWidth = Math.max(1, image.naturalWidth || image.width || baseTarget.width);
+		const sourceHeight = Math.max(1, image.naturalHeight || image.height || baseTarget.height);
+		const is2x = sourceWidth >= baseTarget.width * 1.4 || sourceHeight >= baseTarget.height * 1.4;
+		const target = is2x
+			? { width: baseTarget.width * 2, height: baseTarget.height * 2, fit: baseTarget.fit }
+			: baseTarget;
+		const scale = target.fit === 'cover'
+			? Math.max(target.width / sourceWidth, target.height / sourceHeight)
+			: Math.min(target.width / sourceWidth, target.height / sourceHeight);
+		const drawWidth = Math.max(1, Math.round(sourceWidth * scale));
+		const drawHeight = Math.max(1, Math.round(sourceHeight * scale));
+		const canvas = document.createElement('canvas');
+		canvas.width = target.width;
+		canvas.height = target.height;
+		const context = canvas.getContext('2d');
+		if (!context) { return dataUrl; }
+		context.clearRect(0, 0, target.width, target.height);
+		context.imageSmoothingEnabled = true;
+		context.imageSmoothingQuality = 'high';
+		context.drawImage(image, Math.round((target.width - drawWidth) / 2),
+			Math.round((target.height - drawHeight) / 2), drawWidth, drawHeight);
+		return canvas.toDataURL('image/png');
+	} catch { return dataUrl; }
 }

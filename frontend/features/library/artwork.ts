@@ -7,9 +7,8 @@ import { getCommunityArtwork, retiredCommunityArtworkPreferred, type CommunityAr
 import { isLegacyGame } from './legacy-games';
 import {
 	clearLibraryAssetDataCaches, getModernLibraryAssets,
-	invalidateLibraryAssetDataCaches, type SteamLibraryAssets,
+	invalidateLibraryAssetDataCaches,
 } from './library-assets';
-import { waitForSteamBridge } from './steam-bridge';
 import { applyLogoPosition, invalidateLogoPosition, clearLogoPositionSaved, isLogoPositionVerified, isLogoPositionStorageKey, type SteamLogoPinPosition } from './artwork-logo-position';
 import {
 	buildHeroCandidateUrls,
@@ -22,9 +21,13 @@ import {
 	applyOfficialShortcutIconOnce,
 	clearShortcutIconMarker,
 	SHORTCUT_ICON_STORAGE_PREFIX,
+	invalidateShortcutIconGeneration,
 } from './shortcut-icon';
 import { getShortcutEdition } from '../shortcuts/editions';
 import { layoutFingerprint } from './logo-layout';
+import { writeAssetWithDeadline } from './asset-write';
+import { readAssetWithDeadline } from './asset-deadline';
+import { getPendingNativeAssetWrites, hasPendingNativeAssetWrites, writeNativeAsset } from './native-asset-write';
 export { getCachedLibraryAssets, getModernLibraryAssets, getResolvedLibraryAssets, refreshModernLibraryAssets, warmupAllMappedLibraryAssets } from './library-assets';
 export type { SteamLibraryAssets } from './library-assets';
 export { imageUrlToBase64, normalizeCommunityArtworkDataUrl, normalizeCommunityLogoDataUrl } from './artwork-image';
@@ -77,6 +80,11 @@ const shortcutIconInFlight = new Map<string, Promise<boolean>>();
 function artworkGeneration(shortcutAppId: number): number { return artworkGenerations.get(shortcutAppId) ?? 0; }
 function artworkGenerationIsCurrent(shortcutAppId: number, generation: number): boolean {
 	return artworkGeneration(shortcutAppId) === generation;
+}
+export function captureArtworkApplicationCurrent(shortcutAppId: number, steamAppId: string): () => boolean {
+	const generation = artworkGeneration(shortcutAppId);
+	return () => artworkGenerationIsCurrent(shortcutAppId, generation)
+		&& (!artworkTargetReservations.has(shortcutAppId) || artworkTargetReservations.get(shortcutAppId) === steamAppId);
 }
 /** Download Steam's official client icon and assign it through Steam's native API.
  * Identical callers share the same bridge operation so a timed-out foreground
@@ -263,6 +271,7 @@ export function clearArtworkSaved(shortcutAppId: number | string, preserveIcon =
 		const id = Number(shortcutAppId);
 		if (!Number.isFinite(id)) return;
 		artworkGenerations.set(id, artworkGeneration(id) + 1);
+		invalidateShortcutIconGeneration(id);
 		localStorage.removeItem(NATIVE_ARTWORK_OVERRIDE_PREFIX + id);
 		localStorage.removeItem(ART_STORAGE_PREFIX + id);
 		localStorage.removeItem(LEGACY_ART_STORAGE_PREFIX + id);
@@ -319,19 +328,21 @@ export async function supersedeArtworkApplications(shortcutAppId: number, preser
 	const activeIcons = Array.from(shortcutIconInFlight.entries())
 		.filter(([key]) => key.startsWith(`${shortcutAppId}:`))
 		.map(([, request]) => request);
-	const active = Array.from(new Set<Promise<unknown>>([...activeArtwork, ...activeIcons]));
+	const active = Array.from(new Set<Promise<unknown>>([...activeArtwork, ...activeIcons, ...getPendingNativeAssetWrites(shortcutAppId)]));
 	clearArtworkSaved(shortcutAppId, preserveIcon);
 	if (active.length === 0) return;
 	await Promise.race([
 		Promise.allSettled(active).then((): void => {}),
 		new Promise<void>(resolve => setTimeout(resolve, 7000)),
 	]);
+	if (hasPendingNativeAssetWrites(shortcutAppId)) throw new Error('shortcut_assets_pending');
 }
 export { isLogoPositionVerified } from './artwork-logo-position';
 export async function applyOfficialLogoPosition(
 	shortcutAppId: number, steamAppId: string, rawPosition: unknown, force = false,
 	fallbackPin: SteamLogoPinPosition = 'BottomLeft', source = 'none',
 	layout?: { logo: string; hero: string; key: string },
+	deadlineMs = Number.POSITIVE_INFINITY,
 ): Promise<boolean> {
 	if (!Number.isInteger(shortcutAppId) || shortcutAppId < 2147483648 || !/^\d+$/.test(steamAppId)) return false;
 	const generation = artworkGeneration(shortcutAppId);
@@ -344,14 +355,16 @@ export async function applyOfficialLogoPosition(
 	const communityLogo = source === 'community' || Boolean(getSavedCommunityArtworkSelection(shortcutAppId, steamAppId)?.logo)
 		|| provider === 'steamgriddb' || provider === 'user';
 	if (!rawPosition && !communityLogo) {
-		const modern = await getModernLibraryAssets(steamAppId).catch((): null => null);
+		const remaining = Math.min(8_000, deadlineMs - Date.now());
+		if (remaining <= 0) return false;
+		const modern = await readAssetWithDeadline(getModernLibraryAssets(steamAppId), remaining);
 		if (!isCurrent()) return false;
 		rawPosition = modern?.logo_position || null;
 		fallbackPin = ((rawPosition as any)?.pinned_position || (rawPosition as any)?.pinnedPosition || fallbackPin) as SteamLogoPinPosition;
 		if (rawPosition) source = modern?.logo_position_source || source;
 	}
 	return applyLogoPosition(shortcutAppId, steamAppId, rawPosition, force, fallbackPin, source,
-		isCurrent, layout);
+		isCurrent, layout, deadlineMs);
 }
 /** Set ALL artwork for a shortcut using SetCustomArtworkForApp.
  *  Signature: SteamClient.Apps.SetCustomArtworkForApp(appId, base64Data, fileExtension, imageType)
@@ -396,8 +409,11 @@ export function recordUserArtworkApplication(shortcutAppId: number, steamAppId: 
 }
 async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, _gameTitle: string, force = false, legacyPortraitOnly = false): Promise<ArtworkApplyResult> {
 	const key = shortcutAppId + ':' + steamAppId;
-	const generation = artworkGeneration(shortcutAppId);
-	const isCurrent = (): boolean => artworkGenerationIsCurrent(shortcutAppId, generation);
+	// One repair pass has one read/write budget. A long list of CDN aliases must
+	// not turn four missing images into minutes of sequential timeouts.
+	const deadlineMs = Date.now() + 28_000;
+	const isCurrent = captureArtworkApplicationCurrent(shortcutAppId, steamAppId);
+	if (hasPendingNativeAssetWrites(shortcutAppId)) return { complete: false, slots: [], missing: ['native_write_pending'], communitySlots: [] };
 	const existingMarker = !force ? readArtworkMarker(shortcutAppId, steamAppId) : null;
 	const userCommunity = getSavedCommunityArtworkSelection(shortcutAppId, steamAppId);
 	if (!force && nativeArtworkCustomizationActive(shortcutAppId, steamAppId)) {
@@ -427,7 +443,8 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, _game
 	if (!force && artworkAlreadySaved(shortcutAppId, steamAppId)) {
 		artworkSpoofed.add(key);
 		backendLog('Artwork already saved for ' + shortcutAppId + ' -> ' + steamAppId);
-		const positionReady = await applyOfficialLogoPosition(shortcutAppId, steamAppId, null);
+		const positionReady = await applyOfficialLogoPosition(shortcutAppId, steamAppId, null, false,
+			'BottomLeft', 'none', undefined, deadlineMs);
 		return { complete: positionReady, slots: positionReady ? [0, 1, 2, 3] : [0, 1, 3], missing: positionReady ? [] : ['logo'], communitySlots: [] };
 	}
 
@@ -447,19 +464,13 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, _game
 		const communityWithinBudget = async (): Promise<CommunityArtworkAssets | null> => {
 			const remaining = communityDeadline - Date.now();
 			if (remaining <= 0) return null;
-			return await Promise.race<CommunityArtworkAssets | null>([
-				preferredCommunityPromise,
-				new Promise<null>(resolve => setTimeout(() => resolve(null), remaining)),
-			]);
+			return await readAssetWithDeadline(preferredCommunityPromise, remaining);
 		};
 		// Removed/delisted AppIDs are slower because their modern Steam CDN/AppInfo
 		// paths often time out or 404. Resolve Steam metadata and SteamGridDB in
 		// parallel, and give known legacy titles only a short metadata wait budget.
 		const [modern, initialCommunity] = await Promise.all([
-			Promise.race<SteamLibraryAssets | null>([
-				modernPromise,
-				new Promise<null>(resolve => setTimeout(() => resolve(null), legacy ? 2500 : 12000)),
-			]),
+			readAssetWithDeadline(modernPromise, legacy ? 2500 : 8_000),
 			communityWithinBudget(),
 		]);
 		let preferredCommunity = initialCommunity;
@@ -572,13 +583,16 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, _game
 			prepared?: boolean;
 		}
 		const resolveSource = async ({ urls, imageType, label }: { urls: string[]; imageType: number; label: string }): Promise<ArtworkDownloadCandidate> => {
+			const sourceDeadline = Math.min(deadlineMs, Date.now() + 10_000);
 			const candidateList = Array.from(new Set(urls.filter(Boolean)));
 			const fallbackCandidateUrl = candidateList[0] || '';
 			for (const url of candidateList) {
-				if (!isCurrent()) break;
+				if (!isCurrent() || Date.now() >= sourceDeadline) break;
 				try {
-					const dataUrl = await imageUrlToBase64(url);
-					if (dataUrl && (explicitUserUrlSet.has(url) || await automaticArtworkMeetsSlotQuality(dataUrl, imageType))) {
+					const dataUrl = await readAssetWithDeadline(imageUrlToBase64(url), sourceDeadline - Date.now());
+					if (!isCurrent() || Date.now() >= sourceDeadline) break;
+					if (dataUrl && (explicitUserUrlSet.has(url) || await readAssetWithDeadline(
+						automaticArtworkMeetsSlotQuality(dataUrl, imageType), sourceDeadline - Date.now()))) {
 						return { url, dataUrl, imageType, label, community: communityUrlSet.has(url) };
 					}
 				} catch {}
@@ -603,6 +617,7 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, _game
 			return !item.dataUrl || (item.imageType === 3 && isLowResHeader(item.url) && !modern?.wide);
 		};
 		const enrichWithCommunity = async (items: ArtworkDownloadCandidate[]): Promise<void> => {
+			const enrichDeadline = Math.min(deadlineMs, Date.now() + 6_000);
 			if (!items.some(needsCommunityArtwork)) return;
 			const community = preferredCommunity || await communityWithinBudget();
 			if (!community) return;
@@ -612,13 +627,13 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, _game
 				2: community.logo || '', 3: community.wide || '',
 			};
 			for (const item of items) {
-				if (!isCurrent()) break;
+				if (!isCurrent() || Date.now() >= enrichDeadline) break;
 				if (!needsCommunityArtwork(item)) continue;
 				const url = communityUrlByType[item.imageType];
 				if (!url) continue;
-				const dataUrl = await imageUrlToBase64(url);
-				if (!isCurrent()) break;
-				if (dataUrl && await automaticArtworkMeetsSlotQuality(dataUrl, item.imageType)) {
+				const dataUrl = await readAssetWithDeadline(imageUrlToBase64(url), enrichDeadline - Date.now());
+				if (!isCurrent() || Date.now() >= enrichDeadline) break;
+				if (dataUrl && await readAssetWithDeadline(automaticArtworkMeetsSlotQuality(dataUrl, item.imageType), enrichDeadline - Date.now())) {
 					item.url = url;
 					item.dataUrl = dataUrl;
 					item.community = true;
@@ -663,7 +678,7 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, _game
 		const appliedSlots: number[] = [];
 		const allDownloads: ArtworkDownloadCandidate[] = [];
 		const applyResolvedDownload = async (download: ArtworkDownloadCandidate): Promise<void> => {
-			if (!isCurrent()) return;
+			if (!isCurrent() || Date.now() >= deadlineMs || hasPendingNativeAssetWrites(shortcutAppId)) return;
 			const { dataUrl, imageType, label } = download;
 			let { community, url } = download;
 			let slotApplied = false;
@@ -672,6 +687,7 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, _game
 				try { preparedDataUrl = await normalizeCommunityArtworkDataUrl(dataUrl, imageType) || dataUrl; }
 				catch (e) { preparedDataUrl = dataUrl; backendLog('Artwork normalization fallback (' + label + '): ' + e); }
 			}
+			if (!isCurrent() || Date.now() >= deadlineMs || hasPendingNativeAssetWrites(shortcutAppId)) return;
 
 			// Write the grid file first. Unlike four sequential Steam bridge calls,
 			// these local atomic writes do not make the visible Hero/Logo component
@@ -683,23 +699,30 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, _game
 					const base64Data = commaIdx >= 0 ? preparedDataUrl.substring(commaIdx + 1) : preparedDataUrl;
 					const mime = preparedDataUrl.match(/^data:image\/(png|jpe?g)/i)?.[1]?.toLowerCase();
 					const ext = mime === 'png' ? 'png' : 'jpg';
-					const raw = await saveShortcutArtworkBackend({ request_json: JSON.stringify({
+					const raw = await writeAssetWithDeadline(guard => saveShortcutArtworkBackend({ request_json: JSON.stringify({
 						shortcut_app_id: shortcutAppId, steam_app_id: steamAppId, image_type: imageType,
-						data_base64: base64Data, extension: ext,
-					}) });
+						data_base64: base64Data, extension: ext, ...guard,
+					}) }), isCurrent, deadlineMs);
+					if (!isCurrent()) return;
 					let response: any = raw;
+					// No native mutation may follow a transport deadline or a rejected
+					// generation: its effects could outlive unlink/relink recovery.
+					if (response === null) return;
 					for (let attempt = 0; attempt < 3 && typeof response === 'string'; attempt += 1) response = JSON.parse(response);
+					if (response?.error === 'resource_deadline_exceeded' || response?.error === 'superseded') return;
 					if (response?.ok === true || response?.saved === true) slotApplied = true;
 				} catch (e) { backendLog('Backend grid save error (prepared base64) (' + label + '): ' + e); }
 			}
+			if (!isCurrent() || Date.now() >= deadlineMs) return;
 			if (!slotApplied && preparedDataUrl && canUseSteamArtworkApi) {
 				try {
 					const commaIdx = preparedDataUrl.indexOf(',');
 					const base64Data = commaIdx >= 0 ? preparedDataUrl.substring(commaIdx + 1) : preparedDataUrl;
 					const mime = preparedDataUrl.match(/^data:image\/(png|jpe?g)/i)?.[1]?.toLowerCase();
 					const ext = mime === 'png' ? 'png' : 'jpg';
-					const result = await waitForSteamBridge(Promise.resolve(sc.Apps.SetCustomArtworkForApp(shortcutAppId, base64Data, ext, imageType))
-						.then(accepted => { if (accepted === false) throw new Error('Steam rejected the artwork'); }), 5000);
+					const result = await writeNativeAsset(shortcutAppId, `artwork-${imageType}`,
+						() => sc.Apps.SetCustomArtworkForApp(shortcutAppId, base64Data, ext, imageType), isCurrent,
+						Math.min(5_000, deadlineMs - Date.now()));
 					if (result) { slotApplied = true; backendLog('Artwork set through Steam fallback: ' + label + ' (type ' + imageType + ') for ' + shortcutAppId); }
 				} catch (e) { backendLog('Artwork Steam fallback error (' + label + '): ' + e); }
 			}
@@ -764,7 +787,7 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, _game
 			key: incomingLogo?.dataUrl && incomingHero?.dataUrl ? layoutFingerprint(incomingLogo.dataUrl, incomingHero.dataUrl) : '',
 		} : undefined;
 		const positionReady = !(incomingLogo || reusableSlots.has(2)) || await applyOfficialLogoPosition(shortcutAppId, steamAppId,
-			targetLogoPos, force, officialPin, communityLogo ? 'community' : modern?.logo_position_source || 'none', logoLayout);
+			targetLogoPos, force, officialPin, communityLogo ? 'community' : modern?.logo_position_source || 'none', logoLayout, deadlineMs);
 		if (!isCurrent()) return { complete: false, slots: [], missing: ['superseded'], communitySlots: [] };
 		if (!positionReady) {
 			const retainedLogo = successfulSlots.indexOf(2);

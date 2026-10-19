@@ -3,6 +3,7 @@ import { CACHE_RETENTION, CACHE_TTL, cacheDelete, cacheDeleteMatching, cacheRead
 import { RetryingRequestCache } from '../../core/request-cache';
 import { steamLanguageSync } from '../../steam/localization';
 import { clearCommunityArtworkCaches } from './artwork-community';
+import { readAssetWithDeadline } from './asset-deadline';
 
 export interface SteamLibraryAssets {
 	found?: boolean;
@@ -88,9 +89,11 @@ export function getModernLibraryAssets(appId: string, requestedLanguage?: string
 	if (persisted?.fresh && !forceBackendRefresh) return Promise.resolve(persisted.data);
 	return requests.get(key, async () => {
 		try {
-			const parsed = JSON.parse(await fetchLibraryAssetsBackend({ request_json: JSON.stringify({
+			const raw = await readAssetWithDeadline(fetchLibraryAssetsBackend({ request_json: JSON.stringify({
 				steam_app_id: appId, language, force_refresh: forceBackendRefresh,
-			}) }));
+			}) }), 8_000);
+			if (raw === null) return null;
+			const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
 			const candidate = parsed && !parsed.error ? parsed as SteamLibraryAssets : null;
 			const result = usableLibraryAssetSnapshot(candidate) ? candidate : null;
 			if (!result) return null;

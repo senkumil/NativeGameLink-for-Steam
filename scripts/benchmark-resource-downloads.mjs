@@ -3,13 +3,14 @@ import vm from 'node:vm';
 import path from 'node:path';
 import ts from 'typescript';
 import { performance } from 'node:perf_hooks';
+import { assetDeadlineRuntime } from './helpers/asset-deadline-runtime.mjs';
 const files=process.argv.length > 2 ? process.argv.slice(2) : ['frontend/features/library/artwork-image.ts'];
 const cases=[['modern','1091500'],['older','12210'],['delisted','221430']];
 const results=[];
 for(const file of files){
  for(const [group,id] of cases){
   let requests=0,bytes=0,active=0,peak=0;const statuses={};
-  const mocks={fetchArtworkImageBackend:async({request_json})=>{
+  const mocks={...assetDeadlineRuntime(),fetchArtworkImageBackend:async({request_json})=>{
    const {url}=JSON.parse(request_json);requests++;active++;peak=Math.max(peak,active);
    try{const r=await fetch(url,{signal:AbortSignal.timeout(15000)});statuses[r.status]=(statuses[r.status]||0)+1;
     const body=Buffer.from(await r.arrayBuffer());bytes+=body.length;

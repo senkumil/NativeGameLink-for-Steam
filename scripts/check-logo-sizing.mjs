@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
+import { assetDeadlineRuntime } from './helpers/asset-deadline-runtime.mjs';
 
 const shortcutId = 3000000001, steamId = '1091500';
 const markerKey = `gdl_logo_position4_${shortcutId}`;
@@ -20,6 +21,7 @@ function harness(options = {}) {
  const state = { actual: null, nativeActual: null, reads: 0, layouts: 0, readWait: null, diskWait: null,
   bridgeWait: null, bridgeAccepted: true, afterDisk: null, ...options };
  const mocks = {
+  ...assetDeadlineRuntime(),
   backendLog() {}, STEAM_DEFAULT_LOGO_POSITION: defaultPosition,
   layoutFingerprint: (logo, hero) => `${logo}|${hero}`,
   readCustomLogoPositionBackend: async () => {

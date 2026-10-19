@@ -1,5 +1,7 @@
 import { clearArtworkBackend, clearArtworkSlotsBackend, backendLog } from '../../api/backend';
 import { supersedeArtworkApplications } from './artwork';
+import { writeAssetWithDeadline } from './asset-write';
+import { writeNativeAsset } from './native-asset-write';
 
 function clearRelinkOwnershipStorage(shortcutAppId: number): void {
 	try {
@@ -34,16 +36,22 @@ export async function clearUnreplacedShortcutArtwork(
 	if (!iconApplied) staleSlots.push(4);
 	if (staleSlots.length === 0) return;
 	try {
-		await clearArtworkSlotsBackend({ request_json: JSON.stringify({ shortcut_app_id: shortcutAppId, slots: staleSlots }) });
+		const response = await writeAssetWithDeadline(guard => clearArtworkSlotsBackend({ request_json: JSON.stringify({
+			shortcut_app_id: shortcutAppId, slots: staleSlots, ...guard,
+		}) }), () => true);
+		let result: any = response;
+		for (let attempt = 0; attempt < 3 && typeof result === 'string'; attempt++) result = JSON.parse(result);
+		if (result?.ok !== true) throw new Error('shortcut_artwork_cleanup_pending');
 	} catch (error) {
 		backendLog(`Backend stale-slot cleanup failed for ${shortcutAppId}: ${String(error)}`);
+		throw error;
 	}
 	const apps = (window as any).SteamClient?.Apps;
 	if (typeof apps?.ClearCustomArtworkForApp !== 'function') return;
-	await Promise.all(staleSlots.map(slot => Promise.race([
-		Promise.resolve(apps.ClearCustomArtworkForApp(shortcutAppId, slot)).catch(() => {}),
-		new Promise<void>(resolve => setTimeout(resolve, 4000)),
-	])));
+	const cleared = await writeNativeAsset(shortcutAppId, 'clear', () => Promise.all(staleSlots.map(slot =>
+		Promise.resolve().then(() => apps.ClearCustomArtworkForApp(shortcutAppId, slot)),
+	)).then(results => results.every(result => result !== false)), () => true, 4000);
+	if (!cleared) throw new Error('shortcut_artwork_cleanup_pending');
 }
 
 /** Remove all managed Steam visuals before assigning a different AppID. */
@@ -52,23 +60,24 @@ export async function clearShortcutArtworkForAppIdChange(shortcutAppId: number):
 	await supersedeArtworkApplications(shortcutAppId);
 	clearRelinkOwnershipStorage(shortcutAppId);
 	try {
-		// The backend removes the persisted icon/grid files. Await it so a slow
-		// cleanup cannot delete the replacement icon after relinking finishes.
-		await clearArtworkBackend({ shortcut_app_id: String(shortcutAppId) });
+		// The backend checks the generation and deadline before deleting each
+		// persisted resource. A late reply cannot erase a newer replacement.
+		const response = await writeAssetWithDeadline(guard => clearArtworkBackend({
+			shortcut_app_id: String(shortcutAppId), ...guard,
+		}), () => true);
+		let result: any = response;
+		for (let attempt = 0; attempt < 3 && typeof result === 'string'; attempt++) result = JSON.parse(result);
+		if (result?.ok !== true) throw new Error('shortcut_artwork_cleanup_pending');
 	} catch (error) {
 		backendLog(`Backend artwork cleanup failed for AppID change on ${shortcutAppId}: ${String(error)}`);
+		throw error;
 	}
 	const apps = (window as any).SteamClient?.Apps;
 	if (typeof apps?.ClearCustomArtworkForApp !== 'function') return;
-	const clearSlot = (slot: number): Promise<void> => new Promise(resolve => {
-		const timer = setTimeout(resolve, 4000);
-		try {
-			Promise.resolve(apps.ClearCustomArtworkForApp(shortcutAppId, slot))
-				.catch(() => {})
-				.finally(() => { clearTimeout(timer); resolve(); });
-		} catch { clearTimeout(timer); resolve(); }
-	});
-	await Promise.all(Array.from({ length: 5 }, (_, slot) => clearSlot(slot)));
+	const cleared = await writeNativeAsset(shortcutAppId, 'clear', () => Promise.all(Array.from({ length: 5 }, (_, slot) =>
+		Promise.resolve().then(() => apps.ClearCustomArtworkForApp(shortcutAppId, slot)),
+	)).then(results => results.every(result => result !== false)), () => true, 4000);
+	if (!cleared) throw new Error('shortcut_artwork_cleanup_pending');
 	// Steam can resolve the bridge promise just before its internal artwork cache
 	// publishes the clear. Keep the shortcut lock across that tiny commit window.
 	await new Promise(resolve => setTimeout(resolve, 100));

@@ -27,6 +27,8 @@ interface BackendShortcutRecord {
 
 let backendShortcutRecords: ShortcutRecord[] = [];
 let backendRegistryRefresh: Promise<void> | null = null;
+let backendRegistryGeneration = 0;
+const BACKEND_REGISTRY_TIMEOUT_MS = 1800;
 
 function parseBackendShortcutList(raw: unknown): BackendShortcutRecord[] {
 	try {
@@ -40,9 +42,15 @@ function parseBackendShortcutList(raw: unknown): BackendShortcutRecord[] {
  * startup contract and can be absent for several seconds on a clean client. */
 export function refreshShortcutRecordsFromBackend(): Promise<void> {
 	if (backendRegistryRefresh) return backendRegistryRefresh;
-	backendRegistryRefresh = (async () => {
+	const generation = ++backendRegistryGeneration;
+	let expired = false;
+	let timer: ReturnType<typeof setTimeout>;
+	const refresh = (async () => {
 		try {
 			const rows = parseBackendShortcutList(await listShortcutsBackend());
+			// A late VDF snapshot must not replace the registry populated by a
+			// subsequent attempt, especially while Steam regenerates a shortcut ID.
+			if (expired || generation !== backendRegistryGeneration) return;
 			const next: ShortcutRecord[] = [];
 			const seen = new Set<number>();
 			for (const row of rows) {
@@ -64,12 +72,27 @@ export function refreshShortcutRecordsFromBackend(): Promise<void> {
 		} catch (error) {
 			backendLog(`Shortcut VDF registry refresh failed: ${String(error)}`);
 		}
-	})().finally(() => { backendRegistryRefresh = null; });
-	return backendRegistryRefresh;
+	})();
+	let request!: Promise<void>;
+	request = Promise.race([
+		refresh,
+		new Promise<void>(resolve => {
+			timer = setTimeout(() => {
+				expired = true;
+				backendLog('Shortcut VDF registry refresh timed out; using the live Steam shortcut registry.');
+				resolve();
+			}, BACKEND_REGISTRY_TIMEOUT_MS);
+		}),
+	]).finally(() => {
+		clearTimeout(timer);
+		if (backendRegistryRefresh === request) backendRegistryRefresh = null;
+	});
+	backendRegistryRefresh = request;
+	return request;
 }
 
-export function getAllShortcutRecords(): ShortcutRecord[] {
-	const appStore = getSteamAppStore();
+export function getAllShortcutRecords(doc?: Document | null): ShortcutRecord[] {
+	const appStore = getSteamAppStore(doc || undefined);
 	const records: ShortcutRecord[] = [];
 	const seen = new Set<number>();
 	const add = (rawId: unknown, app: any) => {

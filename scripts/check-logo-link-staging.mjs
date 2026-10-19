@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
+import { assetDeadlineRuntime } from './helpers/asset-deadline-runtime.mjs';
 
 const shortcutId = 3000000001, steamId = '1091500';
 const official = { pinned_position: 'BottomCenter', width_pct: 31.63, height_pct: 99.68 };
@@ -25,10 +26,12 @@ function harness(options = {}) {
  const state = { metadataCalls: 0, verified: false, metadata: null, positionWait: null, wideWait: null,
   accepted: true, selection: null, failLogo: false, bridgeAccepted: undefined, ...options };
  const mocks = {
+  ...assetDeadlineRuntime(),
   backendLog() {}, getSavedCommunityArtworkSelection: () => state.selection,
   isTrustedSteamGridDbImageUrl: url => String(url).startsWith('https://cdn.steamgriddb.com/'),
   getModernLibraryAssets: async () => { state.metadataCalls++; return state.metadata ? await state.metadata : modern; },
   isLogoPositionVerified: () => state.verified, clearLogoPositionSaved() {}, clearShortcutIconMarker() {},
+  invalidateShortcutIconGeneration() {},
   clearSavedCommunityArtworkSelection() {}, invalidateLogoPosition() { state.verified = false; events.push('position-invalidated'); },
   isTrustedArtworkChoiceUrl: url => String(url).startsWith('https://cdn.steamgriddb.com/'),
   saveCommunityArtworkSelection: (_id, _steam, selection) => { state.selection = selection; },

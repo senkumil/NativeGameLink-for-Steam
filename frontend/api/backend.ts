@@ -31,7 +31,7 @@ export const validateSteamGridDbApiKeyBackend = callable<[{ request_json: string
 export const saveShortcutIconBackend = callable<[{ request_json: string }], string>('save_shortcut_icon');
 export const saveShortcutArtworkBackend = callable<[{ request_json: string }], string>('save_shortcut_artwork');
 
-export const clearArtworkBackend  = callable<[{ shortcut_app_id: string }], string>('clear_artwork');
+export const clearArtworkBackend  = callable<[{ shortcut_app_id: string; expires_at_ms?: number; resource_generation?: number }], string>('clear_artwork');
 export const clearArtworkExceptIconBackend = callable<[{ shortcut_app_id: string }], string>('clear_artwork_except_icon');
 export const clearArtworkSlotsBackend = callable<[{ request_json: string }], string>('clear_artwork_slots');
 export const clearAllLinkedArtworksBackend = callable<[], string>('clear_all_linked_artworks');

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
+import { assetDeadlineRuntime } from './helpers/asset-deadline-runtime.mjs';
 
 const ID = 3300000001;
 const position = { pinnedPosition: 'BottomLeft', nWidthPct: 50, nHeightPct: 50 };
@@ -79,6 +80,7 @@ function harness({ runtime = false, missingDetails = false, missingApps = false,
   const bridgeContext = vm.createContext({ exports: {}, setTimeout: forceTimeout ? fn => setTimeout(fn, 0) : setTimeout, clearTimeout });
   vm.runInContext(bridgeSource, bridgeContext);
   const dependencies = {
+    './native-asset-write': assetDeadlineRuntime({ setTimeout: forceTimeout ? fn => setTimeout(fn, 0) : setTimeout }),
     './steam-bridge': bridgeContext.exports,
     '../../steam/modules/SteamWebpackRuntime': { steamWebpackRuntime: {
       captureRuntime(doc) { check(doc, document, 'Resolve only the calling document'); probes.push('capture'); },

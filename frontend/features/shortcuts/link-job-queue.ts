@@ -16,6 +16,27 @@ const SESSION_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slic
 let processing: Promise<void> | null = null;
 let retryTimer: ReturnType<typeof setTimeout> | null = null;
 let processingPauseDepth = 0;
+const settledJobs = new Map<string, { completed: boolean; shortcutAppId: number | null }>();
+
+function settleJob(job: Pick<PendingLinkJob, 'id' | 'createdAt' | 'shortcutAppId'>, completed: boolean): void {
+	const key = `${job.id}|${job.createdAt}`;
+	settledJobs.delete(key);
+	settledJobs.set(key, { completed, shortcutAppId: job.shortcutAppId });
+	while (settledJobs.size > 64) settledJobs.delete(settledJobs.keys().next().value!);
+}
+
+/** Missing jobs can mean cancellation as well as success. A dialog must only
+ * show Ready after this renderer verified both the mapping and its resources. */
+export function getLinkJobCompletion(id: string, createdAt: number): boolean | undefined {
+	return settledJobs.get(`${id}|${createdAt}`)?.completed;
+}
+
+/** A rename can regenerate the shortcut ID in the same write that retires its
+ * job. Preserve that final identity so the completion dialog opens the new row. */
+export function getLinkJobCompletedShortcutAppId(id: string, createdAt: number): number | null {
+	const settled = settledJobs.get(`${id}|${createdAt}`);
+	return settled?.completed ? settled.shortcutAppId : null;
+}
 
 export interface PendingLinkJob {
 	id: string;
@@ -28,6 +49,7 @@ export interface PendingLinkJob {
 	repairResources?: boolean;
 	attempts: number;
 	status: 'staged' | 'queued' | 'running' | 'failed';
+	phase?: 'identity' | 'assets';
 	sessionId?: string;
 	createdAt: number;
 	lastError?: string;
@@ -49,6 +71,7 @@ function readJobs(): PendingLinkJob[] {
 		return parsed.filter((job): job is PendingLinkJob => job && /^\d+$/.test(String(job.steamAppId || '')) && typeof job.title === 'string')
 			.map(job => {
 				const sameSessionStage = job.status === 'staged' && job.sessionId === SESSION_ID;
+				const sameSessionRunning = job.status === 'running' && job.sessionId === SESSION_ID;
 				return {
 					// Read only supported fields so retired options cannot survive a
 					// persisted retry created by an older plugin version.
@@ -63,10 +86,11 @@ function readJobs(): PendingLinkJob[] {
 					lastError: job.lastError,
 					shortcutExecutable: String(job.shortcutExecutable || ''),
 					repairResources: Boolean(job.repairResources),
+					phase: job.phase === 'identity' || job.phase === 'assets' ? job.phase : undefined,
 					// A staged foreground intent is inert only in the session that created it.
 					// If Steam/CEF was terminated, a new session promotes it to queued so the
 					// interrupted link can resume automatically.
-					status: job.status === 'failed' ? 'failed' : (sameSessionStage ? 'staged' : 'queued'),
+					status: job.status === 'failed' ? 'failed' : (sameSessionStage ? 'staged' : sameSessionRunning ? 'running' : 'queued'),
 					attempts: Number(job.attempts) || 0,
 					nextAttemptAt: Number(job.nextAttemptAt) || 0,
 				};
@@ -76,6 +100,7 @@ function readJobs(): PendingLinkJob[] {
 
 function writeJobs(jobs: PendingLinkJob[]): void {
 	try {
+		for (const job of jobs) settledJobs.delete(`${job.id}|${job.createdAt}`);
 		storage()?.setItem(STORAGE_KEY, JSON.stringify(jobs));
 		window.dispatchEvent(new CustomEvent(PENDING_LINK_JOBS_CHANGED_EVENT));
 	}
@@ -166,6 +191,7 @@ export function enqueueLinkJob(input: Omit<PendingLinkJob, 'id' | 'attempts' | '
 			Object.assign(existing, input, {
 				repairResources: Boolean(existing.repairResources || input.repairResources),
 				status: 'queued' as const,
+				phase: undefined,
 				sessionId: undefined,
 			});
 			if (upgradeRepair || existing.nextAttemptAt) existing.nextAttemptAt = 0;
@@ -177,7 +203,7 @@ export function enqueueLinkJob(input: Omit<PendingLinkJob, 'id' | 'attempts' | '
 		// Explicitly pressing Save again is a new attempt. Re-arm the existing
 		// logical job instead of leaving a permanent failed record with the same
 		// identity in localStorage.
-		Object.assign(existing, input, { attempts: 0, status: 'queued' as const, createdAt: Date.now(), nextAttemptAt: 0 });
+		Object.assign(existing, input, { attempts: 0, status: 'queued' as const, phase: undefined, sessionId: undefined, createdAt: Date.now(), nextAttemptAt: 0 });
 		delete existing.lastError;
 		writeJobs(jobs);
 		scheduleNextRetry(jobs);
@@ -208,7 +234,7 @@ export function stageLinkJobForRecovery(input: Omit<PendingLinkJob, 'id' | 'atte
 	let job = jobs.find(candidate => candidate.id === id
 		|| (candidate.steamAppId === input.steamAppId && sameLogicalShortcut(candidate, input)));
 	if (job) {
-		Object.assign(job, input, { attempts: 0, status: 'staged' as const, createdAt: Date.now(), nextAttemptAt: 0, sessionId: SESSION_ID });
+		Object.assign(job, input, { attempts: 0, status: 'staged' as const, phase: undefined, createdAt: Date.now(), nextAttemptAt: 0, sessionId: SESSION_ID });
 		delete job.lastError;
 	} else {
 		job = { ...input, id, attempts: 0, status: 'staged', createdAt: Date.now(), nextAttemptAt: 0, sessionId: SESSION_ID };
@@ -257,14 +283,20 @@ export function cancelPendingLinkJobs(shortcutAppId?: number | null, title = '')
 	const jobs = readJobs();
 	const kept = jobs.filter(job => !matchesRequestedShortcut(job, shortcutAppId, title));
 	const removed = jobs.length - kept.length;
-	if (removed > 0) { writeJobs(kept); scheduleNextRetry(kept); }
+	if (removed > 0) {
+		for (const job of jobs) if (matchesRequestedShortcut(job, shortcutAppId, title)) settleJob(job, false);
+		writeJobs(kept); scheduleNextRetry(kept);
+	}
 	return removed;
 }
 
 /** Cancel every queued/retrying bulk link operation. */
 export function cancelAllPendingLinkJobs(): number {
 	const jobs = readJobs();
-	if (jobs.length > 0) { writeJobs([]); scheduleNextRetry([]); }
+	if (jobs.length > 0) {
+		for (const job of jobs) settleJob(job, false);
+		writeJobs([]); scheduleNextRetry([]);
+	}
 	return jobs.length;
 }
 
@@ -286,15 +318,16 @@ export async function processPendingLinkJobs(targetDoc?: Document | null): Promi
 			}
 			if (job.status === 'failed') continue;
 
-			// If not repairing resources, a committed mapping means the job is satisfied
+			// A mapping proves identity only. Interrupted foreground work may have
+			// committed it while optional image/icon work was still pending.
 			if (!job.repairResources && findMappingForShortcut(job.shortcutAppId, job.title, job.shortcutExecutable) === job.steamAppId) {
-				jobs = jobs.filter(candidate => candidate.id !== job.id);
-				writeJobs(jobs);
-				continue;
+				job.repairResources = true;
 			}
 
 			if ((job.nextAttemptAt || 0) > Date.now()) continue;
 			job.status = 'running';
+			job.sessionId = SESSION_ID;
+			job.phase = 'identity';
 			writeJobs(jobs);
 			let result: ShortcutLinkResult | null = null;
 			try {
@@ -305,6 +338,14 @@ export async function processPendingLinkJobs(targetDoc?: Document | null): Promi
 					shortcutExecutable: job.shortcutExecutable,
 					repairResources: Boolean(job.repairResources),
 					assetTimeoutMs: 30_000,
+					onPhase: phase => {
+						const latest = readJobs();
+						const current = latest.find(candidate => candidate.id === job.id);
+						if (!current || current.status !== 'running' || current.createdAt !== job.createdAt
+							|| !isFactoryEpochCurrent(epoch) || isFactoryResetInProgress()) return;
+						current.phase = phase;
+						writeJobs(latest);
+					},
 					onStatus: message => backendLog(`[NGL][Retry] ${job.steamAppId}: ${message}`),
 				});
 			} catch (error) {
@@ -325,13 +366,12 @@ export async function processPendingLinkJobs(targetDoc?: Document | null): Promi
 			const resourcesComplete = Boolean(result?.setup?.artworkComplete && result?.setup?.iconApplied);
 			const isMapped = findMappingForShortcut(current.shortcutAppId, current.title, current.shortcutExecutable) === current.steamAppId;
 
-			// When repairResources is true, never retire before resources are verified complete
-			const success = current.repairResources
-				? (isMapped && resourcesComplete)
-				: (result?.ok || isMapped);
+			const success = isMapped && resourcesComplete;
+			if (isMapped && !resourcesComplete) current.repairResources = true;
 
 			if (success) {
 				jobs = jobs.filter(candidate => candidate.id !== job.id);
+				settleJob(current, true);
 				writeJobs(jobs);
 				backendLog(`[NGL][Retry] Successfully settled job for ${current.title} (${current.steamAppId})`);
 				continue;

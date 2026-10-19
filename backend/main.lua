@@ -136,7 +136,7 @@ function read_local_artwork_image(request_json) return module("artwork_image_io"
 function validate_steamgriddb_api_key(request_json) return module("artwork").validate_steamgriddb_api_key(request_json) end
 function save_shortcut_icon(request_json) return module("artwork").save_shortcut_icon(request_json) end
 function save_shortcut_artwork(request_json) return module("artwork").save_shortcut_artwork(request_json) end
-function clear_artwork(shortcut_app_id) return module("artwork").clear_artwork(shortcut_app_id) end
+function clear_artwork(shortcut_app_id, expires_at_ms, resource_generation) return module("artwork").clear_artwork(shortcut_app_id, expires_at_ms, resource_generation) end
 function clear_artwork_except_icon(shortcut_app_id) return module("artwork").clear_artwork_except_icon(shortcut_app_id) end
 function clear_artwork_slots(request_json) return module("artwork").clear_artwork_slots(request_json) end
 function clear_all_linked_artworks() return module("artwork").clear_all_linked_artworks() end

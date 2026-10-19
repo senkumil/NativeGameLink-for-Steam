@@ -1,11 +1,13 @@
 import { invalidateLogoPosition } from './artwork-logo-position';
 import { layoutFingerprint } from './logo-layout';
+import { writeAssetWithDeadline } from './asset-write';
 import { backendLog, saveShortcutArtworkBackend, saveShortcutIconBackend } from '../../api/backend';
 import {
 	imageUrlToBase64,
 	applyOfficialLogoPosition,
 	normalizeCommunityArtworkDataUrl,
 	recordUserArtworkApplication,
+	captureArtworkApplicationCurrent,
 	type ArtworkApplyResult,
 } from './artwork';
 import {
@@ -14,6 +16,7 @@ import {
 	type CommunityArtworkSelection,
 	type CommunityArtworkSlot,
 } from './artwork-selection-storage';
+import { hasPendingNativeAssetWrites, writeNativeAsset } from './native-asset-write';
 
 const SLOT_TYPES: Record<'portrait' | 'hero' | 'logo' | 'wide', number> = { portrait: 0, hero: 1, logo: 2, wide: 3 };
 
@@ -27,6 +30,8 @@ export async function applyCommunityArtworkSelection(
 		return { complete: false, slots: [], missing: ['invalid_shortcut'], communitySlots: [] };
 	}
 	const apps = (window as any).SteamClient?.Apps;
+	const isCurrent = captureArtworkApplicationCurrent(targetAppId, steamAppId);
+	if (hasPendingNativeAssetWrites(targetAppId)) return { complete: false, slots: [], missing: ['native_write_pending'], communitySlots: [] };
 	const slots: CommunityArtworkSlot[] = ['portrait', 'hero', 'logo', 'wide', 'icon'];
 	const chosenSlots = slots.filter(slot => Boolean(selection?.[slot]));
 	if (!chosenSlots.length || !chosenSlots.every(slot => isTrustedArtworkChoiceUrl(selection[slot]?.url))) {
@@ -46,6 +51,7 @@ export async function applyCommunityArtworkSelection(
 			const dataUrl = await imageUrlToBase64(url);
 			return { slot, imageType, url, dataUrl: dataUrl ? await normalizeCommunityArtworkDataUrl(dataUrl, imageType) || dataUrl : null };
 		}));
+		if (!isCurrent()) return { complete: false, slots: [], missing: ['superseded'], communitySlots: [] };
 		if (selection.logo || selection.hero) {
 			invalidateLogoPosition(targetAppId);
 			const logo = prepared.find(item => item.slot === 'logo')?.dataUrl;
@@ -55,24 +61,25 @@ export async function applyCommunityArtworkSelection(
 			if (!positionReady && !selection.logo) missingSlots.push('logo_position');
 		}
 		for (const item of prepared) {
+			if (!isCurrent()) return { complete: false, slots: successfulSlots, missing: ['superseded'], communitySlots: [] };
 			if (item.slot === 'logo' && !positionReady) { missingSlots.push('logo'); continue; }
 			let saved = false;
 			if (item.dataUrl) {
 				const base64 = item.dataUrl.slice(item.dataUrl.indexOf(',') + 1);
 				if (typeof apps?.SetCustomArtworkForApp === 'function') {
 					try {
-						const accepted = await Promise.resolve(apps.SetCustomArtworkForApp(targetAppId, base64, 'png', item.imageType));
-						saved = accepted !== false;
+						saved = await writeNativeAsset(targetAppId, `artwork-${item.imageType}`,
+							() => apps.SetCustomArtworkForApp(targetAppId, base64, 'png', item.imageType), isCurrent);
 					} catch (error) {
 						backendLog(`Steam artwork API failed (${item.slot}) for ${steamAppId}; trying grid-file fallback: ${String(error)}`);
 					}
 				}
-				if (!saved) {
+				if (!saved && !hasPendingNativeAssetWrites(targetAppId)) {
 					try {
-						const raw = await saveShortcutArtworkBackend({ request_json: JSON.stringify({
+						const raw = await writeAssetWithDeadline(guard => saveShortcutArtworkBackend({ request_json: JSON.stringify({
 							shortcut_app_id: targetAppId, steam_app_id: steamAppId, image_type: item.imageType,
-							data_base64: base64, extension: 'png',
-						}) });
+							data_base64: base64, extension: 'png', ...guard,
+						}) }), isCurrent);
 						let response: any = raw;
 						for (let attempt = 0; attempt < 3 && typeof response === 'string'; attempt += 1) response = JSON.parse(response);
 						saved = response?.saved === true || response?.ok === true;
@@ -83,12 +90,12 @@ export async function applyCommunityArtworkSelection(
 			}
 			// Fallback: If dataUrl was null (e.g. CORS blocked CEF fetch) or base64 failed,
 			// download directly on backend using the verified URL.
-			if (!saved && item.url) {
+			if (!saved && item.url && !hasPendingNativeAssetWrites(targetAppId)) {
 				try {
-					const raw = await saveShortcutArtworkBackend({ request_json: JSON.stringify({
+					const raw = await writeAssetWithDeadline(guard => saveShortcutArtworkBackend({ request_json: JSON.stringify({
 						shortcut_app_id: targetAppId, steam_app_id: steamAppId, image_type: item.imageType,
-						url: item.url,
-					}) });
+						url: item.url, ...guard,
+					}) }), isCurrent);
 					let response: any = raw;
 					for (let attempt = 0; attempt < 3 && typeof response === 'string'; attempt += 1) response = JSON.parse(response);
 					saved = response?.saved === true || response?.ok === true;
@@ -103,34 +110,36 @@ export async function applyCommunityArtworkSelection(
 	}
 
 	// 2. Apply icon slot if chosen
-	if (selection.icon) {
+	if (selection.icon && isCurrent() && !hasPendingNativeAssetWrites(targetAppId)) {
 		try {
 			const dataUrl = await imageUrlToBase64(selection.icon.url);
 			let saved = false;
 			if (dataUrl) {
 				const base64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
-				const raw = await saveShortcutIconBackend({
+				const raw = await writeAssetWithDeadline(guard => saveShortcutIconBackend({
 					request_json: JSON.stringify({
 						shortcut_app_id: targetAppId,
 						steam_app_id: steamAppId,
 						icon_base64: base64,
 						extension: 'png',
 						source: selection.icon.isCustom ? 'custom_upload' : 'steamgriddb',
+						...guard,
 					}),
-				});
+				}), isCurrent);
 				let response: any = raw;
 				for (let attempt = 0; attempt < 3 && typeof response === 'string'; attempt += 1) response = JSON.parse(response);
 				saved = response?.saved === true;
 			}
 			if (!saved && selection.icon.url) {
-				const raw = await saveShortcutIconBackend({
+				const raw = await writeAssetWithDeadline(guard => saveShortcutIconBackend({
 					request_json: JSON.stringify({
 						shortcut_app_id: targetAppId,
 						steam_app_id: steamAppId,
 						url: selection.icon.url,
 						source: selection.icon.isCustom ? 'custom_upload' : 'steamgriddb',
+						...guard,
 					}),
-				});
+				}), isCurrent);
 				let response: any = raw;
 				for (let attempt = 0; attempt < 3 && typeof response === 'string'; attempt += 1) response = JSON.parse(response);
 				saved = response?.saved === true;
@@ -143,6 +152,8 @@ export async function applyCommunityArtworkSelection(
 		}
 	}
 
+	if (!isCurrent()) return { complete: false, slots: successfulSlots, missing: ['superseded'], communitySlots: [] };
+	if (selection.icon && !successfulSlots.includes(4) && !missingSlots.includes('icon')) missingSlots.push('icon');
 	const complete = missingSlots.length === 0;
 	if (complete) {
 		saveCommunityArtworkSelection(targetAppId, steamAppId, selection);

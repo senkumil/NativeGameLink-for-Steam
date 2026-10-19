@@ -200,6 +200,28 @@ async function browserChecks(sources) {
     check(mutations.length === 0, '100 complete identical updates perform zero DOM or inline-style writes');
     check(JSON.stringify(wideNativeBefore) === JSON.stringify(wide.native.map(element => element.outerHTML)),
       'Wide-host native sibling markup remains unchanged after reservation and repeated updates');
+    const nativeDOM = load('native-dom');
+    const originalStat = textStat('Playtime', 'PLAY TIME', '25 hours');
+    const copiedStat = textStat('Playtime', 'PLAY TIME', '25 hours');
+    copiedStat.dataset.gdlPlaytime = '1';
+    wide.stats.append(originalStat, copiedStat);
+    nativeDOM.saveNativeUiBlueprint(nativeDOM.NATIVE_UI_BLUEPRINT_KEYS.playbarPlaytime, originalStat);
+    nativeDOM.applyNativePlaybarTypography(copiedStat, nativeDOM.NATIVE_UI_BLUEPRINT_KEYS.playbarPlaytime);
+    const readType = element => {
+      const label = getComputedStyle(element.querySelector(`.${ps.PlayBarLabel}`));
+      const value = getComputedStyle(element.querySelector(`.${ps.PlayBarDetailLabel}`));
+      return [label.fontSize, label.lineHeight, value.fontSize, value.lineHeight].join('|');
+    };
+    for (const zoom of [.75, 1, 1.25, 1.5, 2]) for (const width of [600, 800, 885, 1100, 1500]) {
+      wide.panel.style.zoom = String(zoom); resize(wide, width);
+      check(readType(copiedStat) === readType(originalStat),
+        `Copied playbar typography follows the native CSS at ${width}px and zoom ${zoom}: ${readType(copiedStat)} vs ${readType(originalStat)}`);
+      const infoControl = wide.buttons.querySelector('[data-gdl-game-info-button]'), controlStyle = getComputedStyle(infoControl);
+      check(controlStyle.width === '32px' && controlStyle.height === '32px' && controlStyle.marginInlineEnd === '10px'
+        && Math.abs(infoControl.getBoundingClientRect().width / zoom - 32) < .1,
+        `Native action sizing reserves 42 logical pixels at ${width}px and zoom ${zoom}`);
+    }
+    copiedStat.remove(); originalStat.remove(); wide.panel.style.zoom = ''; resize(wide, 1500);
     currentAppId = 123;
     const originalMarkup = wide.bar.outerHTML;
     check(playbar.ensureLocalPlaybarStat(document, data(currentAppId)) === null && wide.bar.outerHTML === originalMarkup,

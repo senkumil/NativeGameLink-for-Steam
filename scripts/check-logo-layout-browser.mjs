@@ -5,6 +5,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import ts from 'typescript';
+import vm from 'node:vm';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const edge = process.env.CLOUD_BROWSER_EXECUTABLE || 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
@@ -12,33 +13,43 @@ const steamCss = process.env.STEAM_PLAYBAR_CSS || [
   'C:/Program Files (x86)/Steam/steamui/css/sp.css',
   'C:/Program Files (x86)/Steam/steamui/css/chunk~2dcc5aaf7.css',
 ].find(filename => fs.existsSync(filename));
-const steamBundle = process.env.STEAM_UI_BUNDLE || 'C:/Program Files (x86)/Steam/steamui/chunk~2dcc5aaf7.js';
+const steamBundle = process.env.STEAM_UI_BUNDLE || 'C:/Program Files (x86)/Steam/steamui/sp.js';
 for (const filename of [edge, steamCss, steamBundle]) assert(filename && fs.existsSync(filename), `Missing fixture dependency: ${filename}`);
-const installed = fs.readFileSync(steamBundle, 'utf8');
-function functionAt(start) {
-  assert(start >= 0, 'Find the installed native logo anchor function');
-  const open = installed.indexOf('{', start);
-  let depth = 1, end = open + 1;
-  while (depth && end < installed.length) {
-    if (installed[end] === '{') depth++;
-    if (installed[end] === '}') depth--;
-    end++;
-  }
-  assert.equal(depth, 0, 'The native logo anchor function is complete');
-  return installed.slice(start, end);
+const chunks = { webpackChunksteamui: [] };
+vm.runInNewContext(fs.readFileSync(steamBundle, 'utf8'), { self: chunks });
+const factories = Object.assign({}, ...chunks.webpackChunksteamui.map(chunk => chunk[1]));
+const headerFactory = Object.values(factories).map(String).find(source => source.includes('nBottomPct') && source.includes('BoxSizerValidRegion') && source.includes('pinnedPosition'));
+const storeFactory = Object.values(factories).map(String).find(source => source.includes('async SaveCustomLogoPosition('));
+assert(headerFactory && storeFactory, 'Installed native TopCapsule and logo store contracts are required');
+let anchorSource, nativeSaveSource;
+for (const [source, name] of [[headerFactory, 'header'], [storeFactory, 'store']]) {
+  const ast = ts.createSourceFile(name + '.js', `const factory=${source};`, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+  const visit = node => {
+    if (ts.isFunctionDeclaration(node) && node.body?.getText(ast).includes('switch(')
+      && ['nBottomPct:', 'nTopPct:', 'nLeftPct:', 'nRightPct:'].every(key => node.body.getText(ast).includes(key))) anchorSource = node.getText(ast);
+    if (ts.isMethodDeclaration(node) && node.name?.getText(ast) === 'SaveCustomLogoPosition') nativeSaveSource = node.getText(ast);
+    ts.forEachChild(node, visit);
+  };
+  visit(ast);
 }
-const anchorSource = functionAt(installed.indexOf('function P(e,t,r){let i,n,s,a;switch(e){case l.Pk:'));
-const defaultMatch = installed.match(/D=\{pinnedPosition:l\.Pk,nWidthPct:(\d+),nHeightPct:(\d+)\}/);
+assert(anchorSource && nativeSaveSource, 'Native logo anchor and save methods are inspectable');
+const anchorAlias = anchorSource.match(/case (\w+)\.Pk:/)?.[1];
+const defaultMatch = headerFactory.match(/pinnedPosition:\w+\.Pk,nWidthPct:(\d+),nHeightPct:(\d+)/);
 assert(defaultMatch, 'Find Steam TopCapsule’s own fallback dimensions');
 const nativeDefault = { pinnedPosition: 'BottomLeft', nWidthPct: Number(defaultMatch[1]), nHeightPct: Number(defaultMatch[2]) };
-const classesStart = installed.indexOf('4527:e=>{e.exports=') + '4527:e=>{e.exports='.length;
-const classesEnd = installed.indexOf('}},', classesStart);
-assert(classesStart > '4527:e=>{e.exports='.length && classesEnd > classesStart, 'Find the installed TopCapsule class map');
-const nativeClasses = new Function(`return (${installed.slice(classesStart, classesEnd + 1)});`)();
-const saveStart = installed.indexOf('async SaveCustomLogoPosition(e,t){');
-const saveEnd = installed.indexOf('ClearCustomLogoPosition(e)', saveStart);
-assert(saveStart >= 0 && saveEnd > saveStart, 'Find the installed store’s native position save method');
-const nativeSaveSource = installed.slice(saveStart, saveEnd);
+const classFactory = Object.values(factories).find(factory => /^\w+=>\{\w+\.exports=\{/.test(String(factory))
+  && ['BoxSizerValidRegion:', 'TitleLogo:', 'TopCapsule:'].every(key => String(factory).includes(key)));
+assert(classFactory, 'Installed pure TopCapsule class map is required');
+const classModule = { exports: {} }; classFactory(classModule); const nativeClasses = classModule.exports;
+const nativeSaveAliases = { cache: nativeSaveSource.match(/(\w+)\.O\.SetCachedDataForApp/)?.[1],
+  version: nativeSaveSource.match(/nVersion:(\w+)/)?.[1],
+  key: nativeSaveSource.match(/SetCachedDataForApp\([^,]+,(\w+),/)?.[1],
+  cacheVersion: nativeSaveSource.match(/SetCachedDataForApp\([^,]+,\w+,(\w+),/)?.[1] };
+assert(Object.values(nativeSaveAliases).every(Boolean), 'Native logo save closure contract is inspectable');
+for (const alias of [nativeSaveAliases.version, nativeSaveAliases.cacheVersion]) {
+  assert(new RegExp(`\\b${alias}=1(?:[,;])`).test(storeFactory), 'The installed native logo/cache version is one');
+}
+assert(storeFactory.includes(`${nativeSaveAliases.key}="customimage"`), 'The installed native logo cache key is customimage');
 const sources = Object.fromEntries(['logo-layout', 'artwork-logo-position', 'native-logo-position', 'steam-bridge'].map(name => [name,
   ts.transpileModule(fs.readFileSync(path.join(root, `frontend/features/library/${name}.ts`), 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
@@ -47,14 +58,14 @@ const sources = Object.fromEntries(['logo-layout', 'artwork-logo-position', 'nat
 const dbzLogo = 'C:/Program Files (x86)/Steam/userdata/860367772/config/grid/4084967508_logo.png';
 const localLogo = fs.existsSync(dbzLogo) ? `data:image/png;base64,${fs.readFileSync(dbzLogo).toString('base64')}` : null;
 
-async function browserChecks({ sources, anchorSource, nativeDefault, nativeClasses: cls, nativeSaveSource, localLogo }) {
+async function browserChecks({ sources, anchorSource, anchorAlias, nativeDefault, nativeClasses: cls, nativeSaveSource, nativeSaveAliases, localLogo }) {
   const results = [], geometry = [], modules = {}, overviews = new Map(), nativeCache = new Map(), disk = new Map();
   const check = (condition, message) => { if (!condition) throw new Error(message); results.push(message); };
   const equal = (left, right) => JSON.stringify(left) === JSON.stringify(right);
   const near = (left, right) => Math.abs(left - right) < .12;
   const frame = () => new Promise(resolve => requestAnimationFrame(resolve));
   const counters = { diskReads: 0, diskWrites: 0, bridgeWrites: 0, cacheWrites: 0, layoutReads: 0 };
-  const anchor = new Function('l', `return (${anchorSource});`)({ Pk: 'BottomLeft', QG: 'UpperLeft', NO: 'CenterCenter', Ag: 'UpperCenter', Fv: 'BottomCenter' });
+  const anchor = new Function(anchorAlias, `return (${anchorSource});`)({ Pk: 'BottomLeft', QG: 'UpperLeft', NO: 'CenterCenter', Ag: 'UpperCenter', Fv: 'BottomCenter' });
   const dependencies = {
     '../../api/backend': {
       backendLog() {},
@@ -78,10 +89,11 @@ async function browserChecks({ sources, anchorSource, nativeDefault, nativeClass
   window.appDetailsStore = {
     GetAppData(id) { check(id >= 2147483648, 'Native cache lookup never targets a public game');
       if (!nativeCache.has(id)) nativeCache.set(id, {}); return nativeCache.get(id); },
-    SaveCustomLogoPosition: new Function('SteamClient', 'p', 'I', `return ({${nativeSaveSource}}).SaveCustomLogoPosition;`)(window.SteamClient,
+    SaveCustomLogoPosition: new Function('SteamClient', nativeSaveAliases.cache, nativeSaveAliases.key, nativeSaveAliases.version,
+      nativeSaveAliases.cacheVersion, `return ({${nativeSaveSource}}).SaveCustomLogoPosition;`)(window.SteamClient,
       { O: { SetCachedDataForApp(id, key, version) {
         check(id >= 2147483648 && key === 'customimage' && version === 1, 'Steam persists its own exact-shortcut position cache'); counters.cacheWrites++;
-      } } }, 'customimage'),
+      } } }, 'customimage', 1, 1),
   };
   const load = name => {
     if (modules[name]) return modules[name];
@@ -162,7 +174,8 @@ async function browserChecks({ sources, anchorSource, nativeDefault, nativeClass
         check(style.objectFit === 'contain' && style.maxWidth === '100%' && style.maxHeight === '100%', `${item.title}/${shape.name}: native CSS contains the original aspect ratio`);
         check(header.image.src === src && header.image.naturalWidth > 0 && header.image.naturalHeight > 0, `${item.title}/${shape.name}: the logo source is neither replaced nor resampled`);
         const seen = new Map();
-        for (const width of [1200, 800, 400, 1200, 400, 800, 1200]) {
+        for (const zoom of [1, .75, 1.25, 1.5, 2]) for (const width of [1200, 800, 400, 1200, 400, 800, 1200]) {
+          header.host.style.zoom = String(zoom);
           resize(header, width); const measured = measure(header), nativeBounds = anchor(expected.pinnedPosition, expected.nWidthPct, expected.nHeightPct);
           check(near(measured.box.x, measured.region.width * nativeBounds.nLeftPct / 100)
             && near(measured.box.y, measured.region.height * nativeBounds.nTopPct / 100)
@@ -170,9 +183,11 @@ async function browserChecks({ sources, anchorSource, nativeDefault, nativeClass
             && near(measured.box.height, measured.region.height * expected.nHeightPct / 100), `${item.title}/${shape.name}/${width}: box agrees with the installed native pin algorithm`);
           check(measured.painted.width <= measured.box.width + .12 && measured.painted.height <= measured.box.height + .12,
             `${item.title}/${shape.name}/${width}: logo fits its final native box`);
-          if (seen.has(width)) check(equal(measured, seen.get(width)), `${item.title}/${shape.name}/${width}: returning to the same width gives exactly the same geometry`);
-          else seen.set(width, measured);
+          const key = `${zoom}:${width}`;
+          if (seen.has(key)) check(equal(measured, seen.get(key)), `${item.title}/${shape.name}/${width}/${zoom}: returning to the same width and zoom gives exactly the same geometry`);
+          else seen.set(key, measured);
         }
+        header.host.style.zoom = ''; resize(header, 1200);
         check(equal(first, measure(header)), `${item.title}/${shape.name}: repeated resize produces no size or position drift`);
         if (shape.name === 'wide') { visible.push(header); geometry.push({ title: item.title, pin: expected.pinnedPosition, position: expected, measurement: first }); }
         else header.card.remove();
@@ -205,7 +220,7 @@ const htmlPath = path.join(scratch, 'fixture.html'), screenshot = path.join(scra
 const serialize = value => JSON.stringify(value).replace(/</g, '\u003c');
 fs.writeFileSync(htmlPath, `<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="${pathToFileURL(steamCss).href}">
 <style>body{margin:20px;background:#1b2027;color:#dcdedf;font-family:Arial,sans-serif}h2{margin:0 0 18px}#fixture{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.fixture-card{overflow:hidden;border:1px solid #414a56}.fixture-card h3{font-size:14px;margin:12px}.header-host{background:linear-gradient(125deg,#253842,#3d263b);overflow:hidden}.header-host .${nativeClasses.TopCapsule}{position:relative}</style>
-</head><body class="DesktopUI"><h2>Logo layout · native Steam CSS and exact per-game positions</h2><div id="fixture"></div><script>(${browserChecks.toString()})(${serialize({ sources, anchorSource, nativeDefault, nativeClasses, nativeSaveSource, localLogo })});document.currentScript.remove();</script></body></html>`);
+</head><body class="DesktopUI"><h2>Logo layout · native Steam CSS and exact per-game positions</h2><div id="fixture"></div><script>(${browserChecks.toString()})(${serialize({ sources, anchorSource, anchorAlias, nativeDefault, nativeClasses, nativeSaveSource, nativeSaveAliases, localLogo })});document.currentScript.remove();</script></body></html>`);
 const profile = path.join(scratch, 'edge-profile');
 const child = spawn(edge, ['--headless=new', '--disable-gpu', '--disable-background-networking', '--no-first-run', '--no-default-browser-check',
   '--allow-file-access-from-files', '--window-size=1500,1100', '--remote-debugging-port=0', `--user-data-dir=${profile}`, pathToFileURL(htmlPath).href],

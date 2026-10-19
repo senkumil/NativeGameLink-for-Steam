@@ -1,3 +1,4 @@
+import './helpers/installed-steam-check.mjs';
 // Render the real Community UI against the installed Steam Community CSS.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -19,9 +20,17 @@ const sources = Object.fromEntries([
   ['community-order', 'frontend/features/library/community-order.ts'],
   ['community-style', 'frontend/features/library/styles/community.ts'],
   ['navigation', 'frontend/steam/navigation.ts'],
-].map(([name, filename]) => [name, ts.transpileModule(fs.readFileSync(path.join(root, filename), 'utf8'), {
+].map(([name, filename]) => {
+  let source = ts.transpileModule(fs.readFileSync(name === 'community-view' && process.env.COMMUNITY_VIEW_SOURCE
+    ? process.env.COMMUNITY_VIEW_SOURCE : path.join(root, filename), 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
-}).outputText]));
+  }).outputText;
+  if (name === 'community-view') {
+    assert(source.includes('const occupied = [];'), 'The resize-work probe must instrument the production dense placement loop');
+    source = source.replace('const occupied = [];', 'window.__gdlDensePlacementPasses = (window.__gdlDensePlacementPasses || 0) + 1; const occupied = [];');
+  }
+  return [name, source];
+}));
 
 async function browserChecks(sources) {
   const results = [], modules = {}, geometry = {};
@@ -391,6 +400,44 @@ async function browserChecks(sources) {
 
     await playVideo(originals.filter(isVideo).at(-1), 'normalVideoPlayback', true);
 
+    // A real splitter drag changes width every frame while staying inside the
+    // same native column breakpoint. Keep mounted players and measure actual
+    // media writes plus entries into the production dense placement loop.
+    const dragFixture = document.getElementById('fixture');
+    dragFixture.style.width = '1160px'; await settle();
+    const cappedMedia = new Set([...grid.querySelectorAll('.gdl-community-media')].filter(media =>
+      Number.parseFloat(getComputedStyle(media,'::before').height) >= 799.9));
+    let dragMediaWrites = 0, dragUncappedWrites = 0;
+    const countDragWrites = records => {
+      for (const record of records) {
+        if (!record.target.matches('.gdl-community-media,.gdl-community-video-thumb')) continue;
+        dragMediaWrites++;
+        if (!cappedMedia.has(record.target)) dragUncappedWrites++;
+      }
+    };
+    const dragObserver = new MutationObserver(records => {
+      countDragWrites(records);
+    });
+    dragObserver.observe(grid, { attributes:true, attributeFilter:['style'], subtree:true });
+    window.__gdlDensePlacementPasses = 0;
+    for (let step = 1; step <= 60; step++) {
+      const previous = originals[0].getBoundingClientRect().width;
+      dragFixture.style.width = `${1160 + step}px`;
+      check(originals[0].getBoundingClientRect().width > previous,
+        `splitter pixel ${step}: the visible card width updates synchronously without waiting for a timer`);
+      await frame();
+    }
+    await settle();
+    countDragWrites(dragObserver.takeRecords());
+    dragObserver.disconnect();
+    geometry.splitterResizeWork = { steps:60, densePlacementPasses:window.__gdlDensePlacementPasses, mediaStyleWrites:dragMediaWrites, uncappedMediaStyleWrites:dragUncappedWrites,cappedMedia:cappedMedia.size };
+    check(window.__gdlDensePlacementPasses === 0, 'Sixty splitter pixels inside one column breakpoint never repeat dense placement');
+    check(dragUncappedWrites === 0, 'Sixty splitter pixels retain intrinsic picture/video ratios without uncapped media style writes');
+    check(cappedMedia.size > 0 && dragMediaWrites <= cappedMedia.size*60,
+      'Only actual 800px-capped media update their width-dependent ratios during the drag');
+    assertNodes('splitterDrag'); assertRows('splitterDrag'); assertText('splitterDrag'); assertPlayers('splitterDrag');
+    dragFixture.style.width='1120px'; await settle();
+
     for (const [width, zoom] of [[840, 1], [560, 1], [240, 1], [1120, 1.25], [840, 1.5], [1037, 1.25], [1193, 1.5], [1120, 1]]) {
       document.getElementById('fixture').style.width = `${width}px`;
       document.getElementById('fixture').style.zoom = String(zoom);
@@ -675,6 +722,107 @@ async function browserChecks(sources) {
     }
     pairFixture.style.width = '1118.4px'; pairFixture.style.zoom = '1.25'; window.dispatchEvent(new Event('resize')); await settle();
     ui.disposeCommunitySection(pairSection); pairFixture.hidden = true;
+    // Use Steam's actual topology: the LeftColumn is full width, its owned
+    // activity stack is narrow, and RightColumn floats beside it. Optional
+    // Controller, Notes and Media must never trap Community in that narrow stack.
+    const adaptiveHost = document.createElement('div');
+    adaptiveHost.id = 'controller-layout-preview';
+    adaptiveHost.className = '_27RcNu8aXKBpYkHcNNrt-X';
+    adaptiveHost.style.cssText = 'position:relative';
+    adaptiveHost.innerHTML = '<div class="OhSdLYuggDtBcWjYP0j_9"><aside class="_2aor4XVOYzN1PBSREk0UbO"><div data-native-notes style="height:74px;margin-bottom:26px">Notes</div><div data-native-media style="height:134px;margin-bottom:26px">Recordings &amp; Screenshots</div></aside><main class="_1sZgBDTw5NH-yuVDZK1SUU"><div style="display:flex;flex-direction:column;align-items:stretch;width:calc(67% - 32px);overflow:visible"><div style="height:300px;flex:none">One news item and the end of activity</div></div></main></div>';
+    fixture.after(adaptiveHost);
+    const adaptiveSidebar = adaptiveHost.querySelector('aside'), adaptiveMain = adaptiveHost.querySelector('main');
+    const adaptiveStack = adaptiveMain.firstElementChild, adaptiveActivity = adaptiveStack.firstElementChild;
+    const adaptiveRow = adaptiveMain.parentElement;
+    const controller = document.createElement('div'); controller.id = 'controller-connection-fixture';
+    controller.style.cssText = 'height:170px;margin-bottom:26px'; controller.textContent = 'Connected controller';
+    const notes = adaptiveSidebar.querySelector('[data-native-notes]'), recordings = adaptiveSidebar.querySelector('[data-native-media]');
+    const sidebarMarkup = [notes.outerHTML, recordings.outerHTML];
+    const adaptive = ui.insertCommunitySection(document, { sidebarColumn: adaptiveSidebar, contentColumn: adaptiveMain, twoColumnRow: adaptiveRow },
+      adaptiveActivity, ui.renderCommunityContentHtml({}, videos.slice(0, 2)));
+    const firstCommunityBox = adaptive.getBoundingClientRect();
+    check(adaptive.classList.contains('gdl-community-wide')
+      && Math.abs(firstCommunityBox.width - adaptiveMain.getBoundingClientRect().width) <= 1.1,
+      'Community publishes the whole detail width synchronously before the first column layout or paint');
+    check(Math.abs(firstCommunityBox.top - Math.max(adaptiveActivity.getBoundingClientRect().bottom + 34,
+      adaptiveSidebar.getBoundingClientRect().bottom)) <= 1.1,
+      'Community publishes its initial sidebar clearance before the first paint');
+    await decode([...adaptive.querySelectorAll('img')]);
+    const adaptiveCards = [...adaptive.querySelectorAll('[data-gdl-community-card]')];
+    const adaptivePlaybackThumb = adaptive.querySelector('.gdl-community-video-thumb');
+    adaptivePlaybackThumb.dispatchEvent(new MouseEvent('click', { bubbles:true, cancelable:true })); await settle();
+    const adaptivePlayer = adaptivePlaybackThumb.querySelector('iframe');
+    check(Boolean(adaptivePlayer), 'The controller-layout fixture starts a real delegated Community player');
+    const adaptiveMedia = [...adaptive.querySelectorAll('img')];
+    const sidebarStates = [
+      { name:'disconnected', connected:false, activity:300 },
+      { name:'connected', connected:true, activity:300 },
+      { name:'disconnected-again', connected:false, activity:300 },
+      { name:'reconnected', connected:true, activity:300 },
+      { name:'late-controller-content', connected:true, activity:300, controllerHeight:260 },
+      { name:'long-activity', connected:true, activity:900 },
+      { name:'no-news', connected:true, activity:80 },
+      { name:'disabled-native-sections', connected:true, activity:80, noNotes:true, noMedia:true },
+      { name:'hidden-sidebar', connected:true, activity:80, hidden:true },
+      { name:'stacked-columns', connected:true, activity:300, stacked:true },
+    ];
+    for (const width of [320, 560.6, 840.4, 1118.4, 1400]) for (const zoom of [.75, 1, 1.25, 1.5, 2]) {
+      adaptiveHost.style.width = `${width}px`; adaptiveHost.style.zoom = String(zoom);
+      for (const state of sidebarStates) {
+        if (state.connected) adaptiveSidebar.prepend(controller); else controller.remove();
+        controller.style.height = `${state.controllerHeight || 170}px`;
+        notes.hidden = Boolean(state.noNotes); recordings.hidden = Boolean(state.noMedia);
+        adaptiveSidebar.style.display = state.hidden ? 'none' : '';
+        adaptiveActivity.style.height = `${state.activity}px`;
+        adaptiveHost.classList.toggle('UltraNarrowRightPanel', Boolean(state.stacked));
+        adaptiveStack.style.width = state.stacked ? '100%' : 'calc(67% - 32px)';
+        // No synthetic window resize: the production observers must react to
+        // actual controller insertion/removal and late sidebar height changes.
+        await settle(); await settle();
+        const label = `adaptive${width}zoom${zoom}/${state.name}`;
+        const actual = adaptive.getBoundingClientRect(), mainBox = adaptiveMain.getBoundingClientRect();
+        const activityBox = adaptiveActivity.getBoundingClientRect(), sidebarBox = adaptiveSidebar.getBoundingClientRect();
+        const expectedTop = Math.max(activityBox.bottom + 34 * zoom, state.hidden ? 0 : sidebarBox.bottom);
+        check(adaptive.classList.contains('gdl-community-wide'), `${label}: controller connection preserves full-width Community`);
+        check(Math.abs(actual.width - mainBox.width) <= 1.1,
+          `${label}: Community occupies the whole native LeftColumn without applying zoom twice`);
+        check(Math.abs(actual.top - expectedTop) <= 1.1,
+          `${label}: Community follows the taller column with the logical native section gap`);
+        const media = [...adaptive.querySelectorAll('img')];
+        check(media.every((image, index) => image === adaptiveMedia[index]), `${label}: width changes retain every live media node`);
+        check(adaptiveCards.every((card, index) => card === adaptive.querySelectorAll('[data-gdl-community-card]')[index]),
+          `${label}: connection changes retain the same cards`);
+        check(adaptivePlayer === adaptivePlaybackThumb.querySelector('iframe'), `${label}: the playing video remains mounted`);
+        check(notes.outerHTML.replace(/ hidden=""/g, '') === sidebarMarkup[0]
+          && recordings.outerHTML.replace(/ hidden=""/g, '') === sidebarMarkup[1],
+          `${label}: Notes and Media retain their exact native markup`);
+        check([...adaptive.querySelectorAll('[data-gdl-community-card]')].every(card => card.getBoundingClientRect().right <= actual.right + 1.1),
+          `${label}: the final card remains inside its actual available width`);
+      }
+    }
+    const adaptiveWrites = [];
+    const adaptiveObserver = new MutationObserver(records => adaptiveWrites.push(...records));
+    adaptiveObserver.observe(adaptiveHost, { attributes:true, childList:true, subtree:true });
+    for (let index = 0; index < 100; index++) window.dispatchEvent(new Event('resize'));
+    await settle(); adaptiveWrites.push(...adaptiveObserver.takeRecords()); adaptiveObserver.disconnect();
+    check(adaptiveWrites.length === 0, '100 unchanged desktop pane resizes perform zero Community attribute or DOM writes');
+    adaptiveHost.classList.remove('UltraNarrowRightPanel'); adaptiveHost.style.width = '1118.4px'; adaptiveHost.style.zoom = '1.25';
+    adaptiveStack.style.width = 'calc(67% - 32px)';
+    notes.hidden = false; recordings.hidden = false; controller.style.height = '170px';
+    adaptiveActivity.style.height = '300px'; await settle(); await settle();
+    const connectedPreview = { community: adaptive.getBoundingClientRect().toJSON(),
+      activity: adaptiveActivity.getBoundingClientRect().toJSON(), sidebar: adaptiveSidebar.getBoundingClientRect().toJSON(),
+      main: adaptiveMain.getBoundingClientRect().toJSON() };
+    geometry.controllerConnection = connectedPreview;
+    ui.disposeCommunitySection(adaptive);
+    const adaptiveMarkup = adaptive.outerHTML;
+    adaptiveSidebar.style.display = ''; adaptiveSidebar.style.height = '400px';
+    adaptiveHost.style.width = '900px'; window.dispatchEvent(new Event('resize')); await settle();
+    check(adaptive.outerHTML === adaptiveMarkup, 'Disposed Community stops adaptive sidebar and pane-width callbacks');
+    // Restore the captured geometry using only fixture styles after disposal.
+    // Keep the retired DOM hidden for the visual artifact below.
+    adaptiveSidebar.style.removeProperty('height'); adaptiveHost.style.width = '1118.4px';
+    adaptiveHost.hidden = true;
     check(JSON.stringify(nativeState()) === before, 'Native Community styles, geometry and markup remain byte-for-byte unchanged');
     nativeWrites.push(...nativeObserver.takeRecords()); nativeObserver.disconnect();
     check(nativeWrites.length === 0, 'Render, resize, lazy media, reveal and disposal cause zero native Community mutations');
@@ -698,6 +846,7 @@ const scratch = fs.mkdtempSync(path.join(scratchRoot, 'community-layout-'));
 const htmlPath = path.join(scratch, 'fixture.html'), screenshot = path.join(scratch, 'community-layout.png');
 const videoPairScreenshot = path.join(scratch, 'community-video-pair.png');
 const nativeRowsScreenshot = path.join(scratch, 'community-native-row-oracle.png');
+const controllerLayoutScreenshot = path.join(scratch, 'community-controller-layout.png');
 const rowScreenshots = [3, 4, 5].map(columns => ({ columns, file: path.join(scratch, `community-native-rows-${columns}-columns.png`) }));
 const serialize = value => JSON.stringify(value).replace(/</g, '\\u003c');
 fs.writeFileSync(htmlPath, `<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="${pathToFileURL(steamCss).href}">
@@ -732,11 +881,11 @@ try {
     if (message.error) reject(new Error(JSON.stringify(message.error))); else resolve(message.result);
   });
   const call = (method, params = {}) => new Promise((resolve, reject) => {
-    const id = ++nextId, timer = setTimeout(() => { pending.delete(id); reject(new Error(`Edge CDP timed out: ${method}`)); }, 15_000);
+    const id = ++nextId, timer = setTimeout(() => { pending.delete(id); reject(new Error(`Edge CDP timed out: ${method}`)); }, 100_000);
     pending.set(id, { resolve, reject, timer }); socket.send(JSON.stringify({ id, method, params }));
   });
   const evaluated = await call('Runtime.evaluate', {
-    expression: `(async () => { const deadline=Date.now()+10000; while(Date.now()<deadline){ const output=document.getElementById('community-layout-result'); if(output)return JSON.parse(output.textContent); await new Promise(resolve=>setTimeout(resolve,20)); } return {ok:false,results:[],error:'Fixture did not finish'}; })()`,
+    expression: `(async () => { const deadline=Date.now()+90000; while(Date.now()<deadline){ const output=document.getElementById('community-layout-result'); if(output)return JSON.parse(output.textContent); await new Promise(resolve=>setTimeout(resolve,20)); } return {ok:false,results:[],error:'Fixture did not finish'}; })()`,
     awaitPromise: true, returnByValue: true,
   });
   assert(!evaluated.exceptionDetails, JSON.stringify(evaluated.exceptionDetails)); report = evaluated.result.value;
@@ -772,13 +921,17 @@ try {
     }
     await call('Runtime.evaluate', { expression: `(async () => {for(const element of document.querySelectorAll('[id^="dense-gap-preview-"]'))element.hidden=true;const native=document.getElementById('native-row-preview');native.hidden=false;native.scrollIntoView({block:'start'});await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));})()`, awaitPromise: true });
     const nativeCapture = await call('Page.captureScreenshot', { format: 'png' }); fs.writeFileSync(nativeRowsScreenshot, Buffer.from(nativeCapture.data, 'base64'));
+    await call('Runtime.evaluate', { expression: `(async () => {document.getElementById('native-row-preview').hidden=true;const controller=document.getElementById('controller-layout-preview');controller.hidden=false;controller.scrollIntoView({block:'start'});await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));})()`, awaitPromise: true });
+    const controllerCapture = await call('Page.captureScreenshot', { format: 'png' }); fs.writeFileSync(controllerLayoutScreenshot, Buffer.from(controllerCapture.data, 'base64'));
   }
 } finally { socket?.close(); child.kill(); }
 fs.writeFileSync(path.join(scratch, 'report.json'), JSON.stringify(report, null, 2));
 assert(report.ok, `${report.error}\nPassed ${report.results.length} assertions; last checks: ${report.results.slice(-6).join('; ')}\nFixture: ${htmlPath}`);
 console.log(`Community layout browser passed: ${report.checks} assertions; aligned native rows and footer baselines against installed Steam CSS, portrait/panorama/video spans with 24px/32px gutters, native video width at fractional breakpoints and captured poster pixels without black bands, real 16:9 playback and failed-thumbnail recovery, stable progressive player rectangles and scroll, complete final cards inside clipped native hosts, native caption/guide line limits, 125%/150% zoom, lazy/error/retry media, zero stable writes and untouched native Community.`);
 console.log(`Screenshot: ${screenshot}`);
+console.log(`Splitter resize work: ${JSON.stringify(report.geometry.splitterResizeWork)}`);
 console.log(`Two-video screenshot: ${videoPairScreenshot}`);
 console.log(`Native CSS row oracle screenshot: ${nativeRowsScreenshot}`);
+console.log(`Controller connection layout screenshot: ${controllerLayoutScreenshot}`);
 for (const { columns, file } of rowScreenshots) console.log(`Aligned ${columns}-column screenshot: ${file}`);
 

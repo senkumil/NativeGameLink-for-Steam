@@ -249,7 +249,7 @@ function applyPlaytimeStatsToDom(
 			} else {
 				return htmlToElements(doc, `
 					<div class="${classes.GameStat || ''} ${classes.Playtime || ''} ${classes.Visible || ''}" data-gdl-stat="playtime" data-gdl-native-blueprint="0">
-						<div class="${classes.GameStatIconForced || ''} ${classes.PlaytimeIconForced || ''}">${playtimeClockSvg()}</div>
+						<div class="${classes.GameStatIcon || ''} ${classes.PlaytimeIcon || ''}">${playtimeClockSvg()}</div>
 						<div class="${classes.GameStatRight || ''}">
 							<div class="${classes.PlayBarLabel || ''}">${escapeHtml(loc('AppDetails_SectionTitle_PlayTime', 'TIEMPO DE JUEGO'))}</div>
 							<div class="${classes.PlayBarDetailLabel || ''}" data-gdl-playtime-value="1">${escapeHtml(playtimeFormatted)}</div>

@@ -152,11 +152,11 @@ async function browserChecks(sources) {
         row: row.getBoundingClientRect().width, tiles: cells.length };
     };
 
-    for (const [total, more] of [[45, '+40'], [50, '+45']]) {
+    for (const [total, more] of [[45, '+41'], [50, '+46']]) {
       const summary = await render(fixtureData(total));
       check(!summary.querySelector('.gdl-la-divider'), `0/${total}: no empty earned divider`);
       check(!summary.querySelector('.gdl-la-feature'), `0/${total}: no empty featured slot`);
-      checkCounts(lockedRow(summary), 5, more, `0/${total}`);
+      checkCounts(lockedRow(summary), 4, more, `0/${total}`);
       geometry[`0/${total}`] = checkSpacing(summary, `0/${total}`);
       near(summary.querySelector('.gdl-la-locked-label').getBoundingClientRect().top
         - summary.querySelector('.gdl-la-body').getBoundingClientRect().top, 16,
@@ -178,8 +178,8 @@ async function browserChecks(sources) {
       const data = fixtureData(50, unlocked), message = `${unlocked}/50 text layout`;
       const summary = await render(data);
       checkFeaturedText(summary, data, expectedIndices, message);
-      checkCounts(lockedRow(summary), unlocked ? 4 : 5,
-        `+${50 - unlocked - (unlocked ? 4 : 5)}`, `${message}: locked row`);
+      checkCounts(lockedRow(summary), 4,
+        `+${50 - unlocked - 4}`, `${message}: locked row`);
       check(summary.querySelectorAll('.gdl-la-divider').length === (unlocked ? 1 : 0),
         `${message}: separator follows earned state`);
       if (unlocked === 3) {
@@ -219,7 +219,7 @@ async function browserChecks(sources) {
     near(screenshotProgress.querySelector('.gdl-la-locked-label').getBoundingClientRect().top
       - divider.getBoundingClientRect().bottom, 10, '32/50: native separator to locked label spacing');
 
-    for (const [total, icons, more] of [[2, 1, ''], [4, 3, ''], [5, 4, ''], [6, 4, '+1']]) {
+    for (const [total, icons, more] of [[2, 1, ''], [4, 3, ''], [5, 4, ''], [6, 5, '']]) {
       const summary = await render(fixtureData(total, 1));
       checkCounts(lockedRow(summary), icons, more, `One earned, ${total - 1} locked`);
       check(summary.querySelectorAll('.gdl-la-divider').length === 1,
@@ -230,8 +230,8 @@ async function browserChecks(sources) {
 
     const responsiveData = fixtureData(45);
     const responsive = await render(responsiveData);
-    for (const [width, icons, more] of [[240, 3, '+42'], [300, 4, '+41'], [356, 5, '+40'],
-      [520, 5, '+40'], [126, 1, '+44'], [356, 5, '+40']]) {
+    for (const [width, icons, more] of [[240, 2, '+43'], [300, 3, '+42'], [356, 4, '+41'],
+      [520, 7, '+38'], [126, 0, '+45'], [356, 4, '+41']]) {
       section.style.width = `${width}px`;
       await settle();
       check(content.querySelector('.gdl-la-summary') === responsive,
@@ -243,8 +243,8 @@ async function browserChecks(sources) {
 
     const responsiveProgressData = fixtureData(50, 32);
     const responsiveProgress = await render(responsiveProgressData);
-    for (const [width, icons, more, earnedMore] of [[240, 3, '+15', '+28'], [300, 4, '+14', '+27'],
-      [356, 4, '+14', '+27'], [520, 4, '+14', '+27'], [126, 1, '+17', '+30'], [356, 4, '+14', '+27']]) {
+    for (const [width, icons, more, earnedMore] of [[240, 2, '+16', '+29'], [300, 3, '+15', '+28'],
+      [356, 4, '+14', '+27'], [520, 7, '+11', '+24'], [126, 0, '+18', '+31'], [356, 4, '+14', '+27']]) {
       section.style.width = `${width}px`;
       await settle();
       check(content.querySelector('.gdl-la-summary') === responsiveProgress,
@@ -258,8 +258,8 @@ async function browserChecks(sources) {
     }
 
     const twoEarnedData = fixtureData(50, 2), twoEarned = await render(twoEarnedData);
-    for (const [width, icons, more] of [[240, 3, '+45'], [300, 4, '+44'], [356, 4, '+44'],
-      [520, 4, '+44'], [240, 3, '+45'], [356, 4, '+44']]) {
+    for (const [width, icons, more] of [[240, 2, '+46'], [300, 3, '+45'], [356, 4, '+44'],
+      [520, 7, '+41'], [240, 2, '+46'], [356, 4, '+44']]) {
       section.style.width = `${width}px`;
       await settle();
       const message = `2/50 resize to ${width}px`;
@@ -273,7 +273,7 @@ async function browserChecks(sources) {
     }
 
     // Feed new progress for the same app through the actual cached renderer.
-    // The cap must change in both directions without requiring navigation.
+    // Counts and remainder must update in both directions without navigation.
     const transitionData = [fixtureData(50), fixtureData(50, 1), fixtureData(50)];
     check(transitionData.every(data => data.appid === transitionData[0].appid
       && data.state_appid === transitionData[0].state_appid), 'Live progress transition keeps app identity');
@@ -281,7 +281,7 @@ async function browserChecks(sources) {
       const summary = await render(data);
       check(content.querySelectorAll('.gdl-la-summary').length === 1,
         `Live progress transition ${index + 1}: one rendered panel`);
-      checkCounts(lockedRow(summary), data.unlocked ? 4 : 5, '+45',
+      checkCounts(lockedRow(summary), 4, data.unlocked ? '+45' : '+46',
         `Live progress transition ${index + 1}: ${data.unlocked}/50`);
       check(summary.querySelectorAll('.gdl-la-divider').length === (data.unlocked ? 1 : 0),
         `Live progress transition ${index + 1}: separator follows earned state`);

@@ -537,13 +537,17 @@ ${steamRareAchievementStyles().replace(/#gdl-achievement-modal/g, '#gdl-local-ac
 		.gdl-lam-row.is-hidden-global:is(:hover, :focus) .gdl-lam-row-right { opacity: 0 !important; }
 		.BasicUI .gdl-lam-empty,
 		.gdl-lam-empty { padding: 40px 20px !important; text-align: center !important; color: #8b929a !important; font-size: 15px !important; }
-		@media (max-width: 900px) {
-			.BasicUI #gdl-local-achievement-modal,
-			#gdl-local-achievement-modal { padding-top: 20px !important; }
-			.BasicUI .gdl-lam-window,
-			.gdl-lam-window { width: calc(100% - 40px) !important; }
-		}
-		@media (max-width: 620px) {
+		/* The available library pane can be narrow in a wide client window.
+		   Respond to the dialog's CSS-pixel width, including CEF zoom, rather
+		   than using the unrelated outer window breakpoint. */
+		#gdl-local-achievement-modal.gdl-lam-compact-pane { padding-top: 20px !important; }
+		.gdl-lam-compact-pane .gdl-lam-window { width: calc(100% - 40px) !important; }
+		.gdl-lam-window { container-type: inline-size !important; container-name: gdl-achievement-dialog !important; }
+		.gdl-lam-tabs { overflow-x: auto !important; justify-content: safe center !important; scrollbar-width: none !important; }
+		.gdl-lam-tab { flex-shrink: 0 !important; }
+		@container gdl-achievement-dialog (max-width: 620px) {
+			.gdl-lam-progressbox { height: auto !important; min-height: 60px !important; }
+			.gdl-lam-row-title, .gdl-lam-row-desc { overflow-wrap: anywhere !important; }
 			.BasicUI .gdl-lam-head,
 			.gdl-lam-head { padding-inline: 16px !important; }
 			.BasicUI .gdl-lam-title,
@@ -570,6 +574,10 @@ ${steamRareAchievementStyles().replace(/#gdl-achievement-modal/g, '#gdl-local-ac
 			.gdl-lam-global-toolbar .gdl-lam-global-label { flex: 1 0 100% !important; text-align: right !important; }
 			.gdl-lam-row.is-global { height: auto !important; }
 			.gdl-lam-row.is-global .gdl-lam-row-main { flex-basis: auto !important; }
+		}
+		@container gdl-achievement-dialog (max-width: 400px) {
+			.gdl-lam-global-content { flex-wrap: wrap !important; }
+			.gdl-lam-global-details { flex-basis: 100% !important; }
 		}
 	`);
 }

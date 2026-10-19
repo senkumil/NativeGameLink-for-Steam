@@ -24,7 +24,7 @@ const sourceRootFiles = [
   'plugin.json', 'plugin.source.json',
   'tsconfig.json', 'tsconfig.check.json',
 ];
-const sourceDirectories = ['.github', '.millennium', 'backend', 'docs', 'frontend', 'scripts', 'tests'];
+const sourceDirectories = ['.github', '.millennium', 'backend', 'frontend', 'scripts', 'tests'];
 
 async function exists(target) {
   try { await fs.access(target); return true; } catch { return false; }
@@ -91,7 +91,7 @@ async function validateCleanPackage() {
   for (const name of mutableRootFiles) {
     if (await exists(path.join(cleanRoot, name))) throw new Error(`Clean package leaked mutable user state: ${name}`);
   }
-  for (const required of ['plugin.json', '.millennium/Dist/index.js', 'backend/main.lua', 'README.md', 'LICENSE', 'docs/BIG_PICTURE_BASES.md']) {
+  for (const required of ['plugin.json', '.millennium/Dist/index.js', 'backend/main.lua', 'README.md', 'LICENSE']) {
     if (!(await exists(path.join(cleanRoot, required)))) throw new Error(`Clean package is missing required runtime file: ${required}`);
   }
   const files = await walk(cleanRoot);
@@ -103,7 +103,7 @@ async function validateCleanPackage() {
 }
 
 async function validateSourcePackage() {
-  for (const required of ['frontend/index.tsx', 'scripts/build-plugin.mjs', '.github/workflows/ci.yml', '.github/workflows/release.yml', '.millennium/Dist/index.js', 'plugin.json', 'docs/BIG_PICTURE_BASES.md']) {
+  for (const required of ['frontend/index.tsx', 'scripts/build-plugin.mjs', '.github/workflows/ci.yml', '.github/workflows/release.yml', '.millennium/Dist/index.js', 'plugin.json']) {
     if (!(await exists(path.join(sourceRoot, required)))) throw new Error(`Source package is missing: ${required}`);
   }
   if (await exists(path.join(sourceRoot, 'node_modules'))) throw new Error('Source package must not contain node_modules.');
@@ -120,7 +120,6 @@ await fs.mkdir(sourceRoot, { recursive: true });
 for (const file of ['plugin.json', 'LICENSE', 'README.md', 'README_ES.md']) await copyFile(file, cleanRoot);
 await copyFile('.millennium/Dist/index.js', cleanRoot);
 await copyDirectory('backend', cleanRoot, rel => !/(?:^|\/)obj(?:\/|$)|(?:^|\/)bin(?:\/|$)/i.test(rel));
-await copyDirectory('docs', cleanRoot, rel => !/^docs\/screenshots(?:\/|$)/.test(rel));
 
 for (const file of sourceRootFiles) {
   if (await exists(path.join(root, file))) await copyFile(file, sourceRoot);
@@ -128,7 +127,6 @@ for (const file of sourceRootFiles) {
 for (const directory of sourceDirectories) {
   await copyDirectory(directory, sourceRoot, rel => {
     const normalized = rel.replaceAll('\\', '/');
-    if (/^docs\/screenshots(?:\/|$)/.test(normalized)) return false;
     if (normalized.includes('/node_modules/')) return false;
     if (normalized.startsWith('release/')) return false;
     if (normalized.includes('/coverage/')) return false;

@@ -101,7 +101,7 @@ export function createActivityView(
 			</div>` : ''}
 		</div>
 		<div class="gdl-latest-news-row"><button type="button" class="gdl-latest-news-button" data-gdl-open-url="">${escapeHtml(gdlText('latest_news', loc('AppActivity_ViewLatestNews', 'View latest news')))}</button></div>`}
-		<div id="gdl-activity-feed" data-gdl-news-signature="${newsItemsSignature(options.newsItems)}" data-gdl-feed-signature="${feedSnapshot.signature}">${feedSnapshot.html}</div>`;
+		<div id="gdl-activity-feed" class="${feedClasses.ActivityFeedContainer}" data-gdl-news-signature="${newsItemsSignature(options.newsItems)}" data-gdl-feed-signature="${feedSnapshot.signature}">${feedSnapshot.html}</div>`;
 
 	const sourceHeading = layout.anchorRegion
 		? Array.from(layout.anchorRegion.children).find(child => child.tagName === 'H2') as HTMLElement | undefined

@@ -116,3 +116,6 @@ $RECYCLE.BIN/
 
 # CI/release staging output
 /release/
+
+# Local development documentation
+/docs/

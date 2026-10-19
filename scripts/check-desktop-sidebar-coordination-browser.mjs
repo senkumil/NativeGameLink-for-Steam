@@ -33,6 +33,7 @@ const files = {
   'early-achievement-sidebar': 'frontend/features/library/early-achievement-sidebar.ts',
   layout: 'frontend/features/library/layout.ts',
   'primary-links': 'frontend/features/library/primary-links.ts',
+  'primary-links-layout': 'frontend/features/library/primary-links-layout.ts',
   'primary-links-style': 'frontend/features/library/styles/primary-links.ts',
   'activity-style': 'frontend/features/library/styles/activity.ts',
   'native-dom': 'frontend/steam/native-dom.ts',
@@ -270,8 +271,8 @@ try {
         for (const node of [host, document.getElementById('oracle')]) { node.style.zoom = String(zoom); node.classList.toggle('NarrowWindow', narrow); node.classList.toggle('UltraNarrowRightPanel', ultra); }
         primary.insertPrimaryLinksBar(bar, layout(), root); window.dispatchEvent(new Event('resize')); await frame();
         const oracleGap = document.querySelector('#oracle-right h2').getBoundingClientRect().top - document.getElementById('oracle-links-body').getBoundingClientRect().bottom;
-        const ownTop = column.querySelector('h2').getBoundingClientRect().top, ownGap = ownTop - bar.getBoundingClientRect().bottom;
-        check(Math.abs((ownGap - oracleGap) / zoom) <= 1.1, `width${width}/zoom${zoom}: sidebar top gap equals the native visible-links-body oracle`);
+        const ownTop = column.querySelector('h2').getBoundingClientRect().top, ownGap = ownTop - bar.firstElementChild.getBoundingClientRect().bottom;
+        check(Math.abs((ownGap - oracleGap) / zoom) <= 1.1, `width${width}/zoom${zoom}: sidebar top gap equals the same native visible-links-body boundary`);
         if (!ultra) check(Math.abs((root.querySelector('h2').getBoundingClientRect().top - ownTop) / zoom) <= 1.1,
           `width${width}/zoom${zoom}: both column headings start at the same native baseline`);
         assertOrder(`width${width}/zoom${zoom}`);

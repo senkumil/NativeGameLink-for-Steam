@@ -148,10 +148,9 @@ export function renderLinkedGamePage(
 		headerImage: data.header_image || '',
 	};
 	const activity = adoptLinkedLoadingActivity(doc, steamAppId, context.shortcutAppId) || createActivityView(doc, layout, activityOptions);
-	// Steam's native content column can itself be a grid/flex layout. Inserting
-	// Activity and Community as separate direct children lets that outer layout
-	// place Community on a new row after the entire sidebar, leaving a tall gap.
-	// Keep every injected main-column section inside one atomic native child.
+	// Keep the injected main sections in one owned child of the native column.
+	// Activity uses the narrow stack width; Community publishes its full width
+	// and clearance below the live sidebar without moving either section.
 	const mainContentStack = doc.createElement('div');
 	mainContentStack.id = 'gdl-main-content-stack';
 	mainContentStack.style.cssText = 'display:flex !important;flex-direction:column !important;align-items:stretch !important;justify-content:flex-start !important;min-width:0 !important;max-width:100% !important;height:auto !important;min-height:0 !important;flex:0 0 auto !important;box-sizing:border-box !important;overflow:visible !important;';

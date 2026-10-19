@@ -1,4 +1,4 @@
-import { ACH_CLASSES, LINKS_BAR_CLASSES, PLAYBAR_CLASSES } from './css';
+import { ACH_CLASSES, LINKS_BAR_CLASSES, PLAYBAR_CLASSES, PLAYBAR_CLASS_MODULE } from './css';
 import { gdlText, loc, steamLanguageSync } from './localization';
 
 export const NATIVE_UI_BLUEPRINT_KEYS = {
@@ -69,9 +69,13 @@ function captureNativePlaybarTypography(element: HTMLElement): NativePlaybarTypo
 	return profile.label || profile.detail ? profile : undefined;
 }
 
-function applyTypographyValues(element: HTMLElement, values?: NativeTypographyValues): void {
+function applyTypographyValues(element: HTMLElement, values?: NativeTypographyValues, responsive = false): void {
 	if (!values) return;
 	for (const [property, value] of Object.entries(values)) {
+		// Steam changes these at NarrowRightPanel and compact-header boundaries.
+		// A session capture belongs to its original width; native CSS must keep
+		// sizing the copy when the same playbar is resized or zoomed.
+		if (responsive && (property === 'font-size' || property === 'line-height')) continue;
 		if (element.style.getPropertyValue(property) === value && element.style.getPropertyPriority(property) === 'important') continue;
 		element.style.setProperty(property, value, 'important');
 	}
@@ -85,6 +89,7 @@ export function applyNativePlaybarTypography(
 	preferredKey: NativeUiBlueprintKey,
 ): void {
 	const ps = PLAYBAR_CLASSES();
+	const responsive = PLAYBAR_CLASS_MODULE(root.ownerDocument).native;
 	const profile = nativeUiBlueprintTypography.get(blueprintKey(preferredKey))
 		|| nativeUiBlueprintTypography.get(blueprintKey(NATIVE_UI_BLUEPRINT_KEYS.playbarPlaytime))
 		|| nativeUiBlueprintTypography.get(blueprintKey(NATIVE_UI_BLUEPRINT_KEYS.playbarLastPlayed));
@@ -94,14 +99,14 @@ export function applyNativePlaybarTypography(
 		...elementsWithCssModuleClass(root, ps.LastPlayedLabel),
 	]);
 	for (const label of labels) {
-		applyTypographyValues(label, profile.label);
+		applyTypographyValues(label, profile.label, responsive);
 	}
 	const details = new Set([
 		...elementsWithCssModuleClass(root, ps.PlayBarDetailLabel),
 		...elementsWithCssModuleClass(root, ps.LastPlayedInfo),
 	]);
 	for (const detail of details) {
-		applyTypographyValues(detail, profile.detail);
+		applyTypographyValues(detail, profile.detail, responsive);
 	}
 }
 
@@ -341,7 +346,8 @@ export function buildNativePlaybarStatBlueprint(
 			|| elementsWithCssModuleClass(stat, ps.CloudIconSVG).length > 0
 			|| Boolean(stat.querySelector('.gdl-cloud-icon, .SVGIcon_Cloud'))) return null;
 	} else if (!hasCssModuleClass(stat, ps.Playtime)
-		|| elementsWithCssModuleClass(stat, ps.GameStatIconForced).length === 0) return null;
+		|| (elementsWithCssModuleClass(stat, ps.GameStatIcon).length === 0
+			&& elementsWithCssModuleClass(stat, ps.GameStatIconForced).length === 0)) return null;
 	stat.removeAttribute('id');
 	for (const attribute of Array.from(stat.attributes)) if (attribute.name.startsWith('data-')) stat.removeAttribute(attribute.name);
 	const label = elementsWithCssModuleClass(stat, ps.PlayBarLabel)[0];

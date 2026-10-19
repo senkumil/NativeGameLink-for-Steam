@@ -1,0 +1,92 @@
+{
+  "bf3": {
+    "items": [],
+    "source": "https://store.steampowered.com/api/storesearch/?term=bf3&l=english&cc=US",
+    "total": 0
+  },
+  "captured_at": "2026-10-18T22:14:41.7845118Z",
+  "Battlefield 3": {
+    "items": [
+      {
+        "tiny_image": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1238820/capsule_231x87.jpg?t=1777326004",
+        "name": "Battlefield 3™",
+        "type": "app",
+        "id": 1238820
+      },
+      {
+        "tiny_image": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/985020/capsule_231x87.jpg?t=1575551365",
+        "name": "Three Kingdoms：Ancient battlefield | 三国古战略",
+        "type": "app",
+        "id": 985020
+      },
+      {
+        "tiny_image": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1238831/capsule_231x87.jpg?t=1598622474",
+        "name": "Battlefield 3™ The Ultimate Shortcut Bundle",
+        "type": "app",
+        "id": 1238831
+      },
+      {
+        "tiny_image": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1278134/capsule_231x87.jpg?t=1598622524",
+        "name": "Battlefield 3™ SPECACT Kit & Dog Tag Bundle",
+        "type": "app",
+        "id": 1278134
+      },
+      {
+        "tiny_image": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/957790/capsule_231x87.jpg?t=1754039296",
+        "name": "War Dust VR: 32v32 Battlefields",
+        "type": "app",
+        "id": 957790
+      },
+      {
+        "tiny_image": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/3461930/256ca8d79f67177076d7f5bc8cf988c918af2df3/capsule_231x87.jpg?t=1751646432",
+        "name": "WAR DUST VR : STORM | 32vs32 Battlefields",
+        "type": "app",
+        "id": 3461930
+      }
+    ],
+    "source": "https://store.steampowered.com/api/storesearch/?term=Battlefield%203&l=english&cc=US",
+    "total": 6
+  },
+  "details": {
+    "1238820": {
+      "data": {
+        "steam_appid": 1238820,
+        "name": "Battlefield 3™",
+        "type": "game",
+        "header_image": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1238820/header.jpg?t=1777326004"
+      },
+      "success": true,
+      "source": "https://store.steampowered.com/api/appdetails?appids=1238820&l=english"
+    },
+    "1278134": {
+      "data": {
+        "steam_appid": 1278134,
+        "name": "Battlefield 3™ SPECACT Kit & Dog Tag Bundle",
+        "type": "dlc",
+        "header_image": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1278134/header.jpg?t=1598622524"
+      },
+      "success": true,
+      "source": "https://store.steampowered.com/api/appdetails?appids=1278134&l=english"
+    },
+    "1238831": {
+      "data": {
+        "steam_appid": 1238831,
+        "name": "Battlefield 3™ The Ultimate Shortcut Bundle",
+        "type": "dlc",
+        "header_image": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1238831/header.jpg?t=1598622474"
+      },
+      "success": true,
+      "source": "https://store.steampowered.com/api/appdetails?appids=1238831&l=english"
+    },
+    "41070": {
+      "data": {
+        "steam_appid": 41070,
+        "name": "Serious Sam 3: BFE",
+        "type": "game",
+        "header_image": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/41070/header.jpg?t=1728688460"
+      },
+      "success": true,
+      "source": "https://store.steampowered.com/api/appdetails?appids=41070&l=english"
+    }
+  }
+}

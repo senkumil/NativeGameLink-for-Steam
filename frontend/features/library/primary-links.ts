@@ -1,7 +1,7 @@
 import { gdlText } from '../../steam/localization';
 import { steamGameMainPageUrl } from '../../core/steam-links';
 import { escapeHtml } from '../../core/text';
-import { PLAYBAR_CLASSES } from '../../steam/css';
+import { LINKS_BAR_CLASSES, PLAYBAR_CLASSES, resolveClassModule } from '../../steam/css';
 import { closestWithCssModuleClass, elementsWithCssModuleClass, hasCssModuleClass, isRenderedElement } from '../../steam/native-dom';
 import { committedHeaderAppId, isPaintedLibraryElement, paintedNativePlaybar } from '../../steam/library-details';
 import { findNativeLibraryHeader } from '../../steam/library-header';
@@ -10,6 +10,7 @@ import { isShortcutDismissed } from '../shortcuts/dismissed';
 import { routedSteamAppId } from './native-route';
 import type { NativeLibraryLayout } from './layout';
 import { ensurePrimaryLinksStyles } from './styles/primary-links';
+import { primaryLinkPositions } from './primary-links-layout';
 
 export interface PrimaryLinksOptions {
 	steamAppId: string;
@@ -21,6 +22,8 @@ export interface PrimaryLinksOptions {
 
 type ResponsiveLayout = { update: () => void; dispose: () => void };
 const responsiveLayouts = new WeakMap<HTMLElement, ResponsiveLayout>();
+const SECTION_FALLBACK = { AppDetailsSection: '_2r4TK4BAuU-J4FuF_O7v_5',
+	AppDetailsSectionContainer: '_31ptFGGMZrSQc5BCX1e5lm', RightColumnSection: '_3KfxIwlXEvum7FCD_AM2_t', Body: '_5uvIN6jXDXzzck59F-nhv' };
 
 function linkedGameDestinations({ steamAppId, isDelisted, hasWorkshop, hasDlc }: PrimaryLinksOptions): Array<[string, string]> {
 	const links: Array<[string, string]> = [[gdlText('store_page', 'Store page'), steamGameMainPageUrl(steamAppId, isDelisted)]];
@@ -57,16 +60,19 @@ export function disposePrimaryLinksBar(doc: Document): void {
 function installPrimaryLinksResponsiveLayout(inner: HTMLElement): void {
 	responsiveLayouts.get(inner)?.dispose();
 	const primary = Array.from(inner.querySelectorAll<HTMLElement>('.gdl-primary-link'));
+	const slots = Array.from(inner.querySelectorAll<HTMLElement>('.gdl-primary-slot'));
+	const host = inner.querySelector<HTMLElement>('.gdl-primary-links');
 	const overflow = Array.from(inner.querySelectorAll<HTMLElement>('.gdl-primary-overflow-link'));
 	const more = inner.querySelector<HTMLElement>('.gdl-primary-more');
 	const win = inner.ownerDocument.defaultView;
-	if (!primary.length || !more || !win) return;
+	if (!primary.length || !host || !more || !win) return;
 	const doc = inner.ownerDocument;
 	const trigger = more.querySelector<HTMLElement>('summary');
 	const menu = more.querySelector<HTMLElement>('.gdl-primary-more-menu');
 	const closeMenu = (): void => {
 		if (menu?.matches(':popover-open')) menu.hidePopover();
-		more.removeAttribute('open'); trigger?.setAttribute('aria-expanded', 'false');
+		if (more.hasAttribute('open')) more.removeAttribute('open');
+		if (trigger?.getAttribute('aria-expanded') !== 'false') trigger?.setAttribute('aria-expanded', 'false');
 	};
 	const openMenu = (): void => {
 		if (!menu || !trigger || !inner.isConnected) return;
@@ -98,30 +104,76 @@ function installPrimaryLinksResponsiveLayout(inner: HTMLElement): void {
 	doc.addEventListener('pointerdown', outside, true);
 	doc.addEventListener('keydown', keyboard, true);
 	doc.addEventListener('scroll', closeMenu, true);
-	let frame = 0, lastWidth = -1;
+	let frame = 0, lastMetrics = '', intrinsicMetrics = '';
+	let widths: number[] = [], rowHeight = 0;
+	let moreBasis = 0, moreOuter = 0, moreShrink = 1, hostShrink = 1;
+	const style = (element: HTMLElement, property: string, value: string, priority = ''): void => {
+		if (element.style.getPropertyValue(property) !== value || element.style.getPropertyPriority(property) !== priority) {
+			if (value) element.style.setProperty(property, value, priority); else element.style.removeProperty(property);
+		}
+	};
 	const update = (): void => {
+		if (frame) win.cancelAnimationFrame(frame);
 		frame = 0;
-		if (!inner.isConnected || inner.clientWidth === lastWidth) return;
-		lastWidth = inner.clientWidth;
+		if (!inner.isConnected || !inner.clientWidth) return;
+		const computed = win.getComputedStyle(slots[0]), font = win.getComputedStyle(primary[0]);
+		const maxRows = win.innerHeight < 1200 ? 1 : 3;
+		const intrinsic = [(inner as HTMLElement & { currentCSSZoom?: number }).currentCSSZoom,
+			computed.marginRight, computed.paddingLeft, computed.paddingRight, computed.paddingTop, computed.paddingBottom,
+			font.fontFamily, font.fontSize, font.fontWeight, font.fontStyle, font.lineHeight, font.letterSpacing, font.wordSpacing, font.textTransform].join('|');
+		const metrics = [inner.clientWidth, maxRows, intrinsic].join('|');
+		if (metrics === lastMetrics) return;
+		lastMetrics = metrics;
 		closeMenu();
-		for (const link of primary) link.style.removeProperty('display');
-		more.style.setProperty('display', 'none', 'important');
-		for (const item of overflow) item.style.setProperty('display', 'none', 'important');
-		const computed = win.getComputedStyle(inner);
-		const available = Math.max(0, inner.clientWidth - (parseFloat(computed.paddingLeft) || 0) - (parseFloat(computed.paddingRight) || 0));
-		const gap = parseFloat(computed.columnGap || computed.gap) || 0;
-		const widths = primary.map(link => link.getBoundingClientRect().width);
-		if (widths.reduce((sum, width) => sum + width, 0) + (widths.length - 1) * gap <= available) return;
-		let count = Math.max(1, primary.length - 1);
-		while (count > 1 && widths.slice(0, count).reduce((sum, width) => sum + width, 0) + count * gap + 34 > available) count--;
-		primary.forEach((link, index) => { if (index >= count) link.style.setProperty('display', 'none', 'important'); });
-		overflow.forEach((link, index) => link.style.setProperty('display', index >= count ? 'block' : 'none', 'important'));
-		more.style.setProperty('display', 'block', 'important');
+		const gap = parseFloat(computed.marginRight) || 0;
+		if (intrinsic !== intrinsicMetrics) {
+			intrinsicMetrics = intrinsic;
+			widths = slots.map(slot => slot.clientWidth); rowHeight = slots[0].clientHeight;
+		}
+		const bodyStyle = win.getComputedStyle(host.parentElement!);
+		const pixels = (value: string): number => parseFloat(value) || 0;
+		const available = pixels(bodyStyle.width) - (bodyStyle.boxSizing === 'border-box'
+			? pixels(bodyStyle.paddingLeft) + pixels(bodyStyle.paddingRight) + pixels(bodyStyle.borderLeftWidth) + pixels(bodyStyle.borderRightWidth) : 0);
+		if (!moreOuter) {
+			// Measure the native flex bases once, while More still has its initial
+			// display:none. Its computed width then contains the unshrunk CSS width.
+			const moreStyle = win.getComputedStyle(more), hostStyle = win.getComputedStyle(host);
+			const padding = pixels(moreStyle.paddingLeft) + pixels(moreStyle.paddingRight);
+			const border = pixels(moreStyle.borderLeftWidth) + pixels(moreStyle.borderRightWidth);
+			moreBasis = pixels(moreStyle.width) - (moreStyle.boxSizing === 'border-box' ? padding + border : 0);
+			moreOuter = moreBasis + padding + border + pixels(moreStyle.marginLeft) + pixels(moreStyle.marginRight);
+			moreShrink = pixels(moreStyle.flexShrink); hostShrink = pixels(hostStyle.flexShrink);
+		}
+		// Steam's CalculateLinkPositions uses logical clientWidth for both the
+		// host and links. Mixing zoomed DOMRect widths here changes overflow at
+		// identical logical widths when the CEF surface uses CSS zoom.
+		let positions = primaryLinkPositions(widths, Math.round(available), gap, rowHeight, maxRows);
+		const overflowing = positions.some(position => position.x < 0);
+		if (overflowing) {
+			// Both native siblings shrink from their flex bases. Compute the same
+			// available width without toggling More and forcing a second layout.
+			const weight = available * hostShrink + moreBasis * moreShrink;
+			const narrowed = available - (weight > 0 ? moreOuter * available * hostShrink / weight : moreOuter);
+			positions = primaryLinkPositions(widths, Math.round(narrowed), gap, rowHeight, maxRows);
+		}
+		const rows = Math.max(1, ...positions.filter(position => position.x >= 0).map(position => 1 + position.y / rowHeight));
+		style(more, 'display', overflowing ? 'flex' : 'none', 'important');
+		style(host, 'height', `${rows * rowHeight}px`);
+		slots.forEach((slot, index) => {
+			const position = positions[index];
+			const hidden = position.x < 0;
+			style(slot, 'opacity', hidden ? '0' : ''); style(slot, 'pointer-events', hidden ? 'none' : ''); style(slot, 'z-index', hidden ? '-100' : '');
+			if (primary[index].tabIndex !== (hidden ? -1 : 0)) primary[index].tabIndex = hidden ? -1 : 0;
+			style(slot, 'left', hidden ? '' : `${position.x}px`); style(slot, 'top', hidden ? '' : `${position.y}px`);
+		});
+		overflow.forEach((link, index) => style(link, 'display', positions[index].x < 0 ? 'block' : 'none', 'important'));
 	};
 	const queue = (): void => { if (!frame) frame = win.requestAnimationFrame(update); };
+	const fontLoaded = (): void => { lastMetrics = ''; intrinsicMetrics = ''; queue(); };
 	const observer = typeof win.ResizeObserver === 'function' ? new win.ResizeObserver(queue) : null;
 	observer?.observe(inner);
-	if (!observer) win.addEventListener('resize', queue, { passive: true });
+	win.addEventListener('resize', queue, { passive: true });
+	doc.fonts?.addEventListener('loadingdone', fontLoaded);
 	responsiveLayouts.set(inner, { update, dispose: () => {
 		closeMenu();
 		trigger?.removeEventListener('click', toggleMenu);
@@ -131,7 +183,8 @@ function installPrimaryLinksResponsiveLayout(inner: HTMLElement): void {
 		doc.removeEventListener('scroll', closeMenu, true);
 		observer?.disconnect();
 		if (frame) win.cancelAnimationFrame(frame);
-		if (!observer) win.removeEventListener('resize', queue);
+		win.removeEventListener('resize', queue);
+		doc.fonts?.removeEventListener('loadingdone', fontLoaded);
 	} });
 }
 
@@ -142,11 +195,15 @@ export function createPrimaryLinksBar(doc: Document, _layout: NativeLibraryLayou
 	ensurePrimaryLinksStyles(doc);
 	const existing = doc.getElementById('gdl-link-bar');
 	const bar = existing || doc.createElement('div');
+	const css = LINKS_BAR_CLASSES(doc);
+	const section = resolveClassModule(module => Boolean(module.AppDetailsSection && module.AppDetailsSectionContainer
+		&& module.RightColumnSection && module.Body), SECTION_FALLBACK, doc).classes;
 	if (!existing) {
 		bar.id = 'gdl-link-bar';
-		bar.className = 'gdl-link-bar-inner';
 		bar.dataset.gdlLinksSettled = '0';
 	}
+	const className = `gdl-link-bar-inner ${section.AppDetailsSection} ${css.LinksSection}`;
+	if (bar.className !== className) bar.className = className;
 	for (const duplicate of doc.querySelectorAll<HTMLElement>('#gdl-link-bar, .gdl-link-bar-inner')) if (duplicate !== bar) disposeBar(duplicate);
 	if (bar.dataset.gdlSteamAppId !== options.steamAppId || bar.dataset.gdlShortcutAppId !== String(shortcutId)) {
 		bar.style.removeProperty('--gdl-native-links-bottom-gap');
@@ -154,12 +211,12 @@ export function createPrimaryLinksBar(doc: Document, _layout: NativeLibraryLayou
 	if (bar.dataset.gdlSteamAppId !== options.steamAppId) bar.dataset.gdlSteamAppId = options.steamAppId;
 	if (bar.dataset.gdlShortcutAppId !== String(shortcutId)) bar.dataset.gdlShortcutAppId = String(shortcutId);
 	const links = linkedGameDestinations(options);
-	const signature = JSON.stringify(links);
+	const signature = JSON.stringify([links, css, section]);
 	if (bar.dataset.gdlLinksSignature !== signature) {
-		const primary = links.map(([label, url], index) => `<a class="gdl-primary-link" data-gdl-primary-index="${index}" href="${escapeHtml(url)}" data-gdl-open-url="${escapeHtml(url)}">${escapeHtml(label)}</a>`).join('');
+		const primary = links.map(([label, url], index) => `<div class="gdl-primary-slot ${css.LinkInner}"><a class="gdl-primary-link ${css.Anchor}" data-gdl-primary-index="${index}" href="${escapeHtml(url)}" data-gdl-open-url="${escapeHtml(url)}"><div class="${css.Link}"><span class="${css.Text}">${escapeHtml(label)}</span></div></a></div>`).join('');
 		const overflow = links.map(([label, url], index) => `<a class="gdl-primary-overflow-link" data-gdl-primary-index="${index}" href="${escapeHtml(url)}" data-gdl-open-url="${escapeHtml(url)}">${escapeHtml(label)}</a>`).join('');
 		responsiveLayouts.get(bar)?.dispose();
-		bar.innerHTML = `${primary}<details class="gdl-primary-more"><summary aria-haspopup="menu" aria-expanded="false" aria-label="${escapeHtml(gdlText('more_links', 'More links'))}">•••</summary><div class="gdl-primary-more-menu" popover="manual" role="menu">${overflow}</div></details>`;
+		bar.innerHTML = `<div class="${section.AppDetailsSectionContainer} ${section.RightColumnSection}"><div class="${section.Body} ${css.LinksSectionBody}"><div class="gdl-primary-links ${css.Links}">${primary}</div><details class="gdl-primary-more ${css.MenuButton}"><summary aria-haspopup="menu" aria-expanded="false" aria-label="${escapeHtml(gdlText('more_links', 'More links'))}"><svg viewBox="0 0 256 256" aria-hidden="true"><circle cx="126" cy="134" r="20.6"/><circle cx="189.4" cy="134" r="20.6"/><circle cx="62.6" cy="134" r="20.6"/></svg></summary><div class="gdl-primary-more-menu" popover="manual" role="menu">${overflow}</div></details></div></div>`;
 		bar.dataset.gdlLinksSignature = signature;
 		installPrimaryLinksResponsiveLayout(bar);
 	}
@@ -195,25 +252,6 @@ function findPrimaryLinksPlaybar(doc: Document, shortcutId: number): HTMLElement
 		&& committedHeaderAppId(element) === shortcutId && isPaintedLibraryElement(doc, element)) || null;
 }
 
-function syncNativeLinksBottomGap(bar: HTMLElement, layout?: NativeLibraryLayout | null): void {
-	const region = layout?.anchorRegion;
-	const view = bar.ownerDocument.defaultView;
-	if (!region?.isConnected || region.ownerDocument !== bar.ownerDocument || !view) return;
-	const body = Array.from(region.children).find(child => child.tagName === 'DIV');
-	if (!body) return;
-	const bodyMargin = parseFloat(view.getComputedStyle(body).marginBottom);
-	const sectionMargin = parseFloat(view.getComputedStyle(region).marginBottom);
-	if (!Number.isFinite(bodyMargin) || !Number.isFinite(sectionMargin)) return;
-	// Our bar is the visible surface. Steam's visible LinksSectionContainer is
-	// followed by both the body's gutter and its enclosing section's margin.
-	// Installed CSS computes 10 + 26px; ColumnContainer then adds its live 10px
-	// above BOTH columns. Keep that native padding and its responsive behavior.
-	const gap = `${bodyMargin + sectionMargin}px`;
-	if (bar.style.getPropertyValue('--gdl-native-links-bottom-gap') !== gap) {
-		bar.style.setProperty('--gdl-native-links-bottom-gap', gap);
-	}
-}
-
 export function isBarProperlyPositionedBelowPlaybar(doc: Document, bar: HTMLElement): boolean {
 	const id = currentShortcut(doc, bar.dataset.gdlSteamAppId || '', bar.dataset.gdlShortcutAppId);
 	const playbar = id ? findPrimaryLinksPlaybar(doc, id) : null;
@@ -246,7 +284,6 @@ export function insertPrimaryLinksBar(bar: HTMLElement, layout?: NativeLibraryLa
 		&& (anchor.compareDocumentPosition(info) & Node.DOCUMENT_POSITION_FOLLOWING)) anchor = info;
 	parent = anchor.parentElement!;
 	if (anchor.nextElementSibling !== bar) parent.insertBefore(bar, anchor.nextSibling);
-	syncNativeLinksBottomGap(bar, layout);
 	responsiveLayouts.get(bar)?.update();
 	if (!isBarProperlyPositionedBelowPlaybar(doc, bar)) return;
 	if (bar.dataset.gdlLinksSettled !== '1') bar.dataset.gdlLinksSettled = '1';

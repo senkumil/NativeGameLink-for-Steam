@@ -1,7 +1,7 @@
 import { backendLog } from '../../api/backend';
 import { escapeHtml } from '../../core/text';
 import { DisposableRegistry } from '../../core/disposables';
-import { ACH_CLASSES } from '../../steam/css';
+import { ACH_CLASSES, resolveClassModule } from '../../steam/css';
 import { gdlText, loc } from '../../steam/localization';
 import { getOfficialCommunityItems, normalizeCommunityAssetUrl } from './community-items';
 import { GDL_INJECTED } from './constants';
@@ -120,17 +120,18 @@ function openTradingCardPreview(doc: Document, imageUrl: string, gameName: strin
 		const nh = naturalH || image.naturalHeight || initialHeight;
 		if (nw <= 0 || nh <= 0) return;
 		const view = doc.defaultView;
-		const viewportWidth = Math.max(320, view?.innerWidth || doc.documentElement.clientWidth || 1280);
-		const viewportHeight = Math.max(240, view?.innerHeight || doc.documentElement.clientHeight || 720);
-		const maxPanelWidth = Math.max(240, viewportWidth - 30);
-		const maxImageWidth = Math.max(120, Math.min(1500, maxPanelWidth - 32));
-		const maxImageHeight = Math.max(120, viewportHeight - 114);
+		const viewportWidth = overlay.clientWidth || view?.innerWidth || doc.documentElement.clientWidth || 1280;
+		const viewportHeight = overlay.clientHeight || view?.innerHeight || doc.documentElement.clientHeight || 720;
+		const maxPanelWidth = Math.max(1, viewportWidth - 30);
+		const maxImageWidth = Math.max(1, Math.min(1500, maxPanelWidth - 34));
+		const maxImageHeight = Math.max(1, viewportHeight - 114);
 		const scale = Math.min(maxImageWidth / nw, maxImageHeight / nh, 1);
 		const imageWidth = Math.max(1, Math.round(nw * scale));
 		const imageHeight = Math.max(1, Math.round(nh * scale));
 
-		panel.style.width = `${imageWidth + 32}px`;
+		panel.style.width = `${imageWidth + 34}px`;
 		panel.style.maxWidth = `${maxPanelWidth}px`;
+		panel.style.maxHeight = `${Math.max(1, viewportHeight - 24)}px`;
 		image.style.width = `${imageWidth}px`;
 		image.style.height = `${imageHeight}px`;
 		image.style.maxHeight = 'none';
@@ -213,8 +214,8 @@ function openTradingCardPreview(doc: Document, imageUrl: string, gameName: strin
 	});
 	doc.addEventListener('keydown', onKeyDown, true);
 
-	fitPreviewToImage(cachedPreload?.naturalWidth, cachedPreload?.naturalHeight);
 	doc.body.appendChild(overlay);
+	fitPreviewToImage(cachedPreload?.naturalWidth, cachedPreload?.naturalHeight);
 
 	const view = doc.defaultView;
 	if (view) view.requestAnimationFrame(() => overlay.classList.add('is-visible'));
@@ -259,6 +260,7 @@ export function setupTradingCardTilt(root: HTMLElement): void {
 	if (doc.defaultView) {
 		lifecycle.listen(doc.defaultView, 'scroll', onPointerLeaveOrScroll, { passive: true, capture: true });
 		lifecycle.listen(doc.defaultView, 'blur', onPointerLeaveOrScroll);
+		lifecycle.listen(doc.defaultView, 'resize', onPointerLeaveOrScroll, { passive: true });
 	}
 	lifecycle.listen(doc, 'visibilitychange', onPointerLeaveOrScroll);
 
@@ -393,26 +395,21 @@ export function setupTradingCardTilt(root: HTMLElement): void {
 			activeReset = reset;
 
 			baseRect = card.getBoundingClientRect();
-			// 1.75 is a 20% increase over the previous 1.46x native-like preview.
-			const width = baseRect.width * 1.75;
+			const logicalWidth = Number.parseFloat(view?.getComputedStyle(card).width || '') || card.offsetWidth || baseRect.width;
+			const scale = logicalWidth > 0 ? baseRect.width / logicalWidth : 1;
+			const logicalHeight = baseRect.height / scale;
+			// The catalogue contains artwork, not account inventory. Steam's
+			// unowned card expands 1.5x; only confirmed owned/maxed cards use 2.5x.
+			const width = logicalWidth * 1.5;
 			const height = width * 261 / 224;
-			let left = -(width - baseRect.width) / 2;
-			let top = -(height - baseRect.height) / 2;
+			let left = -(width - logicalWidth) / 2;
+			let top = -(height - logicalHeight) / 2;
 
-			// Steam lets the preview leave its sidebar panel while keeping it
-			// centered over the original card. Only protect the actual viewport
-			// edges; clamping to the panel made edge cards expand off-center.
-			const viewportWidth = view?.innerWidth || card.ownerDocument.documentElement.clientWidth;
-			const viewportHeight = view?.innerHeight || card.ownerDocument.documentElement.clientHeight;
-			const viewportMargin = 8;
-			const absoluteLeft = baseRect.left + left;
-			const absoluteRight = absoluteLeft + width;
-			if (absoluteLeft < viewportMargin) left += viewportMargin - absoluteLeft;
-			else if (absoluteRight > viewportWidth - viewportMargin) left -= absoluteRight - (viewportWidth - viewportMargin);
-			const absoluteTop = baseRect.top + top;
-			const absoluteBottom = absoluteTop + height;
-			if (absoluteTop < viewportMargin) top += viewportMargin - absoluteTop;
-			else if (absoluteBottom > viewportHeight - viewportMargin) top -= absoluteBottom - (viewportHeight - viewportMargin);
+			// Native cards stay centered and only shift left when the expanded
+			// right edge would cross the viewport's 30px clearance.
+			const viewportWidth = (view?.innerWidth || card.ownerDocument.documentElement.clientWidth) / scale;
+			const absoluteRight = baseRect.left / scale + logicalWidth / 2 + width / 2;
+			if (absoluteRight > viewportWidth - 30) left -= absoluteRight - (viewportWidth - 30);
 
 			surface.style.left = `${left.toFixed(2)}px`;
 			surface.style.top = `${top.toFixed(2)}px`;
@@ -566,20 +563,26 @@ function setupTradingCardsHelpTooltip(doc: Document, button: HTMLElement): void 
 		doc.body.appendChild(popup);
 
 		const rect = button.getBoundingClientRect();
-		const popupWidth = Math.min(310, (doc.defaultView?.innerWidth || doc.documentElement.clientWidth || 400) - 24);
+		popup.style.position = 'fixed';
+		popup.style.width = '310px';
+		const scale = popup.getBoundingClientRect().width / 310 || 1;
+		const popupWidth = Math.max(1, Math.min(310, (doc.defaultView?.innerWidth || doc.documentElement.clientWidth || 400) / scale - 24));
 
 		// Position to the left of the ? button matching native Steam UI
-		let left = rect.left - popupWidth - 6;
+		let left = rect.left / scale - popupWidth - 6;
 		if (left < 12) {
-			left = Math.max(12, rect.right - popupWidth);
+			left = Math.max(12, rect.right / scale - popupWidth);
 		}
-		let top = rect.top - 12;
-		if (top < 12) top = 12;
+		const viewportWidth = (doc.defaultView?.innerWidth || doc.documentElement.clientWidth || 400) / scale;
+		left = Math.max(12, Math.min(left, viewportWidth - popupWidth - 12));
+		let top = rect.top / scale - 12;
+		popup.style.width = `${popupWidth}px`;
+		const viewportHeight = (doc.defaultView?.innerHeight || doc.documentElement.clientHeight || 720) / scale;
+		top = Math.max(12, Math.min(top, viewportHeight - popup.offsetHeight - 12));
 
 		popup.style.position = 'fixed';
 		popup.style.left = `${Math.round(left)}px`;
 		popup.style.top = `${Math.round(top)}px`;
-		popup.style.width = `${popupWidth}px`;
 		popup.style.zIndex = '2147483600';
 	};
 
@@ -594,6 +597,8 @@ function setupTradingCardsHelpTooltip(doc: Document, button: HTMLElement): void 
 	button.addEventListener('mouseleave', hide);
 	button.addEventListener('focus', show);
 	button.addEventListener('blur', hide);
+	doc.defaultView?.addEventListener('resize', hide, { passive: true });
+	doc.defaultView?.addEventListener('scroll', hide, { passive: true, capture: true });
 	let cleanups = helpCleanups.get(doc);
 	if (!cleanups) { cleanups = new Map(); helpCleanups.set(doc, cleanups); }
 	const ownedCleanups = cleanups;
@@ -603,28 +608,53 @@ function setupTradingCardsHelpTooltip(doc: Document, button: HTMLElement): void 
 		button.removeEventListener('mouseleave', hide);
 		button.removeEventListener('focus', show);
 		button.removeEventListener('blur', hide);
+		doc.defaultView?.removeEventListener('resize', hide);
+		doc.defaultView?.removeEventListener('scroll', hide, true);
 		ownedCleanups.delete(button);
 	});
 }
 
-/** Steam reflows cards into fewer columns before it reduces their visual size. */
-function installResponsiveTradingCardGrid(section: HTMLElement): void {
+/** Steam chooses percentages from the full details pane, then flex-wraps its
+ * min/max-constrained cards. The sidebar's width alone cannot select this mode. */
+function installResponsiveTradingCardGrid(section: HTMLElement, layout: NativeLibraryLayout): void {
 	responsiveGridCleanups.get(section)?.();
 	const body = section.querySelector<HTMLElement>('.gdl-trading-cards-body');
 	const grid = section.querySelector<HTMLElement>('.gdl-trading-card-grid');
 	if (!body || !grid) return;
+	const doc = section.ownerDocument, view = doc.defaultView;
+	let pane = layout.twoColumnRow || layout.sidebarColumn?.parentElement || body;
+	const panelClasses = resolveClassModule(module => Boolean(module.MainPanel && module.AppDetailsMain
+		&& module.AppDetailsTransitionGroup), {}, doc).classes;
+	const panelTokens = String(panelClasses.MainPanel || '').split(/\s+/).filter(Boolean);
+	if (panelTokens.length) {
+		for (let node: HTMLElement | null = pane; node; node = node.parentElement) {
+			if (panelTokens.every(token => node!.classList.contains(token))) { pane = node; break; }
+		}
+	}
+	const classes = resolveClassModule(module => Boolean(module.CardsSection && module.CardWrapper
+		&& module.SlightlyLargerThanNarrow && module.BetweenNarrowAndMedium),
+		{ RightBreakNarrow: '884px', RightBreakWide: '1500px' }, doc).classes;
+	const narrow = Number.parseFloat(classes.RightBreakNarrow) || 884;
+	const wide = Number.parseFloat(classes.RightBreakWide) || 1500;
 	const update = (): void => {
-		const width = body.clientWidth;
-		const columns = width < 340 ? 3 : width < 440 ? 4 : 5;
-		grid.style.setProperty('grid-template-columns', `repeat(${columns}, minmax(0, 1fr))`, 'important');
+		// The native responsive owner publishes this exact logical clientWidth
+		// to rightPanelWidth before choosing its card section classes.
+		const width = pane.clientWidth;
+		const percentage = width <= narrow ? 30 : width >= narrow + 242 ? 18 : width >= narrow + 42 ? 23 : 31;
+		for (const [property, value] of [['--gdl-trading-card-width', `${percentage}%`],
+			['--gdl-trading-card-max-width', width >= wide ? '110px' : '85px']]) {
+			if (grid.style.getPropertyValue(property) !== value) grid.style.setProperty(property, value);
+		}
 	};
 	update();
-	const ResizeObserverCtor = section.ownerDocument.defaultView?.ResizeObserver;
-	if (typeof ResizeObserverCtor !== 'function') return;
-	const observer = new ResizeObserverCtor(update);
-	observer.observe(body);
+	const ResizeObserverCtor = view?.ResizeObserver;
+	const observer = typeof ResizeObserverCtor === 'function' ? new ResizeObserverCtor(update) : null;
+	observer?.observe(body);
+	if (pane !== body) observer?.observe(pane);
+	view?.addEventListener('resize', update, { passive: true });
 	const cleanup = (): void => {
-		observer.disconnect();
+		observer?.disconnect();
+		view?.removeEventListener('resize', update);
 		responsiveGridCleanups.delete(section);
 	};
 	responsiveGridCleanups.set(section, cleanup);
@@ -708,7 +738,7 @@ export async function renderOfficialTradingCards(
 	if (!order.publish(section, 'cards')) return;
 
 	setupTradingCardTilt(section);
-	installResponsiveTradingCardGrid(section);
+	installResponsiveTradingCardGrid(section, layout);
 	for (const image of Array.from(section.querySelectorAll<HTMLImageElement>('.gdl-trading-card img'))) {
 		image.addEventListener('error', () => {
 			image.closest('.gdl-trading-card')?.remove();

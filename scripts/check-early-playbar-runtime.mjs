@@ -158,10 +158,27 @@ deliver(record('characterData', nativeText));
 assert.equal(cloudSyncs, beforeText + 1, 'React text updates synchronize before the next paint');
 assert.equal(playtimeSyncs, cloudSyncs);
 const beforeStyle = cloudSyncs;
-deliver(record('attributes', doc.playbar, { attributeName: 'style' }));
+for (let index = 0; index < 100; index++) deliver(record('attributes', doc.playbar, { attributeName: 'style' }));
+assert.equal(cloudSyncs, beforeStyle, 'splitter style bursts do not synchronously repeat every playbar scanner');
+assert.equal(doc.frames.size, 1, '100 ancestor width/style signals share one pending frame');
+assert.equal(doc.flushFrames(), 1, 'the next paint flushes the coalesced ancestor style work');
 assert.equal(cloudSyncs, beforeStyle + 1, 'ancestor opacity/style changes synchronize without a child replacement');
 deliver(record('attributes', stats, { attributeName: 'class' }));
 assert.equal(cloudSyncs, beforeStyle + 2, 'statistics class changes synchronize directly');
+
+const beforeMixed = cloudSyncs;
+deliver(record('attributes', doc.playbar, { attributeName: 'style' }));
+deliver(record('characterData', nativeText));
+assert.equal(cloudSyncs, beforeMixed + 1, 'native content synchronizes immediately while ancestor style work is pending');
+assert.equal(doc.frames.size, 0, 'immediate content synchronization consumes redundant pending style work');
+
+const beforeDrag = cloudSyncs;
+for (let step = 0; step < 60; step++) {
+  for (let event = 0; event < 8; event++) deliver(record('attributes', doc.playbar, { attributeName: 'style' }));
+  assert.equal(doc.frames.size, 1, 'each drag frame retains one ancestor refresh');
+  doc.flushFrames();
+}
+assert.equal(cloudSyncs - beforeDrag, 60, '480 splitter signals perform 60 refreshes, one per rendered frame');
 
 const beforeOwned = cloudSyncs;
 deliver(record('characterData', { nodeType: 3, parentElement: doc.cloud }));
@@ -224,6 +241,8 @@ assert.equal(cloudSyncs, beforeTransition + 1, 'unrelated transitions are ignore
 
 doc.playbar.style.opacity = '0'; early.sync();
 assert.equal(doc.frames.size, 1);
+deliver(record('attributes', doc.playbar, { attributeName: 'style' }));
+assert.equal(doc.frames.size, 2, 'settling and a pending ancestor signal are both owned by the lifecycle');
 early.dispose();
 assert.equal(mappingListeners.size, 0, 'disposing unsubscribes mapping hydration callbacks');
 assert.equal(doc.frames.size, 0, 'disposing cancels pending frames');

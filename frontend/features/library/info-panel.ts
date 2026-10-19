@@ -5,7 +5,6 @@ import {
 	GAME_INFO_CLASS_MODULE,
 	GAME_INFO_OUTER_CLASS_MODULE,
 	PLAYBAR_CLASS_MODULE,
-	PLAYBAR_CLASSES,
 	LIBRARY_SIDEBAR_CLASSES,
 } from '../../steam/css';
 import type { CssClasses } from '../../steam/css';
@@ -13,6 +12,7 @@ import { gdlText, loc } from '../../steam/localization';
 import {
 	addCssModuleClass,
 	buildNativeInfoButtonBlueprint,
+	closestWithCssModuleClass,
 	elementsWithCssModuleClass,
 	hasCssModuleClass,
 	isRenderedElement,
@@ -71,7 +71,7 @@ function infoButtonLabel(expanded: boolean): string {
 }
 
 function scrollTopButtonLabel(): string {
-	return loc('AppDetails_ScrollToTop', 'Back to top');
+	return loc('GameAction_ViewDetails_ScrollUp', 'Scroll to top');
 }
 
 function setInfoButtonScrollMode(button: HTMLElement, active: boolean, nativeWrapperClass = ''): void {
@@ -106,7 +106,7 @@ function collectMainScrollTargets(doc: Document, knownTargets?: Iterable<HTMLEle
 	const view = doc.defaultView;
 	const targets = new Set<HTMLElement>();
 	const anchors = mainScrollAnchors(doc);
-	const sidebarRoots = elementsWithCssModuleClass(doc, LIBRARY_SIDEBAR_CLASSES().Container);
+	const sidebarRoots = elementsWithCssModuleClass(doc, LIBRARY_SIDEBAR_CLASSES(doc).Container);
 
 	const consider = (current: HTMLElement): void => {
 		if (!current.isConnected || isLibrarySidebarNode(current)
@@ -141,67 +141,6 @@ function collectMainScrollTargets(doc: Document, knownTargets?: Iterable<HTMLEle
 	return Array.from(targets);
 }
 
-function nativeInPagePlaybar(doc: Document): HTMLElement | null {
-	const playbar = PLAYBAR_CLASS_MODULE();
-	if (!playbar.native || !playbar.classes.Container || !playbar.classes.InPage) return null;
-	const candidates = elementsWithCssModuleClass(doc, playbar.classes.Container)
-		.filter(element => element.isConnected && hasCssModuleClass(element, playbar.classes.InPage));
-	if (candidates.length === 0) return null;
-	// Prefer the original in-page playbar even after Steam creates a sticky copy.
-	return candidates.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)[0] || null;
-}
-function isStickyPlaybarVisible(doc: Document): boolean {
-	const topCapsule = doc.querySelector<HTMLElement>('[class*="TopCapsule"], [class*="topCapsule"], [class*="HeroContainer"], [class*="HeroAndLogo"]');
-	if (topCapsule && isRenderedElement(doc, topCapsule) && topCapsule.getBoundingClientRect().bottom > 80) {
-		return false;
-	}
-
-	const inPage = nativeInPagePlaybar(doc);
-	if (inPage && isRenderedElement(doc, inPage)) {
-		const rect = inPage.getBoundingClientRect();
-		// If the original in-page playbar is still visibly sitting below the hero,
-		// we are still at/near the top and must keep the info icon.
-		if (rect.top >= 30 && rect.bottom > 120) return false;
-	}
-
-	const playbar = PLAYBAR_CLASS_MODULE();
-	const classes = playbar.classes;
-	if (!playbar.native || !classes.Container) return false;
-
-	const viewportHeight = Math.max(0, doc.defaultView?.innerHeight || doc.documentElement.clientHeight || 0);
-	for (const container of elementsWithCssModuleClass(doc, classes.Container)) {
-		if (!container.isConnected || hasCssModuleClass(container, classes.InPage) || !isRenderedElement(doc, container)) continue;
-		const rect = container.getBoundingClientRect();
-		if (rect.width <= 0 || rect.height <= 0 || rect.bottom <= 0 || rect.top >= viewportHeight) continue;
-		// Count as sticky only when the duplicate playbar is actually docked near
-		// the top chrome and the original in-page bar has already moved away.
-		if (rect.top <= 160 && rect.bottom >= 36) return true;
-	}
-	return false;
-}
-
-function isMainContentVisuallyScrolled(doc: Document): boolean {
-	const topCapsule = doc.querySelector<HTMLElement>('[class*="TopCapsule"], [class*="topCapsule"], [class*="HeroContainer"], [class*="HeroAndLogo"]');
-	if (topCapsule && isRenderedElement(doc, topCapsule) && topCapsule.getBoundingClientRect().bottom > 80) {
-		return false;
-	}
-	const inPage = nativeInPagePlaybar(doc);
-	if (inPage && isRenderedElement(doc, inPage)) {
-		const rect = inPage.getBoundingClientRect();
-		if (rect.bottom > 120 && rect.top > 60) return false;
-		// Once the original playbar has moved above the top chrome, Steam swaps to
-		// the sticky playbar. This is a more reliable signal than scrollTop on some
-		// non-Steam detail layouts.
-		if (rect.bottom < 80 || rect.top < 0) return true;
-	}
-	const linkBar = doc.getElementById('gdl-link-bar');
-	if (linkBar?.isConnected && isRenderedElement(doc, linkBar)) {
-		const rect = linkBar.getBoundingClientRect();
-		if (rect.bottom < 80) return true;
-	}
-	return false;
-}
-
 function currentMainScrollTop(doc: Document, knownTargets?: Iterable<HTMLElement>): number {
 	const learnedTargets = knownTargets || infoKnownScrollTargets.get(doc);
 	const targets = collectMainScrollTargets(doc, learnedTargets);
@@ -211,35 +150,9 @@ function currentMainScrollTop(doc: Document, knownTargets?: Iterable<HTMLElement
 	return top;
 }
 
-/**
- * Keep the native Information button while the primary Steam links bar is still
- * visibly present underneath the sticky playbar. This matches the visual state
- * shown by Steam better than a raw scrollTop threshold and stays stable across
- * splitter widths / window sizes.
- */
-function primaryLinksAreStillVisible(doc: Document): boolean {
-	const linkBar = doc.getElementById('gdl-link-bar');
-	if (!linkBar?.isConnected || !isRenderedElement(doc, linkBar)) return false;
-	const rect = linkBar.getBoundingClientRect();
-	const viewportHeight = Math.max(0, doc.defaultView?.innerHeight || doc.documentElement.clientHeight || 0);
-	if (rect.width <= 0 || rect.height <= 0 || rect.bottom <= 0 || rect.top >= viewportHeight) return false;
-	// The sticky playbar occupies roughly the upper ~90px of the details pane.
-	// As long as the links bar is still clearly visible below it, keep Information.
-	return rect.bottom > 140;
-}
-
+/** Compatibility only while the native playbar class contract is unavailable. */
 function shouldShowScrollTopButton(doc: Document, knownTargets?: Iterable<HTMLElement>): boolean {
-	const topCapsule = doc.querySelector<HTMLElement>('[class*="TopCapsule"], [class*="topCapsule"], [class*="HeroContainer"], [class*="HeroAndLogo"]');
-	if (topCapsule && isRenderedElement(doc, topCapsule) && topCapsule.getBoundingClientRect().bottom > 80) {
-		return false;
-	}
-	const inPage = nativeInPagePlaybar(doc);
-	if (inPage && isRenderedElement(doc, inPage) && inPage.getBoundingClientRect().bottom > 120 && inPage.getBoundingClientRect().top > 60) {
-		return false;
-	}
-	if (primaryLinksAreStillVisible(doc)) return false;
-	const top = currentMainScrollTop(doc, knownTargets);
-	return top > SCROLL_TOP_BUTTON_THRESHOLD || isStickyPlaybarVisible(doc) || isMainContentVisuallyScrolled(doc);
+	return currentMainScrollTop(doc, knownTargets) > SCROLL_TOP_BUTTON_THRESHOLD;
 }
 
 export function resetMainScrollToTop(doc: Document): void {
@@ -327,16 +240,16 @@ function installInfoButtonScrollBehavior(
 	const applyMode = (active: boolean): void => {
 		if (!isCurrent()) return;
 		ensureButtonNodes();
-		const topCapsule = doc.querySelector<HTMLElement>('[class*="TopCapsule"], [class*="topCapsule"], [class*="HeroContainer"], [class*="HeroAndLogo"]');
-		const heroVisible = topCapsule && isRenderedElement(doc, topCapsule) && topCapsule.getBoundingClientRect().bottom > 80;
+		const playbarModule = PLAYBAR_CLASS_MODULE(doc);
 
 		for (const button of Array.from(doc.querySelectorAll<HTMLElement>('[data-gdl-game-info-button="1"]'))) {
-			const playbar = button.closest<HTMLElement>('[class*="Container"], [class*="playbar"], [class*="PlayBar"]');
-			const isButtonInPage = playbar ? hasCssModuleClass(playbar, PLAYBAR_CLASSES().InPage) : false;
-
-			// A sticky playbar button shows the scroll-to-top arrow whenever scrolled ('active').
-			// An in-page playbar only shows scroll-to-top arrow if the hero is no longer visible and active.
-			const buttonActive = isButtonInPage ? (!heroVisible && active) : active;
+			const playbar = closestWithCssModuleClass(button, playbarModule.classes.Container);
+			// Steam's playbar renders its glyph from stickyheader, represented by
+			// StickyHeader on this exact container. InPage and scrollTop are not
+			// that state: both native copies receive the same waypoint transition.
+			const buttonActive = playbarModule.native && playbarModule.classes.StickyHeader && playbar
+				? hasCssModuleClass(playbar, playbarModule.classes.StickyHeader)
+				: active;
 			if ((button.dataset.gdlScrollTopActive === '1') !== buttonActive) {
 				setInfoButtonScrollMode(button, buttonActive, nativeWrapperClass);
 			}
@@ -349,7 +262,9 @@ function installInfoButtonScrollBehavior(
 		for (const target of Array.from(knownScrollTargets)) {
 			if (!target.isConnected) knownScrollTargets.delete(target);
 		}
-		const active = shouldShowScrollTopButton(doc, knownScrollTargets);
+		const playbarModule = PLAYBAR_CLASS_MODULE(doc);
+		const active = playbarModule.native && playbarModule.classes.StickyHeader
+			? false : shouldShowScrollTopButton(doc, knownScrollTargets);
 		applyMode(active);
 	};
 	const queueUpdate = (): void => {
@@ -413,8 +328,11 @@ function installInfoButtonScrollBehavior(
 	const MutationObserverCtor = view?.MutationObserver;
 	const mutationObserver = typeof MutationObserverCtor === 'function'
 		? new MutationObserverCtor((mutations) => {
+			const classes = PLAYBAR_CLASS_MODULE(doc).classes;
 			const records = withoutLibrarySidebarMutations(mutations)
-				.filter(record => !mutationIsWithinSelector(record, '[id^="gdl-"], [data-gdl-game-info-button], [data-gdl-injected]'));
+				.filter(record => !mutationIsWithinSelector(record, '[id^="gdl-"], [data-gdl-game-info-button], [data-gdl-injected]'))
+				.filter(record => record.type === 'childList' || (isInfoDocumentElement(doc, record.target)
+					&& hasCssModuleClass(record.target, classes.Container)));
 			if (records.length === 0) return;
 			if (isPublicSteamLibraryRoute(doc)) {
 				cleanup();
@@ -423,14 +341,22 @@ function installInfoButtonScrollBehavior(
 				return;
 			}
 			if (!isCurrent()) return;
+			// Mirror a native class commit or newly mounted control before paint.
+			// Waiting for the next scroll/settle timer makes the glyph lag Steam.
+			if (PLAYBAR_CLASS_MODULE(doc).native && classes.StickyHeader) {
+				update();
+				return;
+			}
 			scheduleEnsureButtons();
 			queueUpdate();
 		})
 		: null;
-	if (mutationObserver && doc.body) mutationObserver.observe(doc.body, { childList: true, subtree: true });
+	if (mutationObserver && doc.body) mutationObserver.observe(doc.body, {
+		childList: true, subtree: true, attributes: true, attributeFilter: ['class'],
+	});
 
 	ensureButtonNodes();
-	queueUpdate();
+	update();
 	const cleanup = (): void => {
 		doc.removeEventListener('scroll', onScroll, true);
 		doc.removeEventListener('wheel', onWheel, true);
@@ -467,12 +393,19 @@ function moduleClass(enabled: boolean, value?: string): string {
 function nativeInfoAssociation(classes: CssClasses, nativeLayout: boolean, label: string, value: string, release = false): string {
 	if (!value) return '';
 	const cleanLabel = label.trim().replace(/:$/, '') + ':';
-	return `<div class="${moduleClass(nativeLayout, classes.Association)} ${release ? moduleClass(nativeLayout, classes.Release) : ''} gdl-info-row"><div class="${moduleClass(nativeLayout, classes.Label)} gdl-info-label">${escapeHtml(cleanLabel)}</div><div class="${release ? moduleClass(nativeLayout, classes.Date) : moduleClass(nativeLayout, classes.Name)} gdl-info-value">${escapeHtml(value)}</div></div>`;
+	const labelHtml = `<div class="${moduleClass(nativeLayout, classes.Label)} gdl-info-label">${escapeHtml(cleanLabel)}</div>`;
+	if (nativeLayout) {
+		// Native label/value rows wrap independently inside narrow-pane Stats.
+		return release
+			? `<div class="${classes.Release} gdl-info-row">${labelHtml}<div class="${classes.Date} gdl-info-value">${escapeHtml(value)}</div></div>`
+			: `<div class="${classes.AssociationList} gdl-info-row">${labelHtml}<div class="${classes.Association}"><div class="${classes.Name} gdl-info-value">${escapeHtml(value)}</div></div></div>`;
+	}
+	return `<div class="gdl-info-row">${labelHtml}<div class="gdl-info-value">${escapeHtml(value)}</div></div>`;
 }
 
-function nativeInfoPanelHtml(model: NativeGameInfo, nativeLayout: boolean): string {
-	const infoClasses = GAME_INFO_CLASS_MODULE().classes;
-	const outerClasses = GAME_INFO_OUTER_CLASS_MODULE().classes;
+function nativeInfoPanelHtml(doc: Document, model: NativeGameInfo, nativeLayout: boolean): string {
+	const infoClasses = GAME_INFO_CLASS_MODULE(doc).classes;
+	const outerClasses = GAME_INFO_OUTER_CLASS_MODULE(doc).classes;
 	const stats = [
 		nativeInfoAssociation(infoClasses, nativeLayout, loc('AppDetails_Developer', gdlText('developer', 'Developer')), model.developer),
 		nativeInfoAssociation(infoClasses, nativeLayout, loc('AppDetails_Publisher', gdlText('publisher', 'Publisher')), model.publisher),
@@ -480,13 +413,12 @@ function nativeInfoPanelHtml(model: NativeGameInfo, nativeLayout: boolean): stri
 		nativeInfoAssociation(infoClasses, nativeLayout, loc('AppDetails_ReleaseDate', gdlText('release_date', 'Release date')), model.release, true),
 	].join('');
 	const features = model.features.map(feature => `<div class="gdl-info-feature" data-gdl-feature="${escapeHtml(feature.kind)}">${nativeFeatureVisual(feature)}<span>${escapeHtml(feature.label)}</span></div>`).join('');
-	const statsListClass = moduleClass(nativeLayout, infoClasses.AssociationList);
 	return `
 		<div class="${moduleClass(nativeLayout, infoClasses.Container)} gdl-game-info-container">
 			<div class="${moduleClass(nativeLayout, infoClasses.InnerContainer)} gdl-game-info-grid">
 				<div class="${moduleClass(nativeLayout, infoClasses.Portrait)} gdl-info-portrait">${model.portrait ? `<img class="${moduleClass(nativeLayout, infoClasses.BoxArt)}" src="${escapeHtml(model.portrait)}" alt="${escapeHtml(model.title)}">` : ''}</div>
 				<div class="${moduleClass(nativeLayout, infoClasses.Description)} ${moduleClass(nativeLayout, infoClasses.SectionContainer)} gdl-info-description"><div class="${moduleClass(nativeLayout, infoClasses.GameDescription)} gdl-info-description-text">${escapeHtml(model.description || model.title)}</div></div>
-				<div class="${moduleClass(nativeLayout, infoClasses.Stats)} ${moduleClass(nativeLayout, infoClasses.SectionContainer)} gdl-info-stats"><div class="${statsListClass} gdl-info-associations">${stats}</div></div>
+				<div class="${moduleClass(nativeLayout, infoClasses.Stats)} ${moduleClass(nativeLayout, infoClasses.SectionContainer)} gdl-info-stats">${nativeLayout ? stats : `<div class="gdl-info-associations">${stats}</div>`}</div>
 				<div class="${moduleClass(nativeLayout, infoClasses.FeaturesList)} ${moduleClass(nativeLayout, infoClasses.SectionContainer)} gdl-info-features">${features}</div>
 			</div>
 		</div>
@@ -496,8 +428,8 @@ function nativeInfoPanelHtml(model: NativeGameInfo, nativeLayout: boolean): stri
 function updateNativeInfoPanelInPlace(doc: Document, panel: HTMLElement, model: NativeGameInfo, signature: string): void {
 	const nativeLayout = panel.dataset.gdlNativeLayout === '1';
 	const staging = doc.createElement('div');
-	staging.innerHTML = nativeInfoPanelHtml(model, nativeLayout);
-	for (const selector of ['.gdl-info-description-text', '.gdl-info-associations', '.gdl-info-features']) {
+	staging.innerHTML = nativeInfoPanelHtml(doc, model, nativeLayout);
+	for (const selector of ['.gdl-info-description-text', '.gdl-info-stats', '.gdl-info-features']) {
 		const current = panel.querySelector<HTMLElement>(selector);
 		const next = staging.querySelector<HTMLElement>(selector);
 		if (current && next && current.innerHTML !== next.innerHTML) current.innerHTML = next.innerHTML;
@@ -567,7 +499,12 @@ function scheduleInfoAnimation(doc: Document, callback: () => void): void {
 
 function resizeFallbackInfoPanel(panel: HTMLElement): void {
 	if (panel.dataset.expanded !== '1' || infoAnimationTimers.has(panel.ownerDocument)) return;
-	panel.style.height = `${nativeInfoPanelHeight(panel)}px`;
+	setInfoPanelHeight(panel, nativeInfoPanelHeight(panel));
+}
+
+function setInfoPanelHeight(panel: HTMLElement, height: number): void {
+	const value = `${height}px`;
+	if (panel.style.height !== value) panel.style.height = value;
 }
 
 function setNativeInfoExpanded(
@@ -581,14 +518,14 @@ function setNativeInfoExpanded(
 		setPersistentInfoExpanded(expanded);
 	}
 	const panel = doc.getElementById('gdl-game-info-panel') as HTMLElement | null;
-	const outerModule = GAME_INFO_OUTER_CLASS_MODULE();
+	const outerModule = GAME_INFO_OUTER_CLASS_MODULE(doc);
 	if (panel && panel.dataset.gameKey === key) {
 		const nativeLayout = panel.dataset.gdlNativeLayout === '1' && outerModule.native;
 		const isCurrentlyExpanded = panel.dataset.expanded === '1';
 
 		if (expanded === isCurrentlyExpanded && panel.classList.contains(expanded ? 'gdl-info-expanded' : 'gdl-info-collapsed')) {
 			if (expanded && !infoAnimationTimers.has(doc)) {
-				panel.style.height = `${nativeInfoPanelHeight(panel)}px`;
+				setInfoPanelHeight(panel, nativeInfoPanelHeight(panel));
 			}
 			return;
 		}
@@ -606,7 +543,7 @@ function setNativeInfoExpanded(
 				addCssModuleClass(panel, expanded ? outerModule.classes.AppDetailsExpanded : outerModule.classes.AppDetailsCollapsed);
 			}
 			if (expanded) {
-				panel.style.height = `${nativeInfoPanelHeight(panel)}px`;
+				setInfoPanelHeight(panel, nativeInfoPanelHeight(panel));
 				panel.style.opacity = '1';
 			} else {
 				panel.style.height = '0px';
@@ -623,21 +560,21 @@ function setNativeInfoExpanded(
 			}
 			panel.setAttribute('aria-hidden', 'false');
 
-			const startHeight = Math.max(0, panel.getBoundingClientRect().height || 0);
-			panel.style.height = `${startHeight}px`;
+			// Layout pixels avoid applying Steam's CSS zoom twice during animation.
+			const startHeight = Math.max(0, panel.offsetHeight || 0);
+			setInfoPanelHeight(panel, startHeight);
 			panel.style.opacity = startHeight > 0 ? (panel.style.opacity || '0.5') : '0';
 
 			const targetHeight = nativeInfoPanelHeight(panel);
-
 			// Force reflow
 			void panel.offsetHeight;
 
-			panel.style.height = `${targetHeight}px`;
+			setInfoPanelHeight(panel, targetHeight);
 			panel.style.opacity = '1';
 
 			scheduleInfoAnimation(doc, () => {
 				if (panel.isConnected && panel.dataset.expanded === '1') {
-					panel.style.height = `${nativeInfoPanelHeight(panel)}px`;
+					setInfoPanelHeight(panel, nativeInfoPanelHeight(panel));
 				}
 			});
 		} else {
@@ -649,8 +586,8 @@ function setNativeInfoExpanded(
 				addCssModuleClass(panel, outerModule.classes.AppDetailsCollapsed);
 			}
 
-			const currentHeight = Math.max(1, panel.getBoundingClientRect().height || panel.offsetHeight || nativeInfoPanelHeight(panel));
-			panel.style.height = `${currentHeight}px`;
+			const currentHeight = Math.max(1, panel.offsetHeight || nativeInfoPanelHeight(panel));
+			setInfoPanelHeight(panel, currentHeight);
 			panel.style.opacity = '1';
 
 			// Force reflow so browser commits starting height
@@ -670,7 +607,7 @@ function setNativeInfoExpanded(
 	}
 	for (const button of Array.from(doc.querySelectorAll<HTMLElement>('[data-gdl-game-info-button="1"]'))) {
 		if (button.dataset.gameKey !== key) continue;
-		const playbarModule = PLAYBAR_CLASS_MODULE();
+		const playbarModule = PLAYBAR_CLASS_MODULE(doc);
 		button.classList.toggle('gdl-info-active', expanded);
 		if (playbarModule.native) {
 			if (expanded) addCssModuleClass(button, playbarModule.classes.MenuActive);
@@ -717,8 +654,8 @@ export function ensureNativeInfoPanel(doc: Document, model: NativeGameInfo): HTM
 	}
 	if (!panel) {
 		created = true;
-		const infoModule = GAME_INFO_CLASS_MODULE();
-		const outerModule = GAME_INFO_OUTER_CLASS_MODULE();
+		const infoModule = GAME_INFO_CLASS_MODULE(doc);
+		const outerModule = GAME_INFO_OUTER_CLASS_MODULE(doc);
 		const nativeLayout = infoModule.native && outerModule.native;
 		panel = doc.createElement('div');
 		panel.id = 'gdl-game-info-panel';
@@ -727,7 +664,7 @@ export function ensureNativeInfoPanel(doc: Document, model: NativeGameInfo): HTM
 		panel.className = nativeLayout
 			? `${outerModule.classes.AppGameInfoContainer || ''} ${outerModule.classes.Glassy || ''}`.trim()
 			: 'gdl-game-info-fallback';
-		panel.innerHTML = nativeInfoPanelHtml(model, nativeLayout);
+		panel.innerHTML = nativeInfoPanelHtml(doc, model, nativeLayout);
 		panel.dataset.gameKey = model.key;
 		panel.dataset.gdlShortcutAppId = shortcutId;
 		panel.dataset.signature = signature;
@@ -743,17 +680,13 @@ export function ensureNativeInfoPanel(doc: Document, model: NativeGameInfo): HTM
 		const content = panel.firstElementChild as HTMLElement | null;
 		if (typeof ResizeObserverCtor === 'function' && content) {
 			const observer = new ResizeObserverCtor(() => {
-				if (panel?.dataset.expanded === '1' && !infoAnimationTimers.has(doc)) {
-					panel.style.height = `${nativeInfoPanelHeight(panel)}px`;
-				}
+				if (panel?.isConnected) resizeFallbackInfoPanel(panel);
 			});
 			observer.observe(content);
 			nativeInfoResizeObservers.set(panel, observer);
 		}
 		panel.querySelector('img')?.addEventListener('load', () => {
-			if (panel?.dataset.expanded === '1' && !infoAnimationTimers.has(doc)) {
-				panel.style.height = `${nativeInfoPanelHeight(panel)}px`;
-			}
+			if (panel?.isConnected) resizeFallbackInfoPanel(panel);
 		});
 	}
 	const linkBar = doc.getElementById('gdl-link-bar');
@@ -774,7 +707,7 @@ export function ensureNativeInfoButton(doc: Document, model: NativeGameInfo): vo
 	if (session) removeNativeInfoButton(doc);
 	const isCurrent = (): boolean => isCurrentInfoShortcut(doc, shortcutId, model.key)
 		&& infoButtonSessions.get(doc)?.sync === syncButtons;
-	const playbarModule = PLAYBAR_CLASS_MODULE();
+	const playbarModule = PLAYBAR_CLASS_MODULE(doc);
 	const classes = playbarModule.classes;
 	const syncButtons = (): void => {
 		if (isPublicSteamLibraryRoute(doc)) {

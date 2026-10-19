@@ -2,6 +2,7 @@ import type { ShortcutDetectionCandidate, ShortcutDetectionContext, ShortcutDete
 import { detectGameCandidatesBackend, detectGameCandidatesLocalBackend, getShortcutDetailsBackend, backendLog } from '../../api/backend';
 import { getSteamLanguage } from '../../steam/localization';
 import { RetryingRequestCache } from '../../core/request-cache';
+import { committedHeaderAppId } from '../../steam/library-details';
 import { expandCandidatesWithEditions } from './editions';
 export { expandCandidatesWithEditions } from './editions';
 import {
@@ -39,8 +40,15 @@ async function withDetectionBudget<T>(promise: Promise<T>, timeoutMs: number): P
 	]);
 }
 
-function readShortcutPathFromProperties(doc: Document): { exePath: string; startDir: string; launchOptions: string } {
-	const values = Array.from(doc.querySelectorAll('input')).map(input => (input as HTMLInputElement).value?.trim() || '');
+function readShortcutPathFromProperties(doc: Document, shortcutAppId: number): { exePath: string; startDir: string; launchOptions: string } {
+	const scope = Array.from(doc.querySelectorAll<HTMLElement>('[role="dialog"], [aria-modal="true"], [class*="PagedSettingsDialog"]')).find(candidate => {
+		if (candidate.closest('[id^="gdl-"]')) return false;
+		const owner = Number(candidate.getAttribute('data-appid') || candidate.getAttribute('data-app-id') || committedHeaderAppId(candidate));
+		return (owner === shortcutAppId || (owner >>> 0) === shortcutAppId)
+			&& Boolean(candidate.matches('[class*="PagedSettingsDialog"], [class*="pagedsettings"]')
+				|| candidate.querySelector('[class*="PagedSettingsDialog"], [class*="PageList"], [class*="SettingsNav"], [class*="DialogNav"]'));
+	});
+	const values = Array.from(scope?.querySelectorAll('input') || []).map(input => (input as HTMLInputElement).value?.trim() || '');
 	let exePath = '';
 	let startDir = '';
 	let launchOptions = '';
@@ -60,6 +68,17 @@ function readShortcutPathFromProperties(doc: Document): { exePath: string; start
 	return { exePath, startDir, launchOptions };
 }
 
+/** Preserve the committed launch definition before asynchronous VDF/IPC work. */
+export function buildImmediateShortcutDetectionContext(doc: Document | null, title: string, shortcutAppId: number, fallbackApp?: any): ShortcutDetectionContext {
+	const app = getShortcutAppById(shortcutAppId, doc || undefined);
+	const fromProperties = doc ? readShortcutPathFromProperties(doc, shortcutAppId) : { exePath: '', startDir: '', launchOptions: '' };
+	const field = (...keys: string[]): string => readShortcutOverviewField(app, ...keys) || readShortcutOverviewField(fallbackApp, ...keys);
+	const exePath = cleanShortcutPath(field('strShortcutExe', 'm_strShortcutExe', 'shortcut_exe', 'strExePath') || fromProperties.exePath);
+	return { shortcutAppId, title: String(title || field('display_name', 'm_strDisplayName', 'strDisplayName', 'strAppName') || shortcutPathBasename(exePath)).trim(),
+		exePath, startDir: cleanShortcutPath(field('strShortcutStartDir', 'm_strShortcutStartDir', 'shortcut_start_dir') || fromProperties.startDir || shortcutPathDirectory(exePath)),
+		launchOptions: field('strShortcutLaunchOptions', 'm_strShortcutLaunchOptions', 'shortcut_launch_options', 'strArguments') || fromProperties.launchOptions };
+}
+
 export async function buildShortcutDetectionContext(
 	doc: Document | null,
 	title: string,
@@ -72,11 +91,10 @@ export async function buildShortcutDetectionContext(
 		for (let i = 0; i < (title || '').length; i++) hash = (hash * 31 + title.charCodeAt(i)) >>> 0;
 		validId = 2147483648 + (hash % 1000000000);
 	}
-	const app = getShortcutAppById(validId);
-	const fromProperties = doc ? readShortcutPathFromProperties(doc) : { exePath: '', startDir: '', launchOptions: '' };
-	let exePath = readShortcutOverviewField(app, 'strShortcutExe', 'm_strShortcutExe', 'shortcut_exe', 'strExePath') || fromProperties.exePath;
-	let startDir = readShortcutOverviewField(app, 'strShortcutStartDir', 'm_strShortcutStartDir', 'shortcut_start_dir') || fromProperties.startDir;
-	let launchOptions = readShortcutOverviewField(app, 'strShortcutLaunchOptions', 'm_strShortcutLaunchOptions', 'shortcut_launch_options', 'strArguments') || fromProperties.launchOptions;
+	const app = getShortcutAppById(validId, doc || undefined);
+	const immediate = buildImmediateShortcutDetectionContext(doc, title, validId, app);
+	let { exePath, startDir, launchOptions } = immediate;
+	const appsApi = ((doc?.defaultView || (typeof window !== 'undefined' ? window : null)) as any)?.SteamClient?.Apps;
 	let backendTitle = '';
 
 	// Read the original shortcut definition from VDF as a fallback when Steam's
@@ -87,7 +105,6 @@ export async function buildShortcutDetectionContext(
 	);
 
 	if (!exePath || !startDir) {
-		const appsApi = (window as any).SteamClient?.Apps;
 		if (typeof appsApi?.GetCachedAppDetails === 'function') {
 			for (const id of [shortcutAppId, shortcutAppId - 4294967296]) {
 				try {
@@ -126,7 +143,7 @@ export async function buildShortcutDetectionContext(
 	exePath = cleanShortcutPath(exePath);
 	if (/\.lnk$/i.test(exePath)) {
 		try {
-			const resolver = (window as any).SteamClient?.Apps?.GetShortcutDataForPath;
+			const resolver = appsApi?.GetShortcutDataForPath;
 			if (typeof resolver === 'function') {
 				const resolved = await resolver(exePath);
 				exePath = cleanShortcutPath(resolved?.strExePath || exePath);
@@ -147,7 +164,20 @@ export async function buildShortcutDetectionContext(
 	};
 }
 
-export const DETECTION_MODEL_VERSION = 'v11';
+export const DETECTION_MODEL_VERSION = 'v12';
+
+/** A suggestion can be preselected for review only with consistent identity evidence. */
+export function reliableReviewCandidate(candidate?: ShortcutDetectionCandidate): boolean {
+	return Boolean(candidate && candidate.score >= 70 && !candidate.ambiguous && !candidate.identity_collision
+		&& !candidate.negative_reasons?.length && candidate.evidence_tier !== 'hint'
+		&& (candidate.evidence_tier || candidate.score >= 90 || candidate.confidence === 'high' || candidate.confidence === 'exact'));
+}
+
+export function displayReviewConfidence(candidate: ShortcutDetectionCandidate): 'HIGH' | 'MEDIUM' | 'LOW' {
+	if (candidate.ambiguous || candidate.identity_collision || candidate.negative_reasons?.length) return 'LOW';
+	if (candidate.score >= 90) return 'HIGH';
+	return candidate.score >= 70 ? 'MEDIUM' : 'LOW';
+}
 
 function parseDetectionCandidate(candidate: any): ShortcutDetectionCandidate {
 	return {
@@ -179,6 +209,8 @@ function parseDetectionResult(parsed: any): ShortcutDetectionResult {
 		: [];
 	return {
 		candidates,
+		rejected_appids: Array.isArray(parsed?.rejected_appids)
+			? parsed.rejected_appids.map(String).filter((id: string) => /^\d+$/.test(id) && Number(id) > 0 && Number(id) < 2147483648) : [],
 		launcher_detected: !!parsed?.launcher_detected,
 		generic_launcher: !!parsed?.generic_launcher,
 		executable: String(parsed?.executable || ''),
@@ -269,10 +301,12 @@ export async function detectShortcutCandidates(context: ShortcutDetectionContext
 
 				if (!remoteResult || remoteResult.candidates.length === 0) {
 					if (localResult && localResult.candidates.length > 0) {
+						const retained = mergeCandidateLists(localResult.candidates, [], remoteResult?.rejected_appids);
 						return {
 							...localResult,
-							candidates: expandCandidatesWithEditions(mergeCandidateLists(localResult.candidates, [])),
-							transient_error: true,
+							rejected_appids: remoteResult?.rejected_appids,
+							candidates: expandCandidatesWithEditions(retained),
+							transient_error: !remoteResult || remoteResult.transient_error === true || retained.length > 0,
 							validation_state: 'partial',
 						};
 					}
@@ -282,6 +316,7 @@ export async function detectShortcutCandidates(context: ShortcutDetectionContext
 				const mergedCandidates = mergeCandidateLists(
 					localResult?.candidates || [],
 					remoteResult.candidates,
+					remoteResult.rejected_appids,
 				);
 
 				const result: ShortcutDetectionResult = {

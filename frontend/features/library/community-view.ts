@@ -49,10 +49,27 @@ function setupCommunityColumns(doc: Document, root: HTMLElement): void {
 	const pixels = (value: number): string => `${Math.round(value * 1000) / 1000}px`;
 	const cards = Array.from(grid.querySelectorAll<HTMLElement>('[data-gdl-community-card]'))
 		.sort((a, b) => Number(a.dataset.gdlCommunityCard) - Number(b.dataset.gdlCommunityCard));
+	const mediaBindings = new Map(cards.map(card => {
+		const media = card.querySelector<HTMLElement>('.gdl-community-media,.gdl-community-video-thumb');
+		return [card, { media, firstChild: media?.firstElementChild,
+			image: media?.querySelector<HTMLImageElement>('.gdl-community-preview'),
+			video: card.classList.contains('gdl-community-card-video') }];
+	}));
+	const imageFor = (card: HTMLElement): HTMLImageElement | null | undefined => {
+		const binding = mediaBindings.get(card)!;
+		if (binding.firstChild !== binding.media?.firstElementChild) {
+			binding.firstChild = binding.media?.firstElementChild;
+			binding.image = binding.media?.querySelector<HTMLImageElement>('.gdl-community-preview');
+		}
+		return binding.image;
+	};
 	const batchEnds = communityRowBatches.get(grid) || [];
 	communityRowBatches.set(grid, batchEnds);
+	let placementKey = '';
+	let styleWrites: Array<[HTMLElement, string, string]> = [];
+	let mediaStates: Array<[HTMLElement, string]> = [];
 	const setStyle = (element: HTMLElement, key: string, value: string): void => {
-		if (element.style.getPropertyValue(key) !== value) element.style.setProperty(key, value);
+		styleWrites.push([element, key, value]);
 	};
 	const syncBottomClearance = (): void => {
 		// Steam's 100%-height scroll viewport can extend below its clipped pane.
@@ -84,19 +101,24 @@ function setupCommunityColumns(doc: Document, root: HTMLElement): void {
 		setStyle(root, '--gdl-community-bottom-clearance', pixels(clearance));
 	};
 	const syncMedia = (card: HTMLElement, width: number): void => {
-		const media = card.querySelector<HTMLElement>('.gdl-community-media,.gdl-community-video-thumb');
-		const image = media?.querySelector<HTMLImageElement>('.gdl-community-preview');
+		const binding = mediaBindings.get(card)!;
+		const media = binding.media, image = imageFor(card);
 		if (!image || !media) return;
 		const loaded = image.complete && image.naturalWidth > 0 && image.naturalHeight > 0;
 		const failed = image.complete && image.naturalWidth === 0 && Boolean(image.currentSrc || image.getAttribute('src'));
 		const state = loaded ? 'loaded' : failed ? 'error' : 'pending';
-		if (media.dataset.gdlMediaState !== state) media.dataset.gdlMediaState = state;
-		const height = loaded && !card.classList.contains('gdl-community-card-video')
-			? Math.min(800, width * image.naturalHeight / image.naturalWidth) : width * 9 / 16;
-		setStyle(media, '--gdl-community-media-ratio', `${width} / ${height}`);
+		mediaStates.push([media, state]);
+		// An intrinsic ratio stays identical while CSS resizes the card. Only
+		// Steam's 800px media-height cap requires a width-dependent ratio.
+		const ratio = loaded && !binding.video
+			? width * image.naturalHeight / image.naturalWidth > 800
+				? `${width} / 800` : `${image.naturalWidth} / ${image.naturalHeight}`
+			: '16 / 9';
+		setStyle(media, '--gdl-community-media-ratio', ratio);
 	};
 	const layout = (): void => {
 		if (disposed || !root.isConnected || !grid.isConnected) return;
+		styleWrites = []; mediaStates = [];
 		// Computed dimensions are CSS pixels even when Steam uses a zoom factor.
 		const width = Number.parseFloat(view?.getComputedStyle(grid).width || '') || grid.clientWidth;
 		if (!(width > 0)) return;
@@ -107,54 +129,66 @@ function setupCommunityColumns(doc: Document, root: HTMLElement): void {
 		if (visible.length < (batchEnds[batchEnds.length - 1] || 0)) batchEnds.length = 0;
 		if (visible.length > (batchEnds[batchEnds.length - 1] || 0)) batchEnds.push(visible.length);
 		const spans = visible.map(card => {
-			const video = card.classList.contains('gdl-community-card-video');
-			const image = card.querySelector<HTMLImageElement>('.gdl-community-media .gdl-community-preview');
+			const video = mediaBindings.get(card)!.video;
+			const image = video ? null : imageFor(card);
 			const aspect = image?.naturalWidth && image.naturalHeight ? image.naturalWidth / image.naturalHeight : 0;
 			const columns = video ? Math.min(2, count) : aspect > 2.5 ? Math.min(3, count) : 1;
-			setStyle(card, '--gdl-community-card-columns', String(columns));
 			const rows = aspect > 0 && aspect <= 0.8 ? 2 : 1;
-			setStyle(card, '--gdl-community-card-rows', String(rows));
-			// Remove geometry left by a previously mounted masonry section.
-			for (const property of ['width', 'height', 'left', 'top']) {
-				if (card.style.getPropertyValue(property)) card.style.removeProperty(property);
-			}
 			syncMedia(card, cardWidth * columns + 24 * (columns - 1));
 			return { columns, rows };
 		});
-		let rowOffset = 0;
-		let batchStart = 0;
-		for (const batchEnd of batchEnds) {
-			// Fill whole grid cells densely within the published batch. Newly
-			// revealed cards start in new rows, as in Steam, so they cannot grow
-			// a previously visible row and displace an active video.
-			const occupied: boolean[][] = [];
-			for (let index = batchStart; index < batchEnd; index++) {
-				const span = spans[index];
-				let row = 0;
-				let column = 0;
-				findSlot: for (;; row++) {
-					for (column = 0; column <= count - span.columns; column++) {
-						let available = true;
-						for (let y = row; y < row + span.rows; y++) {
-							for (let x = column; x < column + span.columns; x++) {
-								if (occupied[y]?.[x]) available = false;
+		const nextPlacementKey = `${count}|${batchEnds.join(',')}|${visible.map((card, index) =>
+			`${card.dataset.gdlCommunityCard}:${spans[index].columns}:${spans[index].rows}`).join(';')}`;
+		if (placementKey !== nextPlacementKey) {
+			placementKey = nextPlacementKey;
+			for (let index = 0; index < visible.length; index++) {
+				setStyle(visible[index], '--gdl-community-card-columns', String(spans[index].columns));
+				setStyle(visible[index], '--gdl-community-card-rows', String(spans[index].rows));
+				for (const property of ['width', 'height', 'left', 'top']) setStyle(visible[index], property, '');
+			}
+			let rowOffset = 0;
+			let batchStart = 0;
+			for (const batchEnd of batchEnds) {
+				// Fill whole grid cells densely within the published batch. Newly
+				// revealed cards start in new rows, as in Steam, so they cannot grow
+				// a previously visible row and displace an active video.
+				const occupied: boolean[][] = [];
+				for (let index = batchStart; index < batchEnd; index++) {
+					const span = spans[index];
+					let row = 0;
+					let column = 0;
+					findSlot: for (;; row++) {
+						for (column = 0; column <= count - span.columns; column++) {
+							let available = true;
+							for (let y = row; y < row + span.rows; y++) {
+								for (let x = column; x < column + span.columns; x++) {
+									if (occupied[y]?.[x]) available = false;
+								}
 							}
+							if (available) break findSlot;
 						}
-						if (available) break findSlot;
+					}
+					setStyle(visible[index], 'grid-column-start', String(column + 1));
+					setStyle(visible[index], 'grid-row-start', String(rowOffset + row + 1));
+					for (let y = row; y < row + span.rows; y++) {
+						occupied[y] ||= [];
+						for (let x = column; x < column + span.columns; x++) occupied[y][x] = true;
 					}
 				}
-				setStyle(visible[index], 'grid-column-start', String(column + 1));
-				setStyle(visible[index], 'grid-row-start', String(rowOffset + row + 1));
-				for (let y = row; y < row + span.rows; y++) {
-					occupied[y] ||= [];
-					for (let x = column; x < column + span.columns; x++) occupied[y][x] = true;
-				}
+				rowOffset += occupied.length;
+				batchStart = batchEnd;
 			}
-			rowOffset += occupied.length;
-			batchStart = batchEnd;
 		}
-		if (grid.style.height) grid.style.removeProperty('height');
+		setStyle(grid, 'height', '');
 		syncBottomClearance();
+		// Complete every geometry read before invalidating layout. Card and
+		// ancestor observers can then settle without another forced reflow here.
+		for (const [element, property, value] of styleWrites) {
+			if (element.style.getPropertyValue(property) !== value) element.style.setProperty(property, value);
+		}
+		for (const [media, state] of mediaStates) {
+			if (media.dataset.gdlMediaState !== state) media.dataset.gdlMediaState = state;
+		}
 	};
 	const queue = (): void => {
 		if (disposed || frame) return;
@@ -168,7 +202,6 @@ function setupCommunityColumns(doc: Document, root: HTMLElement): void {
 	const Observer = view?.ResizeObserver;
 	const observer = typeof Observer === 'function' ? new Observer(queue) : null;
 	observer?.observe(grid);
-	for (const card of cards) observer?.observe(card);
 	for (const ancestor of ancestors) observer?.observe(ancestor);
 	grid.addEventListener('load', queue, true);
 	grid.addEventListener('error', queue, true);
@@ -189,9 +222,9 @@ function setupCommunityColumns(doc: Document, root: HTMLElement): void {
 }
 
 /**
- * Let Community use the area below a shorter right sidebar without ever
- * crossing it. Steam's sidebar is a float, so this must follow live geometry:
- * news hydration and optional sidebar sections can change both heights later.
+ * Keep Community below both columns at the full detail-pane width. The right
+ * float can grow after controller connection or sidebar hydration; narrowing
+ * the whole feed then leaves even its lower rows trapped in the activity width.
  */
 function setupCommunityAdaptiveWidth(
 	doc: Document,
@@ -213,12 +246,29 @@ function setupCommunityAdaptiveWidth(
 		const sidebarRect = sidebar.getBoundingClientRect();
 		const activityRect = activity.getBoundingClientRect();
 		const contentRect = content.getBoundingClientRect();
+		const contentStyle = win?.getComputedStyle(content);
+		let contentWidth = Number.parseFloat(contentStyle?.width || '') || content.clientWidth;
+		if (contentStyle?.boxSizing !== 'border-box') {
+			for (const value of [contentStyle?.paddingLeft, contentStyle?.paddingRight,
+				contentStyle?.borderLeftWidth, contentStyle?.borderRightWidth]) contentWidth += Number.parseFloat(value || '') || 0;
+		}
+		// Steam can zoom the whole desktop surface. DOM rectangles include that
+		// zoom; an inline CSS width and the native 34px section gap do not.
+		const scale = contentWidth > 0 ? contentRect.width / contentWidth : 1;
 		const sidebarVisible = sidebarStyle?.display !== 'none' && sidebarStyle?.visibility !== 'hidden'
 			&& sidebarRect.width > 1 && sidebarRect.height > 1;
-		const canUseFreedSidebarArea = !sidebarVisible || activityRect.bottom + 34 >= sidebarRect.bottom - 1;
-		root.classList.toggle('gdl-community-wide', canUseFreedSidebarArea);
-		if (canUseFreedSidebarArea) root.style.setProperty('--gdl-community-wide-width', `${Math.max(0, contentRect.width)}px`);
-		else root.style.removeProperty('--gdl-community-wide-width');
+		const topGap = sidebarVisible && scale > 0
+			? Math.max(34, (sidebarRect.bottom - activityRect.bottom) / scale)
+			: 34;
+		const gap = `${Math.round(topGap * 1000) / 1000}px`;
+		const width = `${Math.max(0, contentWidth)}px`;
+		if (!root.classList.contains('gdl-community-wide')) root.classList.add('gdl-community-wide');
+		if (root.style.getPropertyValue('--gdl-community-top-gap') !== gap) {
+			root.style.setProperty('--gdl-community-top-gap', gap);
+		}
+		if (root.style.getPropertyValue('--gdl-community-wide-width') !== width) {
+			root.style.setProperty('--gdl-community-wide-width', width);
+		}
 	};
 	const queueUpdate = (): void => {
 		if (disposed || frame) return;
@@ -240,7 +290,9 @@ function setupCommunityAdaptiveWidth(
 		adaptiveWidthCleanup.delete(root);
 	};
 	adaptiveWidthCleanup.set(root, cleanup);
-	queueUpdate();
+	// The column layout below runs immediately. Publish its full width and
+	// clearance before that first pass so no narrow initial frame is painted.
+	update();
 }
 
 /** Progressive reveal that owns and disposes every listener/observer it installs. */

@@ -1,7 +1,7 @@
 import type { NewsItem } from '../../../domain/types';
 import { backendLog } from '../../../api/backend';
 import { escapeHtml } from '../../../core/text';
-import { EVENT_CLASSES, FEED_CLASSES } from '../../../steam/css';
+import { EVENT_CLASSES, FEED_CLASSES, HEADING_RESET_CLASSES } from '../../../steam/css';
 import { gdlText, loc, steamIntlLocale } from '../../../steam/localization';
 import { eventTypeLabel, formatNewsDate, isPatchNoteItem, newsExcerpt } from '../news';
 import {
@@ -12,6 +12,14 @@ import {
 } from '../../../steam/social';
 import { getCachedPersona } from './personas';
 import { socialRuntimeHost } from './host';
+import { installNativeActivitySummaryClamps } from '../activity-summary';
+
+// Steam's patch-event glyph; its native Icon wrapper supplies the dimensions.
+const NATIVE_PATCH_ICON = `<svg class="SVGIcon_Button SVGIcon_Patch" version="1.1" xmlns="http://www.w3.org/2000/svg" width="256px" height="256px" viewBox="0 0 256 256" aria-hidden="true">
+	<path d="M171.176,136.219c-5.516-5.516-14.166-5.948-20.223-1.406L92.125,75.984l-8.002-29.738c-0.324-1.406-1.73-3.027-3.028-3.785 L46.49,24.186c-1.298-0.648-3.136-0.433-4.218,0.648L25.295,41.813c-0.974,0.973-1.298,2.92-0.649,4.217l18.276,34.605 c0.648,1.297,2.379,2.596,3.785,3.027l29.739,8.003l58.828,58.828c-4.542,6.056-4.109,14.707,1.405,20.222l56.882,56.882 c6.056,6.056,15.896,6.056,21.845,0l12.544-12.544c6.056-6.056,6.056-15.788,0-21.845L171.176,136.219z"/>
+	<path d="M153.116,122.16c2.271-0.648,4.65-0.973,7.138-0.973c0.865,0,1.622,0,2.486,0.107l26.928-26.927 c12.328,2.92,25.846-0.324,35.361-9.948c9.517-9.625,12.869-23.034,9.949-35.254l-20.33,20.33l-21.845-5.84l-5.84-21.952 l20.331-20.33c-12.221-2.92-25.738,0.324-35.254,9.948c-9.625,9.625-12.869,23.143-9.949,35.362L129.866,98.91L153.116,122.16z"/>
+	<path d="M99.371,129.406l-32.226,32.226c-12.328-2.92-25.845,0.324-35.362,9.948c-9.517,9.625-12.869,23.034-9.949,35.254 l20.331-20.33l21.953,5.84l5.839,21.952l-20.331,20.33c12.22,2.92,25.737-0.324,35.254-9.949 c9.625-9.624,12.869-23.142,9.949-35.361l27.035-27.035c-0.325-3.136,0-6.38,0.865-9.517L99.371,129.406z"/>
+</svg>`;
 
 export interface LocalActivityComment {
 	id: string;
@@ -485,6 +493,7 @@ export function applyUnifiedActivityFeed(
 	);
 	container.innerHTML = snapshot.html;
 	container.dataset.gdlFeedSignature = snapshot.signature;
+	refreshActivitySummaryLayout(container);
 	return true;
 }
 
@@ -542,7 +551,7 @@ export function renderUnifiedActivityFeed(
 
 	let firstNewsMarked = false;
 	for (const group of groups) {
-		feedHtml += `<div class="${n.AppActivityDay} gdl-feed-day"><h4 class="${n.AppActivityDate} gdl-feed-date">${group.date}<div class="${n.Rule} gdl-feed-rule"></div></h4>`;
+		feedHtml += `<div class="${n.AppActivityDay} gdl-feed-day"><h4 class="${HEADING_RESET_CLASSES().Reset} ${n.AppActivityDate} gdl-feed-date">${group.date}<div class="${n.Rule} gdl-feed-rule"></div></h4><div>`;
 		for (const entry of group.items) {
 			if (entry.type === 'post') {
 				const p = entry.post;
@@ -591,11 +600,10 @@ export function renderUnifiedActivityFeed(
 			} else {
 				const item = entry.item;
 				const eventType = Number(item.event_type || 0);
-				const isMajor = eventType === 13 || eventType === 14;
-				// Steam's "Game Update" events (type 12) are full activity cards,
-				// with artwork and a summary. Reserve the compact wrench layout for
-				// legacy/untyped patch-note entries only.
-				const isCompactPatch = eventType === 0 && !item.feedlabel && isPatchNoteItem(item);
+				const isMajor = eventType === 14;
+				// Steam's desktop partner-event renderer selects its text-only
+				// patch card for type 12 and its ordinary media card for type 13.
+				const isCompactPatch = eventType === 12 || (eventType === 0 && !item.feedlabel && isPatchNoteItem(item));
 				const label = eventType > 0
 					? eventTypeLabel(eventType)
 					: (item.feedlabel || (isPatchNoteItem(item) ? gdlText('feed_patch_notes', 'Minor Update / Patch Notes') : gdlText('feed_news', 'News')));
@@ -604,17 +612,17 @@ export function renderUnifiedActivityFeed(
 				const firstId = !firstNewsMarked ? ' id="gdl-first-news-item"' : '';
 				firstNewsMarked = true;
 				if (isCompactPatch) {
-					feedHtml += `<div${firstId} class="${n.Event} ${n.PartnerEvent} gdl-news-card gdl-patch-note" data-gdl-open-url="${escapeHtml(item.url)}"><div class="gdl-patch-layout"><div class="gdl-patch-icon" aria-hidden="true"><svg viewBox="0 0 64 64"><path d="M39.7 7.2a16 16 0 0 0-18.9 20.5L5.9 42.6a5.2 5.2 0 0 0 0 7.4l8.1 8.1a5.2 5.2 0 0 0 7.4 0l14.9-14.9A16 16 0 0 0 56.8 24l-9.4 9.4-8.8-2-2-8.8 9.4-9.4a16 16 0 0 0-6.3-6zM19.2 50.8a4.2 4.2 0 1 1-6-6 4.2 4.2 0 0 1 6 6z"/></svg></div><div class="gdl-patch-copy"><div class="gdl-news-type">${escapeHtml(label.toUpperCase())}</div><div class="gdl-news-title">${escapeHtml(item.title)}</div></div></div></div>`;
+					feedHtml += `<div${firstId} class="${n.Event} ${n.PartnerEvent} ${n.PartnerEventTextOnly}" data-gdl-open-url="${escapeHtml(item.url)}"><div class="${n.PartnerEventTextOnly_Container}"><div class="${n.PartnerEventTextOnly_Icon}">${NATIVE_PATCH_ICON}</div><div class="${n.PartnerEventTextOnly_TextColumn}"><div class="${n.PartnerEventType}">${escapeHtml(label.toUpperCase())}</div><div class="${n.PartnerEventTextOnly_Title}">${escapeHtml(item.title)}</div></div></div></div>`;
 				} else if (isMajor) {
-					const majorContentsClass = n.PartnerEventLargeUpdate_Contents || '_2Dbxm-Lv_YU2jN88HErlMS';
+					const majorContentsClass = n.MajorUpdateContentContainer || n.PartnerEventLargeUpdate_Contents || '_2Dbxm-Lv_YU2jN88HErlMS';
 					const blurClass = n.Blur || '_3cX_vEKsN9S9EmR0O5w1Ol';
-					feedHtml += `<div${firstId} class="${n.Event} ${n.PartnerEventLargeUpdate}" style="position:relative;margin:0 0 16px;" data-gdl-open-url="${escapeHtml(item.url)}"><div class="${n.LeftSideMajorUpdateBar}"></div><div class="${n.PartnerEventLargeImage_Container}"><div class="${majorContentsClass}"><div class="${n.ImageContainer}"><img class="${n.PartnerEventLargeImage_Image} ${blurClass}" src="${escapeHtml(thumbUrl)}" aria-hidden="true" /><img class="${n.PartnerEventLargeImage_Image}" src="${escapeHtml(thumbUrl)}" data-gdl-fallback-src="${escapeHtml(fallbackImage || '')}" /></div><div class="${n.PartnerEventLargeImage_TextColumn}"><div class="${n.PartnerEventType}">${escapeHtml(label.toUpperCase())}</div><div class="${n.PartnerEventLargeImage_Title}">${escapeHtml(item.title)}</div>${preview ? `<div class="${n.PartnerEventLargeImage_Summary}">${escapeHtml(preview)}</div>` : ''}</div></div></div></div>`;
+					feedHtml += `<div${firstId} class="${n.Event} ${n.PartnerEventLargeUpdate}" data-gdl-open-url="${escapeHtml(item.url)}"><div class="${majorContentsClass}"><div class="${n.LeftSideMajorUpdateBar}"></div><div class="${n.PartnerEventLargeImage_Container}"><div class="${n.PartnerEventLargeImage_Contents}"><img class="${n.PartnerEventLargeImage_Image} ${blurClass}" src="${escapeHtml(thumbUrl)}" aria-hidden="true" /><div class="${n.ImageContainer}"><img class="${n.PartnerEventLargeImage_Image}" src="${escapeHtml(thumbUrl)}" data-gdl-fallback-src="${escapeHtml(fallbackImage || '')}" /></div><div class="${n.PartnerEventLargeImage_TextColumn}"><div class="${n.PartnerEventType} ${n.PartnerEventTypeUpdate || '_29bW1yCn25VTm4bFameBaV'}"><div>${escapeHtml(label.toUpperCase())}</div></div><div class="${n.PartnerEventLargeImage_Title}">${escapeHtml(item.title)}</div>${preview ? `<div class="${n.PartnerEventLargeImage_Summary}">${escapeHtml(preview)}</div>` : ''}</div></div></div></div></div>`;
 				} else {
-					feedHtml += `<div${firstId} class="${n.Event} ${n.PartnerEvent} ${n.PartnerEventMediumImage_Container} gdl-news-card" data-gdl-open-url="${escapeHtml(item.url)}"><div class="${n.PartnerEventMediumImage_Contents} gdl-news-layout"><div class="${n.MediumImageContainer} gdl-news-image"><img class="gdl-news-image-blur" src="${escapeHtml(thumbUrl)}" aria-hidden="true" /><img class="${n.PartnerEventMediumImage_Image} gdl-news-image-fg" src="${escapeHtml(thumbUrl)}" data-gdl-fallback-src="${escapeHtml(fallbackImage || '')}" /></div><div class="${n.PartnerEventMediumImage_TextColumn} gdl-news-copy"><div class="${n.PartnerEventType} gdl-news-type">${escapeHtml(label.toUpperCase())}</div><div class="${n.PartnerEventMediumImage_Title} gdl-news-title">${escapeHtml(item.title)}</div>${preview ? `<div class="${n.PartnerEventMediumImage_Summary} gdl-news-summary">${escapeHtml(preview)}</div>` : ''}</div></div></div>`;
+					feedHtml += `<div${firstId} class="${n.Event} ${n.PartnerEvent} ${n.PartnerEventMediumImage_Container} gdl-news-card" data-gdl-open-url="${escapeHtml(item.url)}"><div class="${n.PartnerEventMediumImage_Contents} gdl-news-layout"><div class="${n.MediumImageContainer} gdl-news-image"><img class="gdl-news-image-blur" src="${escapeHtml(thumbUrl)}" aria-hidden="true" /><img class="${n.PartnerEventMediumImage_Image} gdl-news-image-fg" src="${escapeHtml(thumbUrl)}" data-gdl-fallback-src="${escapeHtml(fallbackImage || '')}" /></div><div class="${n.PartnerEventMediumImage_TextColumn} gdl-news-copy"><div class="${n.PartnerEventType} gdl-news-type"><div>${escapeHtml(label.toUpperCase())}</div></div><div class="${n.PartnerEventMediumImage_Title} gdl-news-title">${escapeHtml(item.title)}</div>${preview ? `<div class="${n.PartnerEventMediumImage_Summary} gdl-news-summary">${escapeHtml(preview)}</div>` : ''}</div></div></div>`;
 				}
 			}
 		}
-		feedHtml += '</div>';
+		feedHtml += '</div></div>';
 	}
 	const endReached = activityEndReached.get(steamAppId) === true;
 	if (endReached && visibleNews < sortedNews.length) {
@@ -623,7 +631,7 @@ export function renderUnifiedActivityFeed(
 	if (activityEndReached.get(steamAppId) === true) {
 		feedHtml += `<div class="gdl-activity-end"><span>${escapeHtml(gdlText('activity_end', 'End of activity'))}</span></div>`;
 	} else {
-		feedHtml += `<div class="gdl-load-more-row"><button type="button" class="${FEED_CLASSES().FetchMoreContainer} gdl-load-more-activity">${escapeHtml(gdlText('fetch_more', loc('AppActivity_FetchMore', 'Load more activity')))}</button></div>`;
+		feedHtml += `<div class="gdl-load-more-row"><button type="button" class="DialogButton _DialogLayout Secondary ${FEED_CLASSES().FetchMoreContainer} gdl-load-more-activity">${escapeHtml(gdlText('fetch_more', loc('AppActivity_FetchMore', 'Load more activity')))}</button></div>`;
 	}
 	return feedHtml;
 }
@@ -662,9 +670,18 @@ function deleteLocalActivityPost(steamAppId: string, postId: string, shortcutApp
 }
 
 const feedInteractionCleanup = new WeakMap<Document, () => void>();
+const feedSummaryCleanup = new WeakMap<Document, () => void>();
+
+function refreshActivitySummaryLayout(feed: HTMLElement): void {
+	const doc = feed.ownerDocument;
+	feedSummaryCleanup.get(doc)?.();
+	feedSummaryCleanup.set(doc, installNativeActivitySummaryClamps(feed));
+}
 
 export function disposeActivityFeedInteractions(doc: Document): void {
 	feedInteractionCleanup.get(doc)?.();
+	feedSummaryCleanup.get(doc)?.();
+	feedSummaryCleanup.delete(doc);
 }
 
 export function setupPostDeleteHandlers(
@@ -677,6 +694,7 @@ export function setupPostDeleteHandlers(
 	disposeActivityFeedInteractions(doc);
 	const feedContainer = doc.getElementById('gdl-activity-feed');
 	if (!feedContainer) return;
+	refreshActivitySummaryLayout(feedContainer);
 
 	const handleFormSubmit = (event: Event): void => {
 		const target = event.target as HTMLElement | null;

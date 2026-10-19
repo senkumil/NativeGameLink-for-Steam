@@ -257,14 +257,15 @@ for (const name of ['SP Desktop Popup', 'SP Overlay', 'SP BPM', 'Shared JS Conte
 }
 
 function modalFixture() {
-  const time = scheduler(), win = Object.assign(new Target(), time, { innerWidth: 1280, innerHeight: 720, closed: false });
+  const time = scheduler(), win = Object.assign(new Target(), time, { innerWidth: 1280, innerHeight: 720, closed: false,
+    getComputedStyle: () => ({ zoom: '1' }) });
   let route = `/library/app/${a}`;
   win.uiStore = { GetActiveWindowInstance: () => ({ LocationPathName: route }) };
   win.location = { href: `https://steamloopback.host${route}` };
   const doc = Object.assign(new Target(), { defaultView: win, documentElement: { clientWidth: 1280, clientHeight: 720 }, elements: new Map() });
   win.document = doc;
   class Element extends Target {
-    style = { setProperty: noop }; dataset = {}; value = ''; options = [{ textContent: '' }]; selectedOptions = [];
+    style = { setProperty: noop }; classList = { toggle: noop }; dataset = {}; value = ''; options = [{ textContent: '' }]; selectedOptions = [];
     isConnected = false; children = new Map();
     querySelector(selector) { let node = this.children.get(selector); if (!node) this.children.set(selector, node = new Element()); return node; }
     querySelectorAll() { return []; }
@@ -276,6 +277,7 @@ function modalFixture() {
   doc.getElementById = id => doc.elements.get(id) || null;
   doc.createElement = () => new Element();
   const requests = [], observers = [];
+  win.ResizeObserver = class { constructor() { observers.push(this); } observe() {} disconnect() { this.disconnected = true; } };
   const nativeRoute = load('frontend/features/library/native-route.ts', {
     '../../steam/css': { LINKS_BAR_CLASSES: () => ({}), PLAYBAR_CLASSES: () => ({}) },
     '../../steam/native-dom': { elementsWithCssModuleClass: () => [], isRenderedElement: () => true },
@@ -297,7 +299,7 @@ function modalFixture() {
     './styles/modal': { ensureAchievementModalStyles: noop }, './navigation': navigation,
     './comparison': { getAchievementComparisonFriends: async () => [], getFriendAchievementState: async () => new Map() },
     '../library/social/feed': { getCurrentSteamUser: () => ({ name: 'Current user', avatar: '' }) },
-  }, { ResizeObserver: class { constructor() { observers.push(this); } observe() {} disconnect() { this.disconnected = true; } } });
+  }, { ResizeObserver: win.ResizeObserver });
   const data = { appid: '111', metadata_appid: '111', state_appid: String(a), total: 2, unlocked: 1, achievements: [] };
   const info = { name: 'Linked A', headerImage: '', heroImage: '' };
   return { doc, win, modal, nativeRoute, navigation, requests, observers, time, data, info,

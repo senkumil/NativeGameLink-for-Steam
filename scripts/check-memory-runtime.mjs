@@ -39,7 +39,10 @@ class FakeElement extends FakeTarget {
   isConnected = true;
   naturalWidth = 0;
   naturalHeight = 0;
-  style = { setProperty() {}, removeProperty() {} };
+  style = { values: new Map(),
+    setProperty(name, value) { this.values.set(name, value); },
+    getPropertyValue(name) { return this.values.get(name) || ''; },
+    removeProperty(name) { this.values.delete(name); } };
   attributes = new Map();
   classes = new Set();
   classList = { add: name => this.classes.add(name), remove: name => this.classes.delete(name), contains: name => this.classes.has(name) };
@@ -76,6 +79,7 @@ function documentSurface() {
   doc.querySelectorAll = () => [];
   doc.defaultView = Object.assign(new FakeTarget(), {
     innerWidth: 1920, innerHeight: 1080,
+    getComputedStyle: element => ({ width: `${element.getBoundingClientRect().width}px` }),
     setTimeout: schedule, clearTimeout: id => timers.delete(id),
     requestAnimationFrame: callback => { const id = ++nextHandle; frames.set(id, callback); return id; },
     cancelAnimationFrame: id => frames.delete(id),
@@ -129,7 +133,7 @@ const cards = loadModule('frontend/features/library/trading-cards.ts', {
   '../../api/backend': { backendLog() {} },
   '../../core/text': { escapeHtml: value => String(value) },
   '../../core/disposables': disposables,
-  '../../steam/css': { ACH_CLASSES: () => ({ HighlightDiv: 'highlight' }) },
+  '../../steam/css': { ACH_CLASSES: () => ({ HighlightDiv: 'highlight' }), resolveClassModule: (_predicate, fallback) => ({ classes: fallback }) },
   '../../steam/localization': { gdlText: (_key, fallback) => fallback, loc: (_key, fallback) => fallback },
   './community-items': { getOfficialCommunityItems: async () => catalog, normalizeCommunityAssetUrl: value => value || '' },
   './constants': { GDL_INJECTED: 'gdl-library-injected' },

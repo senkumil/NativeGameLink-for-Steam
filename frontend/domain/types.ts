@@ -127,6 +127,7 @@ export interface ShortcutDetectionCandidate {
 
 export interface ShortcutDetectionResult {
 	candidates: ShortcutDetectionCandidate[];
+	rejected_appids?: string[];
 	launcher_detected?: boolean;
 	generic_launcher?: boolean;
 	executable?: string;

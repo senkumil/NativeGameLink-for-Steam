@@ -11,8 +11,6 @@ export function ensureInfoPanelStyles(doc: Document): void {
 		[data-gdl-game-info-button="1"].gdl-info-button-fallback:hover,
 		[data-gdl-game-info-button="1"].gdl-info-button-fallback.gdl-info-active { background:rgba(78,91,108,.88);color:#fff;box-shadow:inset 0 1px 0 rgba(255,255,255,.12); }
 		[data-gdl-game-info-button="1"].gdl-info-button-fallback svg { width:24px;height:24px;display:block; }
-		[data-gdl-game-info-button="1"] svg.SVGIcon_Arrow,
-		[data-gdl-game-info-button="1"] .gdl-scroll-top-icon { width: 16px; height: 16px; }
 
 		#gdl-game-info-panel {
 			transition: height 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.28s ease-in-out, transform 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
@@ -40,55 +38,32 @@ export function ensureInfoPanelStyles(doc: Document): void {
 
 		/* When the current Steam class modules resolve successfully, Steam owns
 		   the outer panel, expansion animation, column geometry and typography. */
-		/* Keep the injected portrait on Steam's current 2:3 box-art geometry. The
-		   private module does not constrain images inserted outside React, which
-		   otherwise lets a horizontal legacy capsule cover every information
-		   column. */
+		/* Steam's grid owns the portrait column: 109px normally, 15% when its
+		   right pane becomes narrow. Only the asset's 2:3 ratio needs supplying
+		   outside Steam's React image component. */
 		#gdl-game-info-panel[data-gdl-native-layout="1"] .gdl-info-portrait {
-			width:109px !important;min-width:109px !important;max-width:109px !important;
-			height:163px !important;min-height:163px !important;max-height:163px !important;
 			overflow:hidden !important;border-radius:2px !important;
 		}
 		#gdl-game-info-panel[data-gdl-native-layout="1"] .gdl-info-portrait img {
-			width:100% !important;height:100% !important;object-fit:cover !important;display:block !important;
+			width:100%;height:auto;aspect-ratio:2 / 3;object-fit:cover;display:block;
 		}
-		@media (max-width: 900px) {
-			#gdl-game-info-panel .gdl-info-portrait,
-			#gdl-game-info-panel .gdl-info-portrait img {
-				width: 74px !important;
-				min-width: 74px !important;
-				max-width: 74px !important;
-				height: 111px !important;
-				min-height: 111px !important;
-				max-height: 111px !important;
-			}
-		}
-		div.NarrowWindow #gdl-game-info-panel .gdl-info-portrait,
-		div.NarrowWindow #gdl-game-info-panel .gdl-info-portrait img {
-			width: 74px !important;
-			min-width: 74px !important;
-			max-width: 74px !important;
-			height: 111px !important;
-			min-height: 111px !important;
-			max-height: 111px !important;
-		}
-		#gdl-game-info-panel .gdl-info-associations {
+		#gdl-game-info-panel[data-gdl-native-layout="0"] .gdl-info-associations {
 			display: flex !important;
 			flex-direction: column !important;
 			gap: 8px !important;
 		}
-		#gdl-game-info-panel .gdl-info-row {
+		#gdl-game-info-panel[data-gdl-native-layout="0"] .gdl-info-row {
 			display: flex !important;
 			flex-direction: column !important;
 			margin-bottom: 4px !important;
 		}
-		#gdl-game-info-panel .gdl-info-label {
+		#gdl-game-info-panel[data-gdl-native-layout="0"] .gdl-info-label {
 			font-size: 11px !important;
 			color: #8f98a0 !important;
 			margin-bottom: 2px !important;
 			text-transform: uppercase !important;
 		}
-		#gdl-game-info-panel .gdl-info-value {
+		#gdl-game-info-panel[data-gdl-native-layout="0"] .gdl-info-value {
 			font-size: 13px !important;
 			color: #dcdedf !important;
 			line-height: 16px !important;
@@ -100,9 +75,11 @@ export function ensureInfoPanelStyles(doc: Document): void {
 			align-items: center;
 			width: 100%;
 		}
-		#gdl-game-info-panel .gdl-info-feature svg,
-		#gdl-game-info-panel .gdl-info-feature img,
-		#gdl-game-info-panel .gdl-info-feature .gdl-feature-icon {
+		/* Keep Steam's 32px border box and 20px content height in both layouts.
+		   A smaller SVG box with the same padding halves only vector glyphs.
+		   Apply the metrics once, to the root visual, never to nested SVGs. */
+		#gdl-game-info-panel .gdl-info-feature > svg,
+		#gdl-game-info-panel .gdl-info-feature > img {
 			box-sizing: border-box;
 			width: 32px;
 			height: 32px;
@@ -110,7 +87,6 @@ export function ensureInfoPanelStyles(doc: Document): void {
 			opacity: .5;
 			color: #fff;
 			flex: 0 0 32px;
-			object-fit: contain;
 		}
 		#gdl-game-info-panel .gdl-info-feature span {
 			color: #919191;
@@ -126,6 +102,7 @@ export function ensureInfoPanelStyles(doc: Document): void {
 		   no longer be resolved. No stale Steam hashes are used on this path. */
 		#gdl-game-info-panel[data-gdl-native-layout="0"] {
 			height:0;opacity:0;overflow:hidden;box-sizing:border-box;
+			container-type:inline-size;
 			background:linear-gradient(90deg,rgba(24,25,30,.92),rgba(31,28,33,.84));
 			border-bottom:1px solid rgba(255,255,255,.035);
 			transition:height 0.3s cubic-bezier(0.4, 0, 0.2, 1),opacity 0.28s ease-in-out;
@@ -161,14 +138,13 @@ export function ensureInfoPanelStyles(doc: Document): void {
 		#gdl-game-info-panel[data-gdl-native-layout="0"] .gdl-info-label { color:#8f98a0; }
 		#gdl-game-info-panel[data-gdl-native-layout="0"] .gdl-info-value { color:#dcdedf;font-weight:700; }
 		#gdl-game-info-panel[data-gdl-native-layout="0"] .gdl-info-feature { display:flex;align-items:center;gap:9px;min-height:22px; }
-		#gdl-game-info-panel[data-gdl-native-layout="0"] .gdl-info-feature svg { width:22px;height:22px;min-width:22px;flex:0 0 22px; }
-		@media (max-width:1180px) {
+		@container (max-width:1180px) {
 			#gdl-game-info-panel[data-gdl-native-layout="0"] .gdl-game-info-grid {
 				grid-template-columns:120px minmax(0,1fr) minmax(230px,.9fr);
 				grid-template-areas:"portrait desc stats" "portrait features features";
 			}
 		}
-		@media (max-width:900px) {
+		@container (max-width:900px) {
 			#gdl-game-info-panel[data-gdl-native-layout="0"] .gdl-game-info-grid {
 				grid-template-columns:100px minmax(0,1fr);grid-template-areas:"portrait desc" "portrait stats" "features features";gap:12px 18px;
 			}

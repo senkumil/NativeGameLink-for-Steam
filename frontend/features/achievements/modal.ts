@@ -54,7 +54,8 @@ function resolveModalViewport(doc: Document): { left: number; top: number; width
 	let current: HTMLElement | null = injected as HTMLElement | null;
 	while (current && current !== doc.body) {
 		const rect = current.getBoundingClientRect();
-		if (rect.width >= 640 && rect.height >= 420 && rect.left >= 180 && rect.right <= viewportWidth + 1) {
+		if (rect.width >= 120 && rect.height >= 120 && rect.left > 0 && rect.left < viewportWidth
+			&& rect.top < viewportHeight && rect.right <= viewportWidth + 1) {
 			candidates.push(rect);
 		}
 		current = current.parentElement;
@@ -63,17 +64,17 @@ function resolveModalViewport(doc: Document): { left: number; top: number; width
 	if (picked) {
 		const left = Math.max(0, Math.round(picked.left));
 		const top = Math.max(0, Math.round(picked.top));
-		const width = Math.max(480, Math.round(Math.min(viewportWidth - left, picked.width)));
-		const height = Math.max(360, Math.round(Math.min(viewportHeight - top, picked.height)));
+		const width = Math.max(0, Math.min(viewportWidth - left, Math.round(picked.width)));
+		const height = Math.max(0, Math.min(viewportHeight - top, Math.round(picked.height)));
 		return { left, top, width, height };
 	}
-	const fallbackLeft = Math.round(Math.min(Math.max(320, viewportWidth * 0.24), Math.max(320, viewportWidth - 720)));
-	const fallbackTop = 86;
+	const fallbackLeft = Math.round(Math.min(Math.max(320, viewportWidth * 0.24), Math.max(0, viewportWidth - 720)));
+	const fallbackTop = Math.min(86, Math.max(0, viewportHeight - 420));
 	return {
 		left: fallbackLeft,
 		top: fallbackTop,
-		width: Math.max(560, viewportWidth - fallbackLeft),
-		height: Math.max(420, viewportHeight - fallbackTop),
+		width: viewportWidth - fallbackLeft,
+		height: viewportHeight - fallbackTop,
 	};
 }
 
@@ -154,13 +155,30 @@ export async function openLocalAchievementsModal(doc: Document, data: LocalAchie
 		headEl?.style.setProperty('--gdl-lam-hero-image', cssHeroImage);
 	}
 
+	let appliedViewport = '';
 	const syncViewport = () => {
 		const bounds = resolveModalViewport(doc);
+		// DOMRects are expressed in viewport pixels, while fixed positioning is
+		// expressed in the overlay's CSS pixels. Steam's client zoom may live on
+		// either document ancestor; applying a DOMRect directly scales it twice.
+		let zoom = (overlay as HTMLElement & { currentCSSZoom?: number }).currentCSSZoom;
+		if (!zoom || !Number.isFinite(zoom)) {
+			zoom = 1;
+			for (let element: HTMLElement | null = overlay; element; element = element.parentElement) {
+				const value = doc.defaultView?.getComputedStyle(element).zoom || '1';
+				const factor = Number.parseFloat(value) / (value.endsWith('%') ? 100 : 1);
+				if (Number.isFinite(factor) && factor > 0) zoom *= factor;
+			}
+		}
+		const signature = `${bounds.left}:${bounds.top}:${bounds.width}:${bounds.height}:${zoom}`;
+		if (signature === appliedViewport) return;
+		appliedViewport = signature;
 		overlay.style.inset = 'auto';
-		overlay.style.left = `${bounds.left}px`;
-		overlay.style.top = `${bounds.top}px`;
-		overlay.style.width = `${bounds.width}px`;
-		overlay.style.height = `${bounds.height}px`;
+		overlay.style.left = `${bounds.left / zoom}px`;
+		overlay.style.top = `${bounds.top / zoom}px`;
+		overlay.style.width = `${bounds.width / zoom}px`;
+		overlay.style.height = `${bounds.height / zoom}px`;
+		overlay.classList.toggle('gdl-lam-compact-pane', bounds.width / zoom <= 900);
 	};
 
 	const view = doc.defaultView;
@@ -182,8 +200,9 @@ export async function openLocalAchievementsModal(doc: Document, data: LocalAchie
 		geometryTargets.push(geometryNode);
 		geometryNode = geometryNode.parentElement;
 	}
-	const resizeObserver = typeof ResizeObserver !== 'undefined'
-		? new ResizeObserver(() => requestViewportSync())
+	const ResizeObserverCtor = view?.ResizeObserver;
+	const resizeObserver = typeof ResizeObserverCtor === 'function'
+		? new ResizeObserverCtor(() => requestViewportSync())
 		: null;
 	geometryTargets.forEach(target => resizeObserver?.observe(target));
 

@@ -284,10 +284,14 @@ export function getCachedCommunityContent(steamAppId: string, language = steamLa
 }
 
 export function eventTypeLabel(t: number): string {
+	const token = `PartnerEvent_${t}`;
+	const native = loc(token, '');
+	if (native && native !== token && native !== `#${token}`) return native;
 	switch (t) {
 		case 10: return loc('EventDisplay_EventType_10', gdlText('feed_game_launch', 'Game Launch'));
-		case 12: return loc('AppActivity_EventType_GameUpdate', gdlText('feed_game_update', 'Game Update'));
-		case 13: case 14: return loc('MajorUpdate_Type14', gdlText('feed_major_update', 'Major Update'));
+		case 12: return loc('PartnerEvent_12', gdlText('feed_patch_notes', 'Small Update / Patch Notes'));
+		case 13: return loc('PartnerEvent_13', 'Regular Update');
+		case 14: return loc('PartnerEvent_14', gdlText('feed_major_update', 'Major Update'));
 		case 15: return loc('EventDisplay_EventType_15', gdlText('feed_dlc', 'DLC Release'));
 		case 20: case 21: return loc('EventDisplay_EventType_20', gdlText('feed_offer', 'Offer'));
 		case 22: case 23: case 24: case 25: case 26: case 35: return loc('EventDisplay_EventType_22', gdlText('feed_event', 'Game Event'));

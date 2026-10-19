@@ -49,6 +49,7 @@ export function installEarlyLinkedPlaybar(doc: Document): EarlyLinkedPlaybar {
 	let statsTargets = new Set<HTMLElement>();
 	let attributeTargets = new Set<HTMLElement>();
 	let frame: number | null = null;
+	let attributeFrame: number | null = null;
 	let framesRemaining = 0;
 	let settleDeadline = 0;
 	let syncing = false;
@@ -61,7 +62,13 @@ export function installEarlyLinkedPlaybar(doc: Document): EarlyLinkedPlaybar {
 		if (withoutLibrarySidebarMutations(records).some(record => !isOwnedMutation(record))) sync();
 	}) : null;
 	const attributesObserver = Observer ? new Observer(records => {
-		if (records.some(record => !isOwnedMutation(record))) sync();
+		const native = records.filter(record => !isOwnedMutation(record));
+		if (!native.length) return;
+		// Native responsive classes change visibility at their breakpoints. Keep
+		// those and content/navigation synchronous; pixel-by-pixel ancestor width
+		// styles only need one refresh before the next paint.
+		if (native.some(record => record.attributeName === 'class')) sync();
+		else queueAttributeSync();
 	}) : null;
 	if (contentsObserver) lifecycle.add(() => contentsObserver.disconnect());
 	if (attributesObserver) lifecycle.add(() => attributesObserver.disconnect());
@@ -135,6 +142,19 @@ export function installEarlyLinkedPlaybar(doc: Document): EarlyLinkedPlaybar {
 		framesRemaining = 0;
 	}
 	lifecycle.add(cancelSettle);
+	function cancelAttributeSync(): void {
+		if (attributeFrame !== null) view?.cancelAnimationFrame(attributeFrame);
+		attributeFrame = null;
+	}
+	lifecycle.add(cancelAttributeSync);
+	function queueAttributeSync(): void {
+		if (lifecycle.isDisposed || attributeFrame !== null) return;
+		if (!view?.requestAnimationFrame) { sync(); return; }
+		attributeFrame = view.requestAnimationFrame(() => {
+			attributeFrame = null;
+			sync();
+		});
+	}
 	function settleBeforePaint(): void {
 		frame = null;
 		if (lifecycle.isDisposed || !isShortcutRoute()) return;
@@ -144,6 +164,7 @@ export function installEarlyLinkedPlaybar(doc: Document): EarlyLinkedPlaybar {
 	}
 	function sync(): void {
 		if (lifecycle.isDisposed) return;
+		cancelAttributeSync();
 		synchronize();
 		if (!isShortcutRoute() || hasPaintedCloud()) { cancelSettle(); return; }
 		if (frame !== null || !view?.requestAnimationFrame) return;

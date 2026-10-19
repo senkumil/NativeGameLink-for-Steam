@@ -54,9 +54,10 @@ const localization=modules['../../steam/localization'];
 const escapeHtml=value=>String(value).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
 const feedModules={
   '../../../api/backend':{backendLog(){}}, '../../../core/text':{escapeHtml},
-  '../../../steam/css':{EVENT_CLASSES:()=>({}),FEED_CLASSES:()=>({})},
+  '../../../steam/css':{EVENT_CLASSES:()=>({}),FEED_CLASSES:()=>({}),HEADING_RESET_CLASSES:()=>({Reset:'_3A_c3YHYd4YIjA8Y-olnPl'})},
   '../../../steam/localization':localization,'../news':context.exports,
   '../../../steam/social':{},'./personas':{},'./host':{},
+  '../activity-summary':{installNativeActivitySummaryClamps:()=>()=>{}},
 };
 const feedContext=vm.createContext({exports:{},window:{},localStorage:{getItem:()=>null},require:name=>{
   if(!(name in feedModules)) throw Error(name);return feedModules[name];

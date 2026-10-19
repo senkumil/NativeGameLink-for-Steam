@@ -82,9 +82,18 @@ export class LinkOrchestrator {
 			if (wait >= 900) await refreshShortcutRecordsFromBackend().catch((): void => {});
 			if (initialId) {
 				const exact = Number(initialId);
-				if (Number.isFinite(exact) && exact >= 2147483648 && getShortcutAppById(exact)) {
-					tx.resolvedShortcutAppId = exact;
-					return exact;
+				const app = Number.isFinite(exact) && exact >= 2147483648 ? getShortcutAppById(exact) : null;
+				if (app) {
+					const executable = shortcutExecutableIdentity(readShortcutOverviewField(
+						app, 'strShortcutExe', 'm_strShortcutExe', 'shortcut_exe', 'strExePath',
+					));
+					if (expectedExecutable && executable && executable !== expectedExecutable) {
+						throw new Error('shortcut_identity_changed');
+					}
+					if (!expectedExecutable || executable === expectedExecutable) {
+						tx.resolvedShortcutAppId = exact;
+						return exact;
+					}
 				}
 			}
 			const records = getAllShortcutRecords().filter(record => record.id >= 2147483648);
@@ -140,7 +149,8 @@ export class LinkOrchestrator {
 			};
 		}
 		const edition = options.shortcutAppId ? getShortcutEdition(options.shortcutAppId) : null;
-		const canonicalName = String(edition?.name || options.canonicalNameHint || canonicalData?.name || data?.name || title).trim();
+		const editionName = edition?.appId === steamAppId ? edition.name : '';
+		const canonicalName = String(editionName || options.canonicalNameHint || canonicalData?.name || data?.name || title).trim();
 		return { data, canonicalName, localizedData };
 	}
 

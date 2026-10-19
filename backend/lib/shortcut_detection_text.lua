@@ -115,13 +115,12 @@ function M.extract_sequel_number(value)
         or norm:match("%s+chapter%s+(%d+)%s+")
         or norm:match("%s+episode%s+(%d+)%s+")
     if part_num then return tonumber(part_num) end
-    for roman, num in pairs({ viii = 8, vii = 7, vi = 6, iv = 4, v = 5, iii = 3, ii = 2, ix = 9, x = 10, xi = 11, xii = 12 }) do
-        if norm:match("%s+" .. roman .. "%s+") then return num end
-    end
-    -- Look for trailing or isolated single/double digit numbers (not 4-digit years)
-    for num_str in norm:gmatch("%s+(%d+)%s+") do
-        local n = tonumber(num_str)
-        if n and n >= 2 and n <= 25 then return n end
+    -- Walk source order rather than pairs(): a title containing several Roman
+    -- tokens must have the same identity in every Lua runtime.
+    for token in norm:gmatch("%S+") do
+        if ROMAN_NUMERALS[token] then return ROMAN_NUMERALS[token] end
+        local n = tonumber(token)
+        if n and n >= 1 and n <= 25 then return n end
     end
     return nil
 end
@@ -163,15 +162,17 @@ function M.parse_title_identity(value)
     local year = M.extract_year(raw)
     local sequel = M.extract_sequel_number(raw)
     local quals = M.extract_qualifiers(raw)
-    local base = M.normalize(cleaned)
-    if year then base = base:gsub("%s+" .. tostring(year) .. "%s+", " ") end
-    for roman in pairs(ROMAN_NUMERALS) do
-        base = base:gsub("%s+" .. roman .. "%s+", " ")
+    local words = {}
+    for token in M.normalize(cleaned):gmatch("%S+") do
+        local number = tonumber(token)
+        if not ROMAN_NUMERALS[token] and not QUALIFIER_PATTERNS[token]
+            and not (number and (number == year or (number >= 1 and number <= 25))) then
+            words[#words + 1] = token
+        end
     end
-    base = base:gsub("%s+%d+%s+", " ")
-    for word in pairs(QUALIFIER_PATTERNS) do
-        base = base:gsub("%s+" .. word .. "%s+", " ")
-    end
+    -- Pad phrase removal too: terminal sequel/edition tokens used to survive
+    -- because the old patterns required a space after the final word.
+    local base = " " .. table.concat(words, " ") .. " "
     base = base:gsub("%s+edition%s+", " ")
         :gsub("%s+game%s+of%s+the%s+year%s+", " ")
         :gsub("%s+cut%s+", " ")
@@ -196,9 +197,9 @@ function M.compare_title_identities(shortcut_title, candidate_title)
         and math.max(M.similarity(a.base_title, b.base_title), M.compact_similarity(a.base_title, b.base_title))
         or 0
     local base_matches = (a.base_title ~= "" and a.base_title == b.base_title) or base_sim >= 0.82
-    local sequel_match = (a.sequel ~= nil and b.sequel ~= nil and a.sequel == b.sequel)
+    local sequel_match = base_matches and (a.sequel ~= nil and b.sequel ~= nil and a.sequel == b.sequel)
     local sequel_mismatch = (a.sequel ~= nil and b.sequel ~= nil and a.sequel ~= b.sequel)
-    local year_match = (a.year ~= nil and b.year ~= nil and a.year == b.year)
+    local year_match = base_matches and (a.year ~= nil and b.year ~= nil and a.year == b.year)
     local year_mismatch = (a.year ~= nil and b.year ~= nil and a.year ~= b.year)
         or (a.year ~= nil and b.year == nil and (b.is_remake or a.year < 2015))
     local remake_mismatch = (a.is_remake and not b.is_remake and b.year and b.year < 2015)

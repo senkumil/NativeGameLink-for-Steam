@@ -1,6 +1,7 @@
 import { resolveSteamClassModule, resetSteamClassModuleCache } from './class-module-cache';
 
 export type CssClasses = { [name: string]: string };
+const HEADING_RESET_CLASSES_FALLBACK: CssClasses = { Reset: '_3A_c3YHYd4YIjA8Y-olnPl' };
 
 const LIBRARY_SIDEBAR_ENTRY_CLASSES_FALLBACK: CssClasses = {
 	Container: '_2-O4ZG0KrnSrzISHBKctFQ',
@@ -55,6 +56,7 @@ export const EVENT_CLASSES_FALLBACK: CssClasses = {
 	PartnerEventMediumImage_Title: '_1gljEIuhbsQpFCWuVhdKTJ',
 	PartnerEventMediumImage_Summary: 'Ru7OBQzSxqIo3jIsbtV9g',
 	PartnerEventType: '_1ujzuoxGhLunHZQqHAqRgg',
+	PartnerEventTypeUpdate: '_29bW1yCn25VTm4bFameBaV',
 	PartnerEventFeatured: '_3xi-HLpFVHaakihoqhQ_6C',
 	PartnerEventLargeImage_Container: 'LibriMVXcLl1HB60ZUp78',
 	PartnerEventLargeImage_Contents: '_2tDv0EeJIdDmZLyfUE63t1',
@@ -65,6 +67,12 @@ export const EVENT_CLASSES_FALLBACK: CssClasses = {
 	PartnerEventLargeImage_Summary: '_3zwBRDW1egliiT4pKYIXap',
 	PartnerEventLargeImage_TextColumn: '_2HzKE96Sc4z6KHN68gr4DS',
 	PartnerEventLargeUpdate_Contents: '_2Dbxm-Lv_YU2jN88HErlMS',
+	MajorUpdateContentContainer: '_2Dbxm-Lv_YU2jN88HErlMS',
+	PartnerEventTextOnly: '_3QRf-tp5VddAF00vWY5Gn8',
+	PartnerEventTextOnly_Container: '_1wJJQwnV-ssGrL0xveFujy',
+	PartnerEventTextOnly_Icon: '_1-llQnFWxBo1kyWdkDFyXp',
+	PartnerEventTextOnly_TextColumn: 'FZghxGxorZuq0dz2iUEhC',
+	PartnerEventTextOnly_Title: '_1Cva_kor3lWBIoeu9cQxJq',
 };
 
 export const POST_CLASSES_FALLBACK: CssClasses = {
@@ -98,6 +106,7 @@ export const ACH_CLASSES_FALLBACK: CssClasses = {
 export const PLAYBAR_CLASSES_FALLBACK: CssClasses = {
 	Container: '_3Yf8b2v5oOD8Wqsxu04ar',
 	InPage: '_1U7LKpx70kEsz3jJwAFOi-',
+	StickyHeader: '_39RheXihcN6H2k2muQTjkI',
 	GameStatsSection: '_1mDAVT4sTzFRwJtlKCw2Ws',
 	GameStat: '_1kiZKVbDe-9Ikootk57kpA',
 	GameStatIconForced: '_3bkqc-SsCg0b3FTEuewlK8',
@@ -109,6 +118,7 @@ export const PLAYBAR_CLASSES_FALLBACK: CssClasses = {
 	LastPlayed: '_3pS8kMrtScuY1Qf-W8tmRV',
 	LastPlayedInfo: '_1nfJNsQjTOXSQQyFahGnRi',
 	Playtime: '_1aKegVl9_lSdNAyWYZQlr9',
+	PlaytimeIcon: '_1GZdosVXnfrf69yU8DWASl',
 	PlayBarCloudStatusContainer: '_2cRYms-zZc4misk9tj3bt8',
 	CloudIconSVG: 'MbTRimZpGCATmn39ae8RT',
 	CloudStatusIcon: '_1PrjvpmQ3CUjn45PN1Ed6V',
@@ -180,6 +190,7 @@ export const LINKS_BAR_CLASSES_FALLBACK: CssClasses = {
 	LinkInner: '_7k4qmaN8SUMvv6u-L81uk',
 	Anchor: 'DY4_wSF8h9T5o46hO5I9V',
 	Link: '_1b6LYWVijW-9E4YV0keDWZ',
+	Text: '_2sNDjgK9EWiPLdNGkjun-w',
 	Label: '_2yAhdnguMvrNm_iD64JHDU',
 	MenuButton: '_1bIMOmWaxKrMdVMWU21ku',
 };
@@ -297,6 +308,11 @@ export const LINKS_BAR_CLASS_MODULE = (doc?: Document): ResolvedCssClasses =>
 
 export const FEED_CLASSES = (doc?: Document): CssClasses => FEED_CLASS_MODULE(doc).classes;
 export const EVENT_CLASSES = (doc?: Document): CssClasses => EVENT_CLASS_MODULE(doc).classes;
+export const HEADING_RESET_CLASSES = (doc?: Document): CssClasses => resolveClassModule(
+	module => typeof module.Reset === 'string' && Object.keys(module).length === 1,
+	HEADING_RESET_CLASSES_FALLBACK,
+	doc,
+).classes;
 export const ACH_CLASSES = (doc?: Document): CssClasses => ACH_CLASS_MODULE(doc).classes;
 export const POST_CLASSES = (doc?: Document): CssClasses => POST_CLASS_MODULE(doc).classes;
 export const PLAYBAR_CLASSES = (doc?: Document): CssClasses => PLAYBAR_CLASS_MODULE(doc).classes;

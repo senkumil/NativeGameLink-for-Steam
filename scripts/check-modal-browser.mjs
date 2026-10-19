@@ -11,6 +11,9 @@ const source = ts.transpileModule(fs.readFileSync('frontend/features/shortcuts/m
 const modalSource = ts.transpileModule(fs.readFileSync('frontend/core/modal.ts', 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS },
 }).outputText;
+const detectionSource = ts.transpileModule(fs.readFileSync('frontend/features/shortcuts/detection.ts', 'utf8'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
+}).outputText;
 const detectorSource = ts.transpileModule(fs.readFileSync('frontend/features/shortcuts/native-add-autodetect.ts', 'utf8')
   + '\nexport { looksLikeNativeAddAction, looksLikeAddSelectedAction };', {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
@@ -35,7 +38,7 @@ try {
       return result;
     }, detectorSource);
     assert.deepEqual(foreignActions, { differentRealm: true, add: true, selected: true });
-    await page.evaluate(({ code, modalCode }) => {
+    await page.evaluate(({ code, modalCode, detectionCode }) => {
       const modalExports = {};
       new Function('exports', modalCode)(modalExports);
       const mocks = {
@@ -49,6 +52,9 @@ try {
         getPendingLinkJob: () => null,
         isShortcutIdentityMutationInProgress: () => false,
       };
+      const detectionExports = {};
+      new Function('require', 'exports', detectionCode)(() => ({ ...mocks, RetryingRequestCache: class {} }), detectionExports);
+      Object.assign(mocks, { reliableReviewCandidate: detectionExports.reliableReviewCandidate, displayReviewConfidence: detectionExports.displayReviewConfidence });
       const exports = {};
       new Function('require', 'exports', code)(() => mocks, exports);
       window.openReview = () => exports.showShortcutManualLinkModal(document,
@@ -58,7 +64,7 @@ try {
           recommendedStartDir: 'D:\\Games\\Binaries\\Win64', trackingExecutableAutoApply: true },
         { candidates: [{ appid: '1790600', name: 'DRAGON BALL: Sparking! ZERO', score: 99 }] });
       window.openReview();
-    }, { code: source, modalCode: modalSource });
+    }, { code: source, modalCode: modalSource, detectionCode: detectionSource });
     const overlay = page.locator('#gdl-manual-link-modal');
     assert.equal(await overlay.evaluate(el => el.matches(':modal')), true);
     const box = await overlay.boundingBox();

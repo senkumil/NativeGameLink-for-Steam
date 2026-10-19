@@ -365,6 +365,22 @@ async function browserChecks(sources) {
     playbar.style.paddingLeft = '1px';
     await flush();
     check(syncCalls > beforeStyleSync, 'A playbar ancestor style change triggers scoped synchronization');
+    const beforeSplitterDrag = syncCalls;
+    for (let step = 0; step < 60; step++) {
+      const beforeFrame = syncCalls;
+      for (let signal = 0; signal < 8; signal++) {
+        playbar.style.paddingLeft = `${2 + (step * 8 + signal) % 7}px`;
+        // Separate MutationObserver deliveries within the same paint frame,
+        // as a splitter can receive several pointer events before painting.
+        await Promise.resolve();
+      }
+      check(syncCalls === beforeFrame, 'A burst of splitter style callbacks does not synchronously rescan the playbar');
+      await new Promise(requestAnimationFrame);
+      check(syncCalls === beforeFrame + 1, 'One rendered drag frame performs one playbar synchronization');
+    }
+    check(syncCalls - beforeSplitterDrag === 60, '480 real style observer deliveries perform only 60 playbar refreshes');
+    playbar.style.paddingLeft = '1px';
+    await flush();
     const beforeClassSync = syncCalls;
     playbar.classList.add('FixtureClassTransition');
     await flush();
@@ -455,6 +471,40 @@ async function browserChecks(sources) {
     };
     check([playtimeDetail, lastDetail, cloudStat].every(painted),
       'Final playtime, date and Cloud are painted through every ancestor with real Steam CSS');
+    native.clearNativeUiBlueprints(); nativeLastPlayed.remove(); nativePlaytime.remove();
+    load('tracker').syncEarlyLinkedPlaytime(document);
+    const fallbackTime = section.querySelector('[data-gdl-stat="playtime"]');
+    const fallbackLast = section.querySelector('[data-gdl-stat="last-played"]');
+    const fallbackClock = fallbackTime?.querySelector(`.${ps.GameStatIcon}`);
+    check(fallbackTime && fallbackLast && fallbackClock && !fallbackTime.querySelector(`.${ps.GameStatIconForced}`),
+      'The actual cold fallback uses Steam ordinary playtime icon classes instead of its always-visible Cloud icon');
+    const originalTime = fallbackTime.cloneNode(true), originalLast = fallbackLast.cloneNode(true), originalCloud = cloud.cloneNode(true);
+    for (const element of [originalTime, originalLast, originalCloud]) {
+      for (const node of [element, ...element.querySelectorAll('*')]) for (const attribute of [...node.attributes]) {
+        if (attribute.name.startsWith('data-gdl') || attribute.name === 'id') node.removeAttribute(attribute.name);
+      }
+    }
+    section.append(originalTime, originalLast, originalCloud);
+    native.saveNativeUiBlueprint(native.NATIVE_UI_BLUEPRINT_KEYS.playbarPlaytime, originalTime);
+    check(native.buildNativePlaybarStatBlueprint(document, 'playtime', 'Playtime', '2 hours')?.querySelector(`.${ps.GameStatIcon}`),
+      'A genuine ordinary-icon native Playtime blueprint is accepted without requiring a forced icon');
+    const outer = document.getElementById('fixture'), visibility = load('playbar-visibility');
+    for (const zoom of [.75, 1, 1.25, 1.5, 2]) for (const width of [600, 800, 885, 1500]) {
+      outer.style.width = `${width}px`; outer.style.zoom = String(zoom);
+      outer.classList.toggle('NarrowRightPanel', width <= 884); outer.classList.toggle('UltraNarrowRightPanel', width <= 600);
+      visibility.preserveLinkedPlaybarVisibility(document);
+      const cloudCopy = cloud.querySelector(`.${ps.HideWhenNarrow}`), oracleCopy = originalCloud.querySelector(`.${ps.HideWhenNarrow}`);
+      check(getComputedStyle(cloudCopy).display === getComputedStyle(oracleCopy).display
+        && getComputedStyle(fallbackClock).display === getComputedStyle(originalTime.querySelector(`.${ps.GameStatIcon}`)).display
+        && getComputedStyle(fallbackLast).display === getComputedStyle(originalLast).display,
+        `Production fallback Cloud, Playtime and LastPlayed follow native visibility at ${width}px and zoom ${zoom}`);
+      check((getComputedStyle(cloudCopy).display === 'none') === (width <= 884)
+        && (getComputedStyle(fallbackClock).display === 'none') === (width <= 884)
+        && (getComputedStyle(fallbackLast).display === 'none') === (width <= 600),
+        `The actual native 884/600 logical breakpoints control icon, text and complete-stat visibility at zoom ${zoom}`);
+    }
+    originalTime.remove(); originalLast.remove(); originalCloud.remove(); outer.style.zoom = ''; outer.style.width = '';
+    outer.classList.remove('NarrowRightPanel', 'UltraNarrowRightPanel');
     const output = document.createElement('pre');
     output.id = 'playbar-startup-result';
     output.textContent = JSON.stringify({ ok: true, checks: results.length, results,

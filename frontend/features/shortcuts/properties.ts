@@ -6,7 +6,7 @@ import { getCachedGameData, getGameData } from '../../core/game-data';
 import { findActiveShortcutAppId, findShortcutAppIdByName } from '../../steam/shortcuts';
 import { shortcutRuntimeHost } from './host';
 import { findMappingForShortcut } from './registry';
-import { buildShortcutDetectionContext, detectShortcutCandidatesLocal, enrichShortcutCandidatesRemote, mergeCandidateLists } from './detection';
+import { buildShortcutDetectionContext, detectShortcutCandidatesLocal, enrichShortcutCandidatesRemote, mergeCandidateLists, reliableReviewCandidate, displayReviewConfidence } from './detection';
 import { subscribeMappings } from '../../core/mappings';
 import { linkShortcutToSteam, shouldAutoApplyNoLauncher } from './linking';
 import { unlinkShortcutFromSteam } from './unlinking';
@@ -19,6 +19,10 @@ import { tryInjectCustomizationArtwork } from './customization-artwork';
 import { cancelPendingLinkJobs, enqueueLinkJob, hasPendingLinkJob, stageLinkJobForRecovery } from './link-job-queue';
 import { SHORTCUT_PROPERTIES_STYLE } from './properties-style';
 const GDL_PROP = 'gdl-properties-injected';
+function retryableLinkError(error: unknown): boolean {
+	return !['invalid_appid', 'refusing_to_modify_native_steam_app', 'shortcut_identity_changed', 'shortcut_identity_ambiguous', 'shortcut_not_found']
+		.includes(String(error || '').replace(/^Error:\s*/i, '').trim());
+}
 
 export function mutationMayContainProperties(roots: Iterable<Node>): boolean {
 	for (const root of roots) {
@@ -206,7 +210,7 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 	const currentRaw = findMappingForShortcut(initialShortcutId, gameTitle) || '';
 	let currentLinked = /^\d+$/.test(currentRaw) ? currentRaw : '';
 	const rememberedAppId = rememberedShortcutSteamAppId(managedShortcutId);
-	const initialAppId = currentLinked || rememberedAppId;
+	const initialAppId = currentLinked;
 
 	const cachedGame = initialAppId ? getCachedGameData(initialAppId, steamLanguageSync() || 'english')?.data : null;
 	const initialGameName = cachedGame?.name || gameTitle;
@@ -287,6 +291,12 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 		if (linkedPreviewCandidate?.appid === selectedAppId) return linkedPreviewCandidate;
 		return null;
 	};
+	const updateSuggestionReviewText = (candidate: ShortcutDetectionCandidate | null): void => {
+		autoTitle.style.display = 'block';
+		autoTitle.textContent = targetInputUserEdited ? (/^\d+$/.test(input.value.trim()) ? gdlText('manual_appid_ready', 'Manual AppID selected. Review the Steam game before linking.') : gdlText('detection_uncertain', 'Choose the correct result or enter the AppID manually.'))
+			: reliableReviewCandidate(candidate || undefined) ? gdlText('detected_game', 'Detected: {name}. Review the result and press Link to link it.', { name: candidate!.name })
+				: gdlText('detection_uncertain', 'Choose the correct result or enter the AppID manually.');
+	};
 
 	const renderCandidatePreview = (candidates: ShortcutDetectionCandidate[], selectedAppId: string): void => {
 		if (!candidatePreview || !Array.isArray(candidates)) return;
@@ -297,7 +307,7 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 			return;
 		}
 		candidatePreview.style.display = 'block';
-		const confLabel = selected.confidence === 'exact' || selected.confidence === 'high' ? 'HIGH' : (selected.confidence === 'medium' ? 'MEDIUM' : 'LOW');
+		const confLabel = displayReviewConfidence(selected);
 		const reasonsList = (selected.reasons || []).slice(0, 2).map(r => {
 			if (r === 'official_executable_match') return gdlText('reason_exe_match', 'Executable match');
 			if (r === 'pe_product_exact') return gdlText('reason_pe_match', 'PE metadata');
@@ -317,7 +327,7 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 				<img class="gdl-auto-candidate-primary-image" alt="" />
 				<div style="min-width:0;">
 					<div class="gdl-candidate-name">${escapeHtml(selected.name)}</div>
-					<div class="gdl-candidate-meta">Steam AppID ${escapeHtml(selected.appid)}${selected.score ? ` · ${Math.round(selected.score)}%` : ''} · <strong>[${escapeHtml(confLabel)}]</strong></div>
+					<div class="gdl-candidate-meta">Steam AppID ${escapeHtml(selected.appid)}${selected.score ? ` · ${Math.round(selected.score)}/100` : ''} · <strong>[${escapeHtml(confLabel)}]</strong></div>
 					${metaSummary ? `<div style="font-size:11px;color:#8f98a0;margin-top:2px;">${escapeHtml(metaSummary)}</div>` : ''}
 				</div>
 			</div>
@@ -359,7 +369,7 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 				autoSelect.value = candidate.appid;
 				input.value = candidate.appid;
 				clearTargetStatus();
-				autoTitle.textContent = gdlText('detected_game', 'Detected: {name}. Review the result and press Link to link it.', { name: candidate.name });
+				updateSuggestionReviewText(candidate);
 				renderCandidatePreview(candidates, candidate.appid);
 				updateButtonStates();
 				achievementBinding?.sync(candidate.appid);
@@ -400,12 +410,12 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 			unlinkBtn.style.cursor = 'pointer';
 			unlinkBtn.style.opacity = '1';
 		} else {
-			saveBtn.disabled = false;
+			saveBtn.disabled = !/^\d+$/.test(val);
 			saveBtn.textContent = gdlText('link_button', 'Link');
 			saveBtn.style.background = '#1a9fff';
 			saveBtn.style.color = '#fff';
-			saveBtn.style.cursor = 'pointer';
-			saveBtn.style.opacity = '1';
+			saveBtn.style.cursor = saveBtn.disabled ? 'default' : 'pointer';
+			saveBtn.style.opacity = saveBtn.disabled ? '.65' : '1';
 
 			if (currentLinked) {
 				unlinkBtn.disabled = false;
@@ -442,6 +452,8 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 		const rawVal = input.value.trim();
 		const urlMatch = rawVal.match(/\/app\/(\d+)/i);
 		const parsedAppId = urlMatch ? urlMatch[1] : rawVal;
+		renderCandidatePreview(currentCandidates, parsedAppId);
+		updateSuggestionReviewText(null);
 		if (urlMatch && input.value !== parsedAppId) {
 			input.value = parsedAppId;
 			updateButtonStates();
@@ -502,7 +514,7 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 				}
 				autoSelect.value = lookupAppId;
 				autoTitle.style.display = 'block';
-				autoTitle.textContent = gdlText('detected_game', 'Detected: {name}. Review the result and press Link to link it.', { name });
+				updateSuggestionReviewText(candidate);
 
 				if (shouldAutoApplyNoLauncher(lookupAppId)) {
 					skipLauncherLabel.style.display = 'flex';
@@ -512,7 +524,7 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 					skipLauncherInput.checked = false;
 				}
 
-				statusEl.textContent = gdlText('detected_game', 'Detected: {name}. Review the result and press Link to link it.', { name });
+				statusEl.textContent = gdlText('manual_appid_ready', 'Manual AppID selected. Review the Steam game before linking.');
 				statusEl.style.color = '#5ba32b';
 				updateButtonStates();
 				achievementBinding?.sync(lookupAppId);
@@ -580,10 +592,15 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 			if (candidatePreview) { candidatePreview.style.display = 'none'; candidatePreview.replaceChildren(); }
 		}
 
-		const applySuggestionCandidates = (viable: ShortcutDetectionCandidate[], final: boolean): void => {
+		const applySuggestionCandidates = (viable: ShortcutDetectionCandidate[], final: boolean, rejectedAppIds: string[] = []): void => {
 			if (!section.isConnected) return;
-			const next = (viable || []).slice(0, 10);
+			const rejected = new Set(rejectedAppIds);
+			const next = (viable || []).filter(candidate => !rejected.has(candidate.appid)).slice(0, 10);
 			const previousSelectedValue = autoSelect.value;
+			const previousCandidate = currentCandidates.find(candidate => candidate.appid === previousSelectedValue);
+			const previousRejected = rejected.has(previousSelectedValue);
+			if (suggestionUserInteracted && previousCandidate && !previousRejected && !next.some(candidate => candidate.appid === previousSelectedValue)) next.push(previousCandidate);
+			if (previousRejected && !targetInputUserEdited) { input.value = ''; autoSelect.value = ''; renderCandidatePreview([], ''); updateButtonStates(); }
 			currentCandidates = next;
 			if (!next.length) {
 				if (!initialAppId && !targetInputUserEdited) {
@@ -606,7 +623,9 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 
 			autoSelect.disabled = false;
 			const options: HTMLOptionElement[] = [];
-			const preferredAppId = currentLinked || rememberedAppId;
+			const placeholder = doc.createElement('option'); placeholder.value = '';
+			placeholder.textContent = gdlText('detection_uncertain', 'Choose the correct result or enter the AppID manually.'); options.push(placeholder);
+			const preferredAppId = !rejected.has(currentLinked || rememberedAppId) ? currentLinked || rememberedAppId : '';
 			if (preferredAppId && !next.some(c => c.appid === preferredAppId)) {
 				const rememberedOpt = doc.createElement('option');
 				rememberedOpt.value = preferredAppId;
@@ -618,8 +637,8 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 			for (const candidate of next) {
 				const option = doc.createElement('option');
 				option.value = candidate.appid;
-				const scoreText = candidate.score ? ` (${Math.round(candidate.score)}%)` : '';
-				const confBadge = candidate.confidence === 'exact' || candidate.confidence === 'high' ? ' [HIGH]' : (candidate.confidence === 'medium' ? ' [MEDIUM]' : ' [LOW]');
+				const scoreText = candidate.score ? ` (${Math.round(candidate.score)}/100)` : '';
+				const confBadge = ` [${displayReviewConfidence(candidate)}]`;
 				const isRemembered = candidate.appid === rememberedAppId ? ' • ' + gdlText('remembered_tag', 'Previously linked') : '';
 				const isCollision = candidate.identity_collision ? ' ⚠️' : '';
 				option.textContent = `${candidate.name} — AppID ${candidate.appid}${scoreText}${confBadge}${isRemembered}${isCollision}`;
@@ -629,35 +648,28 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 			autoTitle.style.display = 'none';
 			autoTitle.textContent = '';
 
-			let defaultSelected = next[0].appid;
-			const previousSelectionStillAvailable = Boolean(previousSelectedValue && (
+			let defaultSelected = next.find(reliableReviewCandidate)?.appid || '';
+			const previousSelectionStillAvailable = Boolean(previousSelectedValue && !previousRejected && (
 				next.some(c => c.appid === previousSelectedValue) || previousSelectedValue === currentLinked || previousSelectedValue === rememberedAppId
 			));
 			if (suggestionUserInteracted && previousSelectionStillAvailable) {
 				defaultSelected = previousSelectedValue;
-			} else if (currentLinked) {
+			} else if (currentLinked && !rejected.has(currentLinked)) {
 				defaultSelected = currentLinked;
-			} else if (rememberedAppId) {
-				const remCand = next.find(c => c.appid === rememberedAppId);
-				if (remCand) {
-					const topHasProof = next[0].executable_match || (next[0].reasons || []).includes('official_executable_match');
-					const remHasProof = remCand.executable_match || (remCand.reasons || []).includes('official_executable_match');
-					if (topHasProof && !remHasProof) defaultSelected = next[0].appid;
-					else if (next[0].score - remCand.score >= 15 || remCand.score < 70) defaultSelected = next[0].appid;
-					else defaultSelected = remCand.appid;
-				}
 			}
+			if (suggestionUserInteracted && previousRejected) defaultSelected = '';
 
 			autoSelect.value = defaultSelected;
-			if (!targetInputUserEdited || suggestionUserInteracted || currentLinked) {
+			if (!targetInputUserEdited) {
 				input.value = defaultSelected;
-				targetInputUserEdited = false;
 			}
-			const selectedCandidate = candidateForPreview(next, autoSelect.value) || next[0];
-			renderCandidatePreview(next, selectedCandidate.appid);
+			if (targetInputUserEdited) { updateSuggestionReviewText(null); updateButtonStates(); return; }
+			const selectedCandidate = candidateForPreview(next, autoSelect.value);
+			updateSuggestionReviewText(selectedCandidate);
+			renderCandidatePreview(next, autoSelect.value);
 			updateButtonStates();
-			achievementBinding?.sync(selectedCandidate.appid);
-			if (shouldAutoApplyNoLauncher(selectedCandidate.appid)) {
+			achievementBinding?.sync(selectedCandidate?.appid || '');
+			if (shouldAutoApplyNoLauncher(selectedCandidate?.appid || '')) {
 				skipLauncherLabel.style.display = 'flex';
 				skipLauncherInput.checked = true;
 			} else {
@@ -667,21 +679,19 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 		};
 
 		autoSelect.addEventListener('change', () => {
-			if (!autoSelect.value) return;
 			suggestionUserInteracted = true;
 			targetInputUserEdited = false;
 			input.value = autoSelect.value;
 			clearTargetStatus();
 			const selected = candidateForPreview(currentCandidates, autoSelect.value);
-			if (selected) {
-				renderCandidatePreview(currentCandidates, selected.appid);
-				if (shouldAutoApplyNoLauncher(selected.appid)) {
-					skipLauncherLabel.style.display = 'flex';
-					skipLauncherInput.checked = true;
-				} else {
-					skipLauncherLabel.style.display = 'none';
-					skipLauncherInput.checked = false;
-				}
+			updateSuggestionReviewText(selected);
+			renderCandidatePreview(currentCandidates, autoSelect.value);
+			if (shouldAutoApplyNoLauncher(selected?.appid || '')) {
+				skipLauncherLabel.style.display = 'flex';
+				skipLauncherInput.checked = true;
+			} else {
+				skipLauncherLabel.style.display = 'none';
+				skipLauncherInput.checked = false;
 			}
 			updateButtonStates();
 			achievementBinding?.sync(autoSelect.value);
@@ -702,8 +712,8 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 
 			const remoteDetection = await enrichShortcutCandidatesRemote(detectionContext, localCandidates);
 			if (!section.isConnected) return;
-			const merged = mergeCandidateLists(localCandidates, remoteDetection?.candidates || []);
-			applySuggestionCandidates(merged, true);
+			const merged = mergeCandidateLists(localCandidates, remoteDetection?.candidates || [], remoteDetection?.rejected_appids);
+			applySuggestionCandidates(merged, true, remoteDetection?.rejected_appids);
 		})().catch(e => {
 			backendLog('Properties automatic detection error: ' + e);
 			applySuggestionCandidates(currentCandidates, true);
@@ -824,7 +834,7 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 						statusEl.style.color = '#5ba32b';
 					}
 				} else {
-					const retryable = !['invalid_appid', 'refusing_to_modify_native_steam_app'].includes(String(result.error || ''));
+					const retryable = retryableLinkError(result.error);
 					const committedId = result.shortcutAppId || shortcutId;
 					const committedMapping = findMappingForShortcut(committedId, gameTitle) || '';
 					currentLinked = committedMapping;
@@ -847,6 +857,7 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 			} catch (error) {
 				backendLog('Direct properties link error: ' + String(error));
 				currentLinked = findMappingForShortcut(shortcutId, gameTitle) || '';
+				if (!retryableLinkError(error)) { cancelPendingLinkJobs(shortcutId, gameTitle); statusEl.textContent = gdlText('save_failed', 'Could not complete the link.'); return; }
 				// Activate the staged crash-recovery intent immediately after an
 				// unexpected foreground failure instead of waiting for a full restart.
 				enqueueLinkJob({

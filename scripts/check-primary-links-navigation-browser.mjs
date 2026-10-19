@@ -7,6 +7,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import ts from 'typescript';
+import vm from 'node:vm';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const edge = process.env.CLOUD_BROWSER_EXECUTABLE
@@ -25,6 +26,7 @@ const sources = Object.fromEntries([
   ['library-details', 'frontend/steam/library-details.ts'],
   ['native-route', 'frontend/features/library/native-route.ts'],
   ['primary-links', 'frontend/features/library/primary-links.ts'],
+  ['primary-links-layout', 'frontend/features/library/primary-links-layout.ts'],
   ['early-primary-links', 'frontend/features/library/early-primary-links.ts'],
   ['early-playbar', 'frontend/features/library/early-playbar.ts'],
   ['disposables', 'frontend/core/disposables.ts'],
@@ -38,6 +40,31 @@ const sources = Object.fromEntries([
     ? process.env.PRIMARY_LINKS_SOURCE : path.join(root, filename), 'utf8'),
   { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } },
 ).outputText]));
+const steamUI = process.env.STEAM_UI_PATH || 'C:/Program Files (x86)/Steam/steamui';
+const nativeChunks = { webpackChunksteamui: [] };
+vm.runInNewContext(fs.readFileSync(path.join(steamUI, 'sp.js'), 'utf8'), { self: nativeChunks });
+const nativeFactories = Object.assign({}, ...nativeChunks.webpackChunksteamui.map(chunk => chunk[1]));
+const nativeLinksFactory = Object.values(nativeFactories).find(factory => String(factory).includes('CalculateLinkPositions')
+  && String(factory).includes('rgChildPositions') && String(factory).includes('LinksSectionBody'));
+assert(nativeLinksFactory, 'Installed Steam desktop links calculation is required');
+const nativeSource = ts.createSourceFile('native-links.js', `const factory=${nativeLinksFactory};`, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+let nativeCalculation;
+function findCalculation(node) {
+  if (ts.isMethodDeclaration(node) && node.name?.getText(nativeSource) === 'CalculateLinkPositions') nativeCalculation = node.getText(nativeSource);
+  ts.forEachChild(node, findCalculation);
+}
+findCalculation(nativeSource);
+assert(nativeCalculation, 'Installed CalculateLinkPositions method is inspectable');
+const nativeLinkClasses = {};
+for (const [name, keys] of [['links', ['LinksSectionBody:', 'LinkInner:', 'MenuButton:']],
+  ['section', ['AppDetailsSection:', 'AppDetailsSectionContainer:', 'Body:', 'RightColumnSection:']]]) {
+  const factory = Object.values(nativeFactories).find(factory => /^\w+=>\{\w+\.exports=\{/.test(String(factory))
+    && keys.every(key => String(factory).includes(key)));
+  assert(factory, `Installed native ${name} classes are required`);
+  const module = { exports: {} }; factory(module); nativeLinkClasses[name] = module.exports;
+}
+sources['native-links-oracle'] = JSON.stringify({ method: nativeCalculation, ...nativeLinkClasses,
+  cssAlias: nativeCalculation.match(/parseInt\((\w+)\(\).BreakTall\)/)?.[1] });
 
 async function browserChecks(sources) {
   const results = [];
@@ -313,7 +340,7 @@ async function browserChecks(sources) {
       'The initial collapsed info panel is immediately before links, with its exact game and shortcut identity');
     assertNativeUnchanged(nativeHeader, 'External cold links do not modify any native header or sidebar nodes');
 
-    await frame(); await frame(); await wait(0);
+    await document.fonts.ready; await frame(); await frame(); await wait(0);
     const stableHtml = cold.outerHTML;
     const initialAnchors = Array.from(cold.querySelectorAll('.gdl-primary-link'));
     stableAudit = new MutationObserver(() => {});
@@ -478,7 +505,151 @@ async function browserChecks(sources) {
     summary.click(); links.disposePrimaryLinksBar(document);
     check(!popup.matches(':popover-open') && !popup.isConnected, 'Route teardown retires an open top-layer menu');
     sync();
+    const oracle = JSON.parse(sources['native-links-oracle']);
+    const nativeCalculate = new Function(oracle.cssAlias, `return ({${oracle.method}}).CalculateLinkPositions`)(() => ({ BreakTall: '1200px' }));
+    const nativeMeasure = document.createElement('div');
+    nativeMeasure.style.cssText = 'position:absolute;left:0;top:0;visibility:hidden;display:block';
+    nativeMeasure.className = nativeCss.LinksSection;
+    fixture.appendChild(nativeMeasure);
+    const oracleLinks = document.createElement('div'); oracleLinks.className = nativeCss.Links;
+    nativeMeasure.appendChild(oracleLinks);
+    const oracleTexts = [...bar().querySelectorAll('.gdl-primary-link')].map(link => link.textContent);
+    for (const label of oracleTexts) {
+      const item = document.createElement('div'); item.className = nativeCss.LinkInner;
+      item.innerHTML = `<div class="${nativeCss.Anchor}"><div class="${nativeCss.Link}"><span class="${nativeCss.Text}">${label}</span></div></div>`;
+      oracleLinks.appendChild(item);
+    }
+    for (const width of [460, 800, 1360]) {
+      fixture.style.width = `${width}px`;
+      let expectedVisible, nativePositions;
+      for (const zoom of [1, .75, 1.25, 1.5, 2]) {
+        fixture.style.zoom = String(zoom);
+        links.disposePrimaryLinksBar(document); const resized = sync();
+        const visible = [...resized.querySelectorAll('.gdl-primary-link')].filter(painted);
+        const nativeState = { m_elInnerLinks: oracleLinks, state: {}, setState(value) { this.state = value; } };
+        nativeCalculate.call(nativeState);
+        const positions = JSON.stringify(nativeState.state.rgChildPositions);
+        if (zoom === 1) { expectedVisible = visible.length; nativePositions = positions; }
+        check(positions === nativePositions && visible.length === expectedVisible,
+          `Native logical sizing and linked overflow retain identical visibility at ${width}px and zoom ${zoom}`);
+        const bounds = resized.getBoundingClientRect(), more = resized.querySelector('.gdl-primary-more');
+        check(visible.every(link => link.getBoundingClientRect().right <= bounds.right + 1)
+          && (!painted(more) || more.getBoundingClientRect().right <= bounds.right + 1),
+          `Every linked header destination fits its ${width}px container at zoom ${zoom}`);
+        if (painted(more)) {
+          more.querySelector('summary').click();
+          const popup = more.querySelector('.gdl-primary-more-menu'), rect = popup.getBoundingClientRect();
+          check(popup.matches(':popover-open') && rect.left >= -1 && rect.right <= innerWidth + 1
+            && rect.top >= -1 && rect.bottom <= innerHeight + 1,
+            `Overflow remains inside the viewport at ${width}px and zoom ${zoom}`);
+          more.querySelector('summary').click();
+        }
+      }
+    }
+    nativeMeasure.remove(); fixture.style.zoom = ''; fixture.style.width = '460px';
+    links.disposePrimaryLinksBar(document); const lateFontBar = sync();
+    const beforeFontCount = [...lateFontBar.querySelectorAll('.gdl-primary-link')].filter(painted).length;
+    for (const link of lateFontBar.querySelectorAll('.gdl-primary-link')) link.style.setProperty('font-size', '32px', 'important');
+    document.fonts.dispatchEvent(new Event('loadingdone')); await frame(); await frame();
+    check([...lateFontBar.querySelectorAll('.gdl-primary-link')].filter(painted).length < beforeFontCount,
+      'Completing a changed font recalculates overflow when the logical bar width is unchanged');
+    assertResponsive(lateFontBar, 'Font completion leaves every destination either fitted or in overflow');
+    links.disposePrimaryLinksBar(document); sync();
     await auditScrollLayout();
+    window.__gdlPrimaryLinksDragReplay = async () => {
+      target(ids.a); document.body.style.zoom = ''; fixture.style.width = '600px';
+      const node = sync(); await frame(); await frame();
+      const nativeMarkup = header.outerHTML;
+      let styleMutations = 0, attributeMutations = 0;
+      const collect = records => { for (const record of records) {
+        attributeMutations++; if (record.attributeName === 'style') styleMutations++;
+      } };
+      const observer = new MutationObserver(collect);
+      observer.observe(node, { subtree: true, attributes: true });
+      try {
+        for (let width = 600; width <= 900; width++) {
+          fixture.style.width = `${width}px`; sync(); await frame();
+        }
+        await frame(); collect(observer.takeRecords());
+        check(bar() === node && header.outerHTML === nativeMarkup,
+          'A 301-frame divider drag retains the owned host and leaves the native header byte-identical');
+        return { frames: 301, styleMutations, attributeMutations };
+      } finally { observer.disconnect(); }
+    };
+    window.__gdlPrimaryLinksTallMatrix = (dense = false) => {
+      const beforeChecks = results.length, nativeMarkup = header.outerHTML;
+      target(ids.a);
+      let tallRows = 0, popups = 0;
+      const zooms = dense ? [1, 1.25, 2] : [.75, 1, 1.25, 1.5, 2];
+      const widths = dense ? Array.from({ length: 301 }, (_, index) => 600 + index) : [220, 460, 464, 800, 1360];
+      for (const zoom of zooms) for (const width of widths) {
+        document.body.style.zoom = String(zoom); fixture.style.width = `${width}px`;
+        const node = sync(), children = [...node.querySelectorAll('.gdl-primary-link')];
+        // Independent native DOM: classes and calculation come from installed
+        // Steam. Only labels are shared; no plugin styles/dimensions are copied.
+        const c = oracle.links, s = oracle.section, nativeRoot = document.createElement('div');
+        nativeRoot.className = `${s.AppDetailsSection} ${c.LinksSection}`;
+        nativeRoot.innerHTML = `<div class="${s.AppDetailsSectionContainer} ${s.RightColumnSection}"><div class="${s.Body} ${c.LinksSectionBody}"><div class="${c.Links}">${children.map(child => `<div class="${c.LinkInner}"><div class="${c.Anchor}"><div class="${c.Link}"><span class="${c.Text}">${child.textContent}</span></div></div></div>`).join('')}</div><div class="${c.MenuButton}"><svg viewBox="0 0 256 256"><circle cx="126" cy="134" r="20.6"/><circle cx="189.4" cy="134" r="20.6"/><circle cx="62.6" cy="134" r="20.6"/></svg></div></div></div>`;
+        fixture.appendChild(nativeRoot);
+        const nativeHost = nativeRoot.querySelector(`.${c.Links}`), nativeMore = nativeRoot.querySelector(`.${c.MenuButton}`);
+        const nativeSlots = [...nativeHost.children], slots = [...node.querySelectorAll('.gdl-primary-slot')];
+        const calculate = () => {
+          const state = { m_elInnerLinks: nativeHost, state: {}, setState(value) { this.state = value; } };
+          nativeCalculate.call(state); const layout = state.state;
+          nativeHost.style.height = `${layout.nRowHeight * Math.min(layout.nRows, layout.nMaxRows)}px`;
+          nativeSlots.forEach((slot, index) => { const position = layout.rgChildPositions[index];
+            slot.style.left = position.x >= 0 ? `${position.x}px` : ''; slot.style.top = position.x >= 0 ? `${position.y}px` : '';
+            slot.style.opacity = position.x < 0 ? '0' : ''; slot.style.pointerEvents = position.x < 0 ? 'none' : ''; slot.style.zIndex = position.x < 0 ? '-100' : '';
+          });
+          return layout;
+        };
+        nativeMore.style.display = 'none'; let nativeLayout = calculate();
+        if (nativeLayout.rgChildPositions.some(position => position.x < 0)) {
+          nativeMore.style.display = 'flex'; for (let settle = 0; settle < 3; settle++) nativeLayout = calculate();
+        }
+        const nativePositions = nativeLayout.rgChildPositions;
+        const actual = slots.map(slot => slot.style.opacity === '0' ? { x: -1, y: -1 }
+          : { x: parseFloat(slot.style.left), y: parseFloat(slot.style.top) });
+        check(JSON.stringify(actual) === JSON.stringify(nativePositions),
+          `Installed Steam column positions match at ${innerHeight}px height, pane ${width}px, body zoom ${zoom}, DPR ${devicePixelRatio}: ${JSON.stringify(actual)} / ${JSON.stringify(nativePositions)}`);
+        const rowHeight = nativeLayout.nRowHeight;
+        const rows = Math.max(1, ...nativePositions.filter(position => position.x >= 0).map(position => 1 + position.y / rowHeight));
+        check(Math.abs((node.getBoundingClientRect().height - nativeRoot.getBoundingClientRect().height) / zoom) < .1
+          && rows <= (innerHeight < 1200 ? 1 : 3),
+          `Native row limit and growing links height agree at ${innerHeight}px/${width}px/${zoom}/${devicePixelRatio}: ${JSON.stringify({ own: node.getBoundingClientRect().height, native: nativeRoot.getBoundingClientRect().height, rowHeight, ownHost: node.querySelector('.gdl-primary-links').style.height })}`);
+        if (rows > 1) tallRows++;
+        const relative = (element, root) => { const box = element.getBoundingClientRect(), host = root.getBoundingClientRect();
+          return [(box.left - host.left) / zoom, (box.top - host.top) / zoom, box.width / zoom, box.height / zoom]; };
+        check(slots.every((slot, index) => relative(slot, node).every((value, axis) => Math.abs(value - relative(nativeSlots[index], nativeRoot)[axis]) < .15))
+          && relative(node.querySelector('.gdl-primary-links'), node).every((value, axis) => Math.abs(value - relative(nativeHost, nativeRoot)[axis]) < .15),
+          `Independent native slot/body rectangles agree at ${innerHeight}px/${width}px/${zoom}/${devicePixelRatio}: ${JSON.stringify({ own: relative(node.querySelector('.gdl-primary-links'), node), native: relative(nativeHost, nativeRoot), slots: slots.map((slot,index)=>[relative(slot,node),relative(nativeSlots[index],nativeRoot)]) })}`);
+        const bounds = node.getBoundingClientRect();
+        check(children.filter(painted).every(child => { const box = child.getBoundingClientRect();
+          return box.left >= bounds.left - 1 && box.right <= bounds.right + 1 && box.top >= bounds.top - 1 && box.bottom <= bounds.bottom + 1; }),
+          `Every native row stays inside its logical links host at ${innerHeight}px/${width}px/${zoom}/${devicePixelRatio}`);
+        const more = node.querySelector('.gdl-primary-more'), overflow = [...node.querySelectorAll('.gdl-primary-overflow-link')];
+        check(overflow.filter(child => getComputedStyle(child).display !== 'none').length === actual.filter(position => position.x < 0).length,
+          'Only destinations beyond the final permitted native row appear in overflow');
+        if (painted(more)) {
+          check(relative(more, node).every((value, axis) => Math.abs(value - relative(nativeMore, nativeRoot)[axis]) < .15),
+            'The owned overflow trigger inherits the independent native width, padding and row alignment');
+          const trigger = more.querySelector('summary'), popup = more.querySelector('.gdl-primary-more-menu');
+          trigger.click(); const box = popup.getBoundingClientRect(); popups++;
+          check(popup.matches(':popover-open') && box.left >= -1 && box.right <= innerWidth + 1 && box.top >= -1 && box.bottom <= innerHeight + 1,
+            'Overflow remains viewport bounded after exhausting the native rows');
+          document.dispatchEvent(new Event('scroll'));
+          check(!popup.matches(':popover-open'), 'Scrolling dismisses the tall-window overflow');
+          trigger.click(); target(ids.native); sync();
+          check(!bar() && !popup.matches(':popover-open') && !popup.isConnected, 'Native-route cleanup retires tall rows and an open popup');
+          target(ids.a); sync();
+        }
+        nativeRoot.remove();
+      }
+      document.body.style.zoom = ''; fixture.style.width = '460px'; sync();
+      check(header.outerHTML === nativeMarkup && sidebar.outerHTML === sidebarInitial, 'Height/DPR/zoom resizing never mutates the native header or sidebar');
+      check(innerHeight < 1200 ? tallRows === 0 : tallRows > 0, 'The actual browser viewport crosses the native 1200 logical-pixel boundary');
+      return { checks: results.length - beforeChecks, height: innerHeight, dpr: devicePixelRatio, tallRows, popups };
+    };
     const output = document.createElement('pre'); output.id = 'primary-links-navigation-result';
     output.textContent = JSON.stringify({ ok: true, checks: results.length, results, backendCalls, synchronousReads, scrollMeasurements });
     document.body.appendChild(output);
@@ -569,6 +740,37 @@ try {
   });
   assert.ok(!evaluated.exceptionDetails, `Browser evaluation failed: ${JSON.stringify(evaluated.exceptionDetails)}`);
   report = evaluated.result.value;
+  if (report.ok) {
+    await call('Performance.enable');
+    const beforeDrag = await call('Performance.getMetrics');
+    const replay = await call('Runtime.evaluate', { expression: 'window.__gdlPrimaryLinksDragReplay()', awaitPromise: true, returnByValue: true });
+    assert(!replay.exceptionDetails, `Divider replay failed: ${JSON.stringify(replay.exceptionDetails)}`);
+    const afterDrag = await call('Performance.getMetrics');
+    const metricDelta = name => afterDrag.metrics.find(item => item.name === name).value - beforeDrag.metrics.find(item => item.name === name).value;
+    report.dividerReplay = { ...replay.result.value, layoutCount: metricDelta('LayoutCount'), recalcStyleCount: metricDelta('RecalcStyleCount') };
+    assert(report.dividerReplay.styleMutations < report.dividerReplay.frames,
+      `A divider drag must only write changed link geometry, rather than every slot per pixel: ${JSON.stringify(report.dividerReplay)}`);
+    assert(report.dividerReplay.layoutCount < report.dividerReplay.frames * 1.3
+      && report.dividerReplay.recalcStyleCount < report.dividerReplay.frames * 1.3,
+    `A divider drag must not force multiple layouts/styles per frame by hiding and showing More: ${JSON.stringify(report.dividerReplay)}`);
+    report.checks += 3;
+    console.log(`Divider replay: ${JSON.stringify(report.dividerReplay)}`);
+    report.tallMatrix = [];
+    for (const height of [1199, 1200, 1201]) for (const deviceScaleFactor of [1, 1.25, 2]) {
+      await call('Emulation.setDeviceMetricsOverride', { width: 1600, height, deviceScaleFactor, mobile: false });
+      const matrix = await call('Runtime.evaluate', { expression: 'window.__gdlPrimaryLinksTallMatrix()', returnByValue: true });
+      assert(!matrix.exceptionDetails, `Tall-window matrix failed: ${JSON.stringify(matrix.exceptionDetails)}`);
+      assert.equal(matrix.result.value.height, height); assert.equal(matrix.result.value.dpr, deviceScaleFactor);
+      report.tallMatrix.push(matrix.result.value); report.checks += matrix.result.value.checks;
+    }
+    report.dragGeometry = [];
+    for (const height of [1199, 1200]) {
+      await call('Emulation.setDeviceMetricsOverride', { width: 1600, height, deviceScaleFactor: 1.25, mobile: false });
+      const matrix = await call('Runtime.evaluate', { expression: 'window.__gdlPrimaryLinksTallMatrix(true)', returnByValue: true });
+      assert(!matrix.exceptionDetails, `Pixel-by-pixel native divider geometry failed: ${JSON.stringify(matrix.exceptionDetails)}`);
+      report.dragGeometry.push(matrix.result.value); report.checks += matrix.result.value.checks;
+    }
+  }
   fs.writeFileSync(path.join(scratch, 'report.json'), JSON.stringify(report, null, 2));
   const capture = await call('Page.captureScreenshot', { format: 'png' });
   fs.writeFileSync(screenshot, Buffer.from(capture.data, 'base64'));

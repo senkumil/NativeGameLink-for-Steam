@@ -446,8 +446,8 @@ function createCandidate(overrides = {}) {
 	const detectionSource = readFileSync(new URL('../frontend/features/shortcuts/detection.ts', import.meta.url), 'utf8');
 	const match = detectionSource.match(/export const DETECTION_MODEL_VERSION = '([^']+)';/);
 	const modelVersion = match ? match[1] : null;
-	if (modelVersion !== 'v11') {
-		throw new Error(`D20 Failed: Expected DETECTION_MODEL_VERSION to be 'v11', got '${modelVersion}'.`);
+	if (modelVersion !== 'v12') {
+		throw new Error(`D20 Failed: Expected DETECTION_MODEL_VERSION to be 'v12', got '${modelVersion}'.`);
 	}
 	const factoryResetSource = readFileSync(new URL('../frontend/features/shortcuts/factory-reset.ts', import.meta.url), 'utf8');
 	if (!factoryResetSource.includes('clearShortcutDetectionCache()')) {
@@ -457,7 +457,7 @@ function createCandidate(overrides = {}) {
 		|| !detectionSource.includes('cacheKey = [DETECTION_MODEL_VERSION,')) {
 		throw new Error('D20 Failed: Detection cache does not incorporate DETECTION_MODEL_VERSION or lack clear function.');
 	}
-	console.log('✓ D20 Passed: Factory reset invalidates shortcut detection cache with model version v11.');
+	console.log('✓ D20 Passed: Factory reset invalidates shortcut detection cache with model version v12.');
 }
 
 // --------------------------------------------------------------------------

@@ -369,8 +369,11 @@ if (historicalSidebarSource.includes('developers?.join(')
 }
 if (!communityStylesSource.includes('.gdl-community-grid { display:grid;position:relative;')
 	|| !communityStylesSource.includes('grid-auto-flow:row dense;gap:32px 24px;align-items:stretch;')
-	|| !communityViewSource.includes("setStyle(card, '--gdl-community-card-rows'")
-	|| !communityViewSource.includes('observer?.observe(card)')
+	|| !communityViewSource.includes("'--gdl-community-card-rows', String(spans[index].rows)")
+	|| !communityViewSource.includes('placementKey !== nextPlacementKey')
+	|| !communityViewSource.includes('observer?.observe(grid)')
+	|| !communityViewSource.includes("grid.addEventListener('load', queue, true)")
+	|| !communityViewSource.includes("grid.addEventListener('error', queue, true)")
 	|| !communityViewSource.includes('orderCommunityItems(sortByLanguage(filteredItems))')
 	|| !communityStylesSource.includes('-webkit-line-clamp:6;')
 	|| !communityStylesSource.includes('#gdl-community-inner { width:100%;min-width:0;max-width:100%;overflow:hidden')) {
@@ -385,10 +388,12 @@ if (communityViewSource.includes('buildNativeSidebarSection')
 	fail(communityViewFile, 'Community Content must use its own main-column section immediately after Activity, never a cloned sidebar shell');
 }
 if (!communityViewSource.includes('setupCommunityAdaptiveWidth(doc, node, activityWrapper, _layout)')
-	|| !communityViewSource.includes('activityRect.bottom + 34 >= sidebarRect.bottom - 1')
-	|| !communityViewSource.includes("root.classList.toggle('gdl-community-wide', canUseFreedSidebarArea)")
+	|| !communityViewSource.includes('Math.max(34, (sidebarRect.bottom - activityRect.bottom) / scale)')
+	|| !communityViewSource.includes('contentRect.width / contentWidth')
+	|| !communityViewSource.includes("root.classList.add('gdl-community-wide')")
+	|| !communityStylesSource.includes('margin-top:var(--gdl-community-top-gap,34px)')
 	|| !communityStylesSource.includes('#gdl-community-content.gdl-community-wide')) {
-	fail(communityViewFile, 'Community must expand into the freed sidebar area only after Activity has passed the live sidebar bottom edge');
+	fail(communityViewFile, 'Community must retain the full detail width below Activity and the live sidebar, including controller connection and UI zoom');
 }
 if (!rendererSource.includes("mainContentStack.id = 'gdl-main-content-stack'")
 	|| !rendererSource.includes('mainContentStack.appendChild(activity)')

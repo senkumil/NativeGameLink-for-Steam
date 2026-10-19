@@ -250,6 +250,17 @@ ${steamRareAchievementStyles()}
 			margin-top: 2px !important;
 			visibility: visible !important;
 		}
+		/* Desktop metrics from Steam's Featured/TextSection rules. Keep these
+		   scoped away from the controller presentation. */
+		.gdl-la-summary:not(:where(.BasicUI *)) .gdl-la-feature { gap: 9px !important; margin-bottom: 8px !important; }
+		.gdl-la-summary:not(:where(.BasicUI *)) .gdl-la-feature-copy { padding-top: 0 !important; }
+		.gdl-la-summary:not(:where(.BasicUI *)) .gdl-la-feature-title {
+			font-size: 14px !important; font-weight: 300 !important; color: #ffffffe0 !important;
+		}
+		.gdl-la-summary:not(:where(.BasicUI *)) .gdl-la-feature-desc {
+			font-size: 13px !important; font-weight: 300 !important; line-height: 16px !important;
+			margin-top: 0 !important; color: #ffffff80 !important;
+		}
 		.gdl-la-feature-stat,
 		.BasicUI .gdl-la-feature-stat {
 			display: block !important;

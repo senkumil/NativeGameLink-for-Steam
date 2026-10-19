@@ -86,7 +86,7 @@ const input = (id, extra = {}) => ({ shortcutAppId: id, title: 'Same Game', stea
   assert.equal(Object.hasOwn(state.inputs[0], key), false, `Legacy queue payload must not forward ${key}`);
  }
 }
-for (const error of ['invalid_appid', 'Error: refusing_to_modify_native_steam_app', 'shortcut_identity_ambiguous']) {
+for (const error of ['invalid_appid', 'Error: refusing_to_modify_native_steam_app', 'shortcut_identity_ambiguous', 'shortcut_identity_changed']) {
  const { api, state } = queueHarness();
  state.result = async () => ({ ok: false, error });
  const job = api.enqueueLinkJob(input(3000000001));
@@ -122,6 +122,8 @@ for (const error of ['invalid_appid', 'Error: refusing_to_modify_native_steam_ap
  records.push({ id: 3000000002, title: 'Same Game', app: { exe: 'b.exe' } });
  await assert.rejects(LinkOrchestrator.resolveIdentity(tx(), options, 'Same Game'), /shortcut_identity_ambiguous/);
  assert.equal(await LinkOrchestrator.resolveIdentity(tx(), { ...options, shortcutAppId: 3000000002 }, 'Same Game'), 3000000002);
+ await assert.rejects(LinkOrchestrator.resolveIdentity(tx(), { ...options, shortcutAppId: 3000000002, shortcutExecutable: 'a.exe' }, 'Same Game'),
+  /shortcut_identity_changed/, 'A shortcut whose executable changed after review cannot receive another game mapping');
  assert.equal(await LinkOrchestrator.resolveIdentity(tx(), { ...options, shortcutExecutable: 'A.EXE' }, 'Renamed'), 3000000001);
  await assert.rejects(LinkOrchestrator.resolveIdentity(tx(), { ...options, shortcutExecutable: 'missing.exe' }, 'Same Game'), /shortcut_not_ready/);
  records.length = 0;
@@ -148,7 +150,7 @@ function identityHarness() {
  const selectedExe = 'C:/Games/SparkingZERO/SparkingZERO.exe';
  const selectedStartDir = 'C:/Games/SparkingZERO';
  const replacementExe = 'C:/Games/SparkingZERO/Binaries/Win64/SparkingZERO-Win64-Shipping.exe';
- const state = { writes: [], neutralized: [], renames: 0, mapping: null };
+ const state = { writes: [], neutralized: [], renames: 0, mapping: null, edition: null };
  let record = { id: originalId, title: 'Original shortcut', app: {
   display_name: 'Original shortcut', strShortcutExe: selectedExe, strShortcutStartDir: selectedStartDir,
  } };
@@ -164,7 +166,7 @@ function identityHarness() {
   shortcutExecutableIdentity: value => String(value || '').toLowerCase(),
   getGameData: async () => ({ name: 'DRAGON BALL: Sparking! ZERO', steam_appid: 1790600 }),
   getCanonicalGameData: async () => ({ name: 'DRAGON BALL: Sparking! ZERO', steam_appid: 1790600 }),
-  getShortcutEdition: () => null,
+  getShortcutEdition: () => state.edition,
   resolveShortcutIdAfterRename: async (_name, previousId, _ids, executable) => {
    assert.equal(previousId, originalId);
    assert.equal(executable, selectedExe, 'Rename recovery must use the selected launcher executable');
@@ -210,6 +212,16 @@ for (const entry of ['synchronizeShortcutOfficialIdentity', 'linkShortcutToSteam
  assert.equal(state.mapping.set[`shortcut:${renamedId}`], options.steamAppId, `${entry} commits the regenerated identity`);
  assert.deepEqual(state.neutralized, [{ exe_path: selectedExe, start_dir: selectedStartDir }],
   `${entry} filesystem maintenance uses the preserved selected executable`);
+}
+{
+ const { state, LinkOrchestrator, options } = identityHarness();
+ const tx = { targetSteamAppId: options.steamAppId };
+ state.edition = { appId: '1091500', name: 'Cyberpunk 2077: Ultimate Edition' };
+ assert.equal((await LinkOrchestrator.validateCandidate(tx, options)).canonicalName, 'DRAGON BALL: Sparking! ZERO',
+  'A stored edition for a different Steam AppID cannot rename a newly linked game');
+ state.edition = { appId: options.steamAppId, name: 'Explicit matching edition' };
+ assert.equal((await LinkOrchestrator.validateCandidate(tx, options)).canonicalName, state.edition.name,
+  'The explicitly selected edition still applies to the matching Steam AppID');
 }
 {
  const { LinkOrchestrator } = identityHarness();

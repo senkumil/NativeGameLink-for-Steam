@@ -2,7 +2,7 @@ import { injectLibraryStyle } from './inject';
 
 export function ensureCommunityStyles(doc: Document): void {
 	injectLibraryStyle(doc, 'gdl-community-styles', `
-		#gdl-community-content { display:block;min-width:0;box-sizing:border-box;margin-top:34px;overflow:visible; }
+		#gdl-community-content { display:block;min-width:0;box-sizing:border-box;margin-top:var(--gdl-community-top-gap,34px);overflow:visible; }
 		#gdl-community-content.gdl-community-wide { width:var(--gdl-community-wide-width) !important;max-width:none !important;align-self:flex-start !important; }
 		#gdl-community-content>*,#gdl-community-content [role="region"] { min-width:0;max-width:100%;box-sizing:border-box; }
 		#gdl-community-content .gdl-community-native-header { min-width:0;margin:0 0 8px;padding:12px 10px 14px;box-sizing:border-box;display:flex;align-items:center;color:#cdf1ff;font-family:"Motiva Sans",Helvetica,sans-serif;font-size:14px;font-weight:400;line-height:20px;letter-spacing:1px;text-transform:uppercase;border-radius:3px;background:radial-gradient(circle at 0% 20%,rgba(94,137,194,.15) 0%,rgba(34,34,39,0) 20%),linear-gradient(to bottom,rgba(67,133,247,.95) 0%,rgba(85,98,121,.55) 2px,rgba(85,98,121,.15) 50%,rgba(34,34,39,0) 100%); }

@@ -247,8 +247,8 @@ function browserChecks(sources) {
     const fixture = document.getElementById('fixture');
     fixture.classList.add('NarrowRightPanel');
     cloud.ensureCloudStatus(document);
-    check(native.isRenderedElement(document, label) && native.isRenderedElement(document, detail),
-      'Cloud copy remains visible when Steam marks the right pane narrow');
+    check(label.parentElement.style.display !== 'flex' && getComputedStyle(label.parentElement).display === 'none',
+      'Cloud copy follows native NarrowRightPanel hiding without an inline visibility override');
     fixture.classList.remove('NarrowRightPanel');
 
     wrapper.style.setProperty('display', 'none', 'important');

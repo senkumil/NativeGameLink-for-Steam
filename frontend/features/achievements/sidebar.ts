@@ -13,32 +13,16 @@ const COMPLETION_RIBBON_IMAGE = `<img class="gdl-la-ribbon-art" alt="" aria-hidd
 
 const NATIVE_SIDEBAR_ACHIEVEMENT_TILE_PX = 48;
 const NATIVE_SIDEBAR_ACHIEVEMENT_GAP_PX = 8;
-const NATIVE_SIDEBAR_ACHIEVEMENT_MAX_CELLS = 6;
-const NATIVE_SIDEBAR_ACHIEVEMENT_MIN_CELLS = 2;
-const NATIVE_SIDEBAR_ACHIEVEMENT_MAX_EARNED_ICONS = 4;
-const NATIVE_SIDEBAR_ACHIEVEMENT_MAX_LOCKED_ICONS = 5;
-const NATIVE_SIDEBAR_ACHIEVEMENT_MAX_LOCKED_ICONS_WITH_PROGRESS = 4;
+const NATIVE_SIDEBAR_ACHIEVEMENT_INITIAL_CELLS = 6;
 
-/** Match Steam's sidebar behavior: compact achievement tiles, a fixed gap,
- * and a dynamic number of visible cells derived from the live row width. Rows
- * never grow beyond the native cap: 1 featured icon + 4 earned thumbnails,
- * and up to 5 locked thumbnails (4 once an achievement is earned) plus a +N cell.
- * Only the two highest-priority rare earned
- * achievements animate; the rest remain static. A +N cell appears when extra
- * items exist or when the current width cannot fit the native maximum. */
+/** Steam's BoxRow measures each 48px tile together with its trailing 8px
+ * margin, then reserves one cell for the remainder. Its capacity follows the
+ * available row width, including at CEF zoom levels and after sidebar drags. */
 export function achievementSidebarColumnsForWidth(width: number): number {
-	if (!Number.isFinite(width) || width <= 0) return NATIVE_SIDEBAR_ACHIEVEMENT_MAX_CELLS;
-	const columns = Math.floor((width + NATIVE_SIDEBAR_ACHIEVEMENT_GAP_PX)
+	if (!Number.isFinite(width) || width <= 0) return NATIVE_SIDEBAR_ACHIEVEMENT_INITIAL_CELLS;
+	const columns = Math.floor(width
 		/ (NATIVE_SIDEBAR_ACHIEVEMENT_TILE_PX + NATIVE_SIDEBAR_ACHIEVEMENT_GAP_PX));
-	return Math.max(
-		NATIVE_SIDEBAR_ACHIEVEMENT_MIN_CELLS,
-		Math.min(NATIVE_SIDEBAR_ACHIEVEMENT_MAX_CELLS, columns),
-	);
-}
-
-function lockedAchievementIconLimit(earnedCount: number): number {
-	return earnedCount > 0 ? NATIVE_SIDEBAR_ACHIEVEMENT_MAX_LOCKED_ICONS_WITH_PROGRESS
-		: NATIVE_SIDEBAR_ACHIEVEMENT_MAX_LOCKED_ICONS;
+	return Math.max(1, columns);
 }
 
 function localAchievementIcon(
@@ -69,17 +53,12 @@ function renderAchievementIconRowHtml(
 	items: LocalAchievementItem[],
 	availableCells: number,
 	locked: boolean,
-	maxVisibleIcons: number,
 	allowGlow: boolean | ReadonlySet<string> = false,
 	doc?: Document,
 ): string {
 	if (!items.length) return '';
-	const capacity = Math.max(1, Math.min(NATIVE_SIDEBAR_ACHIEVEMENT_MAX_CELLS, availableCells));
-	const nativeIconLimit = Math.max(1, maxVisibleIcons);
-	const needsMore = items.length > Math.min(nativeIconLimit, capacity);
-	const countToShow = needsMore
-		? Math.max(1, Math.min(nativeIconLimit, capacity - 1))
-		: Math.min(items.length, nativeIconLimit, capacity);
+	const capacity = Math.max(1, availableCells);
+	const countToShow = items.length > capacity ? capacity - 1 : items.length;
 	const thumbnails = items.slice(0, countToShow);
 	const moreCount = Math.max(0, items.length - countToShow);
 	const iconsHtml = thumbnails.map(item => localAchievementIcon(item, locked, allowGlow, doc)).join('');
@@ -113,10 +92,10 @@ export function renderLocalAchievementSidebarHtml(data: LocalAchievementData, co
 	const otherEarned = earned.slice(featuredEarned.length);
 	const latestHtml = featuredEarned.map(item => renderFeaturedAchievementHtml(item, true, doc)).join('');
 	const earnedRow = otherEarned.length
-		? `<div class="gdl-la-earned-row-wrap">${renderAchievementIconRowHtml(otherEarned, columns, false, NATIVE_SIDEBAR_ACHIEVEMENT_MAX_EARNED_ICONS, false, doc)}</div>`
+		? `<div class="gdl-la-earned-row-wrap">${renderAchievementIconRowHtml(otherEarned, columns, false, false, doc)}</div>`
 		: '';
 	const lockedBlock = locked.length
-		? `${earned.length ? '<div class="gdl-la-divider"></div>' : ''}<div class="gdl-la-locked-label">${escapeHtml(gdlText('locked_achievements', 'Locked achievements'))}</div><div class="gdl-la-locked-row-wrap">${renderAchievementIconRowHtml(locked, columns, true, lockedAchievementIconLimit(earned.length), false, doc)}</div>`
+		? `${earned.length ? '<div class="gdl-la-divider"></div>' : ''}<div class="gdl-la-locked-label">${escapeHtml(gdlText('locked_achievements', 'Locked achievements'))}</div><div class="gdl-la-locked-row-wrap">${renderAchievementIconRowHtml(locked, columns, true, false, doc)}</div>`
 		: '';
 
 	if (isAllUnlocked) {
@@ -153,7 +132,7 @@ export function renderLocalAchievementSidebarHtml(data: LocalAchievementData, co
 }
 
 function setupDynamicGrid(summary: HTMLElement, data: LocalAchievementData): () => void {
-	let currentColumns = NATIVE_SIDEBAR_ACHIEVEMENT_MAX_CELLS;
+	let currentColumns = NATIVE_SIDEBAR_ACHIEVEMENT_INITIAL_CELLS;
 	const earned = data.achievements.filter(item => item.earned).sort(compareEarnedAchievementsForDisplay);
 	const locked = data.achievements.filter(item => !item.earned).sort(compareLockedAchievementsForDisplay);
 	const otherEarned = earned.length <= 2 ? [] : earned.slice(1);
@@ -186,7 +165,6 @@ function setupDynamicGrid(summary: HTMLElement, data: LocalAchievementData): () 
 				otherEarned,
 				columns,
 				false,
-				NATIVE_SIDEBAR_ACHIEVEMENT_MAX_EARNED_ICONS,
 				false,
 				summary.ownerDocument,
 			);
@@ -197,7 +175,6 @@ function setupDynamicGrid(summary: HTMLElement, data: LocalAchievementData): () 
 				locked,
 				columns,
 				true,
-				lockedAchievementIconLimit(earned.length),
 				false,
 				summary.ownerDocument,
 			);
@@ -269,7 +246,7 @@ export function renderLocalAchievementSidebar(doc: Document, data: LocalAchievem
 		oldCleanup();
 		sidebarGridCleanup.delete(existing!);
 	}
-	content.innerHTML = renderLocalAchievementSidebarHtml(data, NATIVE_SIDEBAR_ACHIEVEMENT_MAX_CELLS, doc);
+	content.innerHTML = renderLocalAchievementSidebarHtml(data, NATIVE_SIDEBAR_ACHIEVEMENT_INITIAL_CELLS, doc);
 	const summary = content.querySelector<HTMLElement>('.gdl-la-summary');
 	if (summary) {
 		ensureLocalAchievementSidebarResponsiveGrid(summary, data);

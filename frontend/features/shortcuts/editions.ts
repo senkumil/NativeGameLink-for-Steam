@@ -128,6 +128,7 @@ export function expandCandidatesWithEditions(candidates: ShortcutDetectionCandid
 			if (!seenKeys.has(edKey)) {
 				seenKeys.add(edKey);
 				result.push({
+					...candidate,
 					appid: candidate.appid,
 					candidate_key: edKey,
 					name: ed.name,

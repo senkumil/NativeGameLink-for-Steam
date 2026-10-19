@@ -110,8 +110,8 @@ console.log('Running user-reported bug regression checks...');
 // Wukong / tiny-token collision: maintained alias must remain visible while a
 // coincidentally exact 1-3 char Store title cannot promote itself to certainty.
 assert(aliases.includes('["b1"]') && aliases.includes('"2358720"'), 'b1 maintained alias still resolves Black Myth: Wukong');
-assert(detectionTs.includes("DETECTION_MODEL_VERSION = 'v11'"), 'detection model cache bumped to v11 after removing executable replacement');
-assert(remoteDetection.includes('DETECTION_MODEL_VERSION = "v11"'), 'backend candidate cache is versioned with v11');
+assert(detectionTs.includes("DETECTION_MODEL_VERSION = 'v12'"), 'detection model cache bumped to v12 after fixing discovery context and candidate relevance');
+assert(remoteDetection.includes('DETECTION_MODEL_VERSION = "v12"'), 'backend candidate cache is versioned with v12');
 assert(remoteDetection.includes('maintained_alias_exact') && localDetection.includes('maintained_alias_exact'), 'local and remote engines preserve exact maintained-alias evidence');
 assert(remoteDetection.includes('short_title_unverified') && remoteDetection.includes('short_executable_unverified'), 'tiny exact titles/executables remain provisional without independent corroboration');
 assert(remoteDetection.includes('candidate.alias_primary == true'), 'primary maintained alias is tracked independently from Store title coincidence');
@@ -126,8 +126,10 @@ assert(propertiesStyle.includes('color-scheme: dark') && propertiesStyle.include
 assert(properties.includes('candidateForPreview') && properties.includes('linkedPreviewCandidate'), 'Properties preview resolves the exact selected AppID, including the currently linked entry');
 assert(properties.includes('previousSelectionStillAvailable') && properties.includes('suggestionUserInteracted && previousSelectionStillAvailable'), 'async candidate enrichment preserves an explicit user dropdown selection');
 assert(manualLink.includes('detectShortcutCandidatesLocal') && manualLink.includes('enrichShortcutCandidatesRemote'), 'Manual review modal also uses progressive local + remote suggestions');
-assert(manualLink.includes('Title-only AppID discovery failed') && manualLink.includes('titleOnlyCandidates'), 'manual detection renders title-only local candidates before waiting for full shortcut context');
-assert(manualLink.includes('function displayConfidence') && manualLink.includes("candidate.score >= 90"), 'manual confidence badge reports 90-100 scores as HIGH unless identity collision exists');
+assert(manualLink.includes('buildImmediateShortcutDetectionContext') && manualLink.includes('detectShortcutCandidatesLocal(immediateContext)'), 'manual detection starts with the available executable and folder before asynchronous hydration');
+assert(manualLink.includes('function displayConfidence') && manualLink.includes('return displayReviewConfidence(candidate)')
+  && detectionTs.includes('export function displayReviewConfidence') && detectionTs.includes('candidate.score >= 90')
+  && detectionTs.includes('candidate.negative_reasons?.length'), 'manual and Properties confidence badges share evidence and contradiction rules');
 assert(remoteDetection.includes('strong_local_candidate') && remoteDetection.includes('strong_local_candidate and 0'), 'remote enrichment skips Store Search when a strong local candidate already exists');
 assert(remoteDetection.includes('initial_validation_count = strong_local_candidate and 1'), 'strong local candidates validate only the top AppID first');
 assert(localDetection.includes('candidate.alias_unique and 99 or 90'), 'exact unique maintained aliases surface immediately at 99% without waiting for Steam network enrichment');
@@ -211,10 +213,9 @@ assert(gamepadNav.includes('setTimeout(pollGamepads, 50)') && !gamepadNav.includ
 assert(prefetch.includes('MAX_PREFETCH_APP_IDS = 6'), 'background linked-game prefetch is bounded');
 assert(gameData.includes('MAX_GAME_DATA_CACHE_KEYS = 64'), 'in-memory game-data cache is bounded more tightly');
 
-// Steam's 884 logical-pixel NarrowRightPanel breakpoint can trigger early at
-// desktop scaling levels and hide linked cloud/achievement copy despite room.
-assert(playbarVisibility.includes("copy.closest('[data-gdl-cloud-status], [data-gdl-playtime]')") && !playbarVisibility.includes('classes.MiniAchievements'), 'only linked Cloud and playtime copy override narrow hiding; achievements obey Steam responsive visibility');
-assert(playbarVisibility.includes("setProperty('display', 'flex', 'important')") && playbarVisibility.includes('restoreLinkedPlaybarVisibility'), 'linked-only Cloud and playtime copy retain their scoped display restoration on route exit');
+// Linked copies must follow the same logical breakpoints as native stats.
+assert(playbarVisibility.includes("copy.closest('[data-gdl-cloud-status], [data-gdl-playtime]')") && !playbarVisibility.includes('classes.MiniAchievements'), 'legacy visibility cleanup is restricted to linked Cloud and playtime copies');
+assert(!playbarVisibility.includes("setProperty('display', 'flex', 'important')") && playbarVisibility.includes("removeProperty('display')") && playbarVisibility.includes('restoreLinkedPlaybarVisibility'), 'linked copies remove legacy flex overrides and leave responsive visibility to native CSS');
 assert(bigPictureDetails.includes('getDocumentRenderer(doc)') && bigPictureDetails.includes('isOwnerRenderer(renderer, ownerReact)')
   && documentUIRuntime.includes('view.document === doc') && documentUIRuntime.includes('rendererReactOwners')
   && documentUIRuntime.includes("bootstrapLocalExports(doc, 'renderer')") && documentUIRuntime.includes('steamWebpackRuntime.getAllModules(doc)'),
@@ -584,8 +585,10 @@ assert(featureIconsTs.includes('STEAM_ICON_ACHIEVEMENTS') && featureIconsTs.incl
 assert(infoPanelTs.includes('nativeFeatureVisual(feature)') && !infoPanelTs.includes('function nativeFeatureSvg'), 'info panel uses nativeFeatureVisual and removes obsolete custom SVGs');
 // 3. Info panel scroll to top uses native 36x36 arrow and reaches scrollTop 0 without conflicting scrollIntoView
 assert(infoPanelTs.includes('nativeArrowSvg()') && !infoPanelTs.includes('topAnchor?.scrollIntoView') && infoPanelTs.includes('target.scrollTop = 0'), 'scroll-to-top uses native arrow and scrolls completely to top 0');
-// 4. Scroll-to-top arrow uses Steam's native SVGIcon_Arrow L0X glyph from module 35488 / 50376
-assert(featureIconsTs.includes('SVGIcon_Arrow') && featureIconsTs.includes('M26.23 17.31L20.5 11.58V33.54H15.5V11.58L9.76998 17.31L6.22998 13.77L18 2.00001L29.77 13.77L26.23 17.31Z'), 'scroll-to-top arrow uses Steam native L0X up-arrow glyph');
+// 4. Desktop playbar uses 42095 i3G(angle:0), not the gamepad Arrow asset.
+assert(featureIconsTs.includes('SVGIcon_Arrow') && featureIconsTs.includes('viewBox="0 0 256 256"')
+  && featureIconsTs.includes('128,247.688 128,8.313 181.061,61.674')
+  && featureIconsTs.includes('128,247.688 128,8.313 74.939,61.674'), 'scroll-to-top arrow uses the native desktop playbar polylines');
 // 5. Dynamic Controller Sidebar Card mounts when connected and tears down when disconnected
 assert(controllerTs.includes('buildNativeSidebarSection') && controllerTs.includes('!controllerInfo.connected') && controllerTs.includes('section.remove()') && controllerTs.includes('setupControllerSidebarWatcher'), 'dynamic controller card mounts when connected and tears down when disconnected');
 

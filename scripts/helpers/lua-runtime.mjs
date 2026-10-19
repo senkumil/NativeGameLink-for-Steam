@@ -6,8 +6,10 @@ const { lua, lauxlib, lualib, to_luastring, to_jsstring } = fengari;
 export function runLuaCheck(files, assertions, globals = {}) {
   const state = lauxlib.luaL_newstate();
   lualib.luaL_openlibs(state);
+  try {
   for (const [key, value] of Object.entries(globals)) {
-    lua.lua_pushlstring(state, value instanceof Uint8Array ? value : to_luastring(value));
+    const bytes = value instanceof Uint8Array ? value : to_luastring(value);
+    lua.lua_pushlstring(state, bytes, bytes.length);
     lua.lua_setglobal(state, to_luastring(key));
   }
   const factories = Object.entries(files).map(([name, file]) =>
@@ -16,5 +18,5 @@ export function runLuaCheck(files, assertions, globals = {}) {
   const source = `local factories = {}\n${factories}\n${assertions}`;
   const result = lauxlib.luaL_dostring(state, to_luastring(source));
   if (result !== lua.LUA_OK) throw Error(to_jsstring(lua.lua_tostring(state, -1)));
-  lua.lua_close(state);
+  } finally { lua.lua_close(state); }
 }

@@ -206,7 +206,7 @@ export async function linkAllShortcutsExperimental(
 						await new Promise(resolve => setTimeout(resolve, 350));
 						remote = await enrichShortcutCandidatesRemote(item.context, local?.candidates || [], signal, true);
 					}
-					const candidates = mergeCandidateLists(local?.candidates || [], remote?.candidates || []);
+					const candidates = mergeCandidateLists(local?.candidates || [], remote?.candidates || [], remote?.rejected_appids);
 					const decision = evaluateReliableBulkCandidate(item.context, candidates, rememberedShortcutSteamAppId(item.record.id));
 					decisionReason = decision.reason;
 					accepted = decision.safe ? decision.candidate : null;
@@ -239,7 +239,7 @@ export async function linkAllShortcutsExperimental(
 				try {
 					const local = await detectShortcutCandidatesLocal(item.context);
 					const remote = await enrichShortcutCandidatesRemote(item.context, local?.candidates || [], signal, true);
-					const candidates = mergeCandidateLists(local?.candidates || [], remote?.candidates || []);
+					const candidates = mergeCandidateLists(local?.candidates || [], remote?.candidates || [], remote?.rejected_appids);
 					const decision = evaluateReliableBulkCandidate(item.context, candidates, rememberedShortcutSteamAppId(item.record.id));
 					decisionReason = decision.reason;
 					accepted = decision.safe ? decision.candidate : null;

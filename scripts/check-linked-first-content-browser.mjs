@@ -17,6 +17,7 @@ const sources = Object.fromEntries([
   ['layout', 'frontend/features/library/layout.ts'], ['loading-stage', 'frontend/features/library/loading-stage.ts'],
   ['first-content', 'frontend/features/library/first-content.ts'],
   ['activity-view', 'frontend/features/library/activity-view.ts'], ['feed', 'frontend/features/library/social/feed.ts'],
+  ['activity-summary', 'frontend/features/library/activity-summary.ts'],
   ['status', 'frontend/features/library/social/status.ts'], ['disposables', 'frontend/core/disposables.ts'],
   ['after-native-paint', 'frontend/core/after-native-paint.ts'], ['navigation-controller', 'frontend/features/library/navigation-controller.ts'],
   ['render-session', 'frontend/features/library/render-session.ts'], ['sidebar-interaction', 'frontend/steam/sidebar-interaction.ts'],

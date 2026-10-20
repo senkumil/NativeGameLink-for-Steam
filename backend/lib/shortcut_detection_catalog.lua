@@ -19,6 +19,26 @@ local normalize = shortcut_detection_text.normalize
 local generic_words = shortcut_detection_text.generic_words or {}
 local generic_exes = shortcut_detection_text.generic_exes or {}
 
+-- One portable wall-clock budget covers every provider and fallback in a
+-- detection request. os.time is intentionally used instead of os.clock (CPU
+-- time excludes blocked HTTP). Reserve a second for its coarse resolution.
+function M.new_request_budget(expires_at_ms)
+    local ceiling = os.time() * 1000 + 5500
+    local requested = tonumber(expires_at_ms)
+    if not requested or requested ~= requested or requested == math.huge then requested = ceiling end
+    return { deadline_ms = math.min(ceiling, requested), incomplete = false, exhausted = false, responses = {} }
+end
+
+function M.remaining_timeout(budget, requested_timeout)
+    if not budget then return requested_timeout or 3 end
+    local remaining = (budget.deadline_ms - os.time() * 1000 - 1000) / 1000
+    if remaining <= 0 then
+        budget.incomplete, budget.exhausted = true, true
+        return nil
+    end
+    return math.min(requested_timeout or 3, remaining)
+end
+
 -- Discovery hints have different information content. A three-character
 -- executable must not consume the network budget ahead of its PE or game folder.
 function M.discovery_queries(context, aliases)
@@ -133,24 +153,36 @@ function M.viable_candidate(candidate, context)
         and (candidate.alias_primary == true or evidence.matched)
 end
 
-local function http_json(url, timeout)
-    if not http or not http.get then return nil, "HTTP client unavailable" end
+local function http_json(url, timeout, budget)
+    local previous = budget and budget.responses[url]
+    if previous then return previous.body, previous.error end
+    local allowed_timeout = M.remaining_timeout(budget, timeout)
+    if not allowed_timeout then return nil, "detection_budget_exhausted" end
+    local function finish(body, err)
+        if budget then
+            if err then budget.incomplete = true end
+            budget.responses[url] = { body = body, error = err }
+        end
+        return body, err
+    end
+    if not http or not http.get then return finish(nil, "HTTP client unavailable") end
     local ok_http, res, err = pcall(http.get, url, {
         headers = {
             ["Accept"] = "application/json",
             ["User-Agent"] = USER_AGENT,
         },
-        timeout = timeout or 3.0,
+        timeout = allowed_timeout,
     })
     if not ok_http or not res or res.status ~= 200 then
-        return nil, tostring(err or (res and res.status) or "HTTP request failed")
+        return finish(nil, tostring(err or (res and res.status) or "HTTP request failed"))
     end
     local ok_json, body = pcall(cjson.decode, res.body or "")
     if not ok_json or type(body) ~= "table" then
-        return nil, "JSON decode failed"
+        return finish(nil, "JSON decode failed")
     end
-    return body, nil
+    return finish(body, nil)
 end
+M.http_json = http_json
 
 local function clean_query_term(value)
     local text = tostring(value or ""):match("^%s*(.-)%s*$") or ""
@@ -165,13 +197,13 @@ local function clean_query_term(value)
     return text:match("^%s*(.-)%s*$") or ""
 end
 
-function M.resolve_catalog_appids(query, timeout)
+function M.resolve_catalog_appids(query, timeout, budget)
     local cleaned = clean_query_term(query)
-    if #cleaned < 2 then return {} end
+    if #cleaned < 2 then return {}, true end
     local cache_key = cleaned:lower()
     if catalog_cache and cache_get then
         local cached = cache_get(catalog_cache, cache_key, 600)
-        if cached and cached.data then return cached.data end
+        if cached and cached.data then return cached.data, true end
     end
 
     local url_encode = util.url_encode or function(str)
@@ -184,11 +216,11 @@ function M.resolve_catalog_appids(query, timeout)
         .. url_encode(cleaned)
         .. "&language=en&format=json&type=item&limit=5"
 
-    local search_body, err = http_json(search_url, timeout or 2.5)
-    if not search_body or type(search_body.search) ~= "table" then return {} end
+    local search_body, err = http_json(search_url, timeout or 2.5, budget)
+    if not search_body or type(search_body.search) ~= "table" then return {}, false end
     if #search_body.search == 0 then
         if catalog_cache and cache_set then cache_set(catalog_cache, cache_key, { data = {}, ttl = 600 }) end
-        return {}
+        return {}, true
     end
 
     local entity_ids = {}
@@ -211,15 +243,15 @@ function M.resolve_catalog_appids(query, timeout)
 
     if #entity_ids == 0 then
         if catalog_cache and cache_set then cache_set(catalog_cache, cache_key, { data = {}, ttl = 600 }) end
-        return {}
+        return {}, true
     end
 
     local claims_url = "https://www.wikidata.org/w/api.php?action=wbgetentities&ids="
         .. table.concat(entity_ids, "|")
         .. "&props=claims&format=json"
 
-    local claims_body, err2 = http_json(claims_url, timeout or 2.5)
-    if not claims_body or type(claims_body.entities) ~= "table" then return {} end
+    local claims_body, err2 = http_json(claims_url, timeout or 2.5, budget)
+    if not claims_body or type(claims_body.entities) ~= "table" then return {}, false end
     local results = {}
     local seen_appids = {}
 
@@ -248,10 +280,10 @@ function M.resolve_catalog_appids(query, timeout)
     end
 
     if catalog_cache and cache_set then cache_set(catalog_cache, cache_key, { data = results, ttl = 600 }) end
-    return results
+    return results, true
 end
 
-function M.resolve_catalog_candidates(request, context, helpers)
+function M.resolve_catalog_candidates(request, context, helpers, budget)
     local terms, seen_terms = {}, {}
     local function add_term(value)
         local cleaned = clean_query_term(value)
@@ -263,9 +295,11 @@ function M.resolve_catalog_candidates(request, context, helpers)
     add_term(context.pe_product); add_term(context.pe_desc)
     for _, folder in ipairs(context.folders or {}) do add_term(folder) end
     add_term(context.title); add_term(context.exe_stem)
-    local candidates, seen_appids = {}, {}
+    local candidates, seen_appids, confirmed = {}, {}, true
     for index = 1, math.min(#terms, 3) do
-        for _, match in ipairs(M.resolve_catalog_appids(terms[index], 2.5) or {}) do
+        local matches, term_confirmed = M.resolve_catalog_appids(terms[index], 2.5, budget)
+        if term_confirmed == false then confirmed = false end
+        for _, match in ipairs(matches or {}) do
             local appid = tostring(match.appid or "")
             local graph = M.identity_evidence(match.name or "", context)
             if appid:match("^%d+$") and not seen_appids[appid] and graph.matched and not graph.collision then
@@ -313,7 +347,7 @@ function M.resolve_catalog_candidates(request, context, helpers)
         table.sort(candidates, function(a, b) return a.score == b.score and tonumber(a.appid) < tonumber(b.appid) or a.score > b.score end)
         if candidates[1] and candidates[1].score >= 72 then break end
     end
-    return candidates
+    return candidates, confirmed
 end
 
 return M

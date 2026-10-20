@@ -85,7 +85,7 @@
 		"check:big-picture-rerender-isolation": "node scripts/check-big-picture-rerender-isolation.mjs",
 		"check:bp-native-info": "node scripts/check-bp-native-info.mjs",
 		"check:news-runtime": "node scripts/check-news-runtime.mjs",
-		"check:link-reliability": "node scripts/check-link-reliability.mjs && node scripts/check-link-resource-deadlines.mjs",
+		"check:link-reliability": "node scripts/check-steam-appid-files.mjs && node scripts/check-steam-appid-runtime.mjs && node scripts/check-shortcut-launch-details.mjs && node scripts/check-shortcut-link-integration.mjs && node scripts/check-link-reliability.mjs && node scripts/check-link-resource-deadlines.mjs",
 		"check:achievement-lifecycle": "node scripts/check-achievement-lifecycle.mjs",
 		"check:achievement-state-ownership": "node scripts/check-achievement-state-ownership.mjs",
 		"check:achievement-native-schema": "node scripts/check-achievement-native-schema.mjs",

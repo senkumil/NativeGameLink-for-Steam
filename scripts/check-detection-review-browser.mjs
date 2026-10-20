@@ -2,18 +2,21 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import ts from 'typescript';
 import { chromium } from 'playwright';
+import { browserLaunchOptions } from './helpers/browser-launch.mjs';
 
 const sources = Object.fromEntries(Object.entries({
   detection: 'frontend/features/shortcuts/detection.ts', manual: 'frontend/features/shortcuts/manual-link.ts',
+  review: 'frontend/features/shortcuts/manual-link-review.ts',
   progress: 'frontend/features/shortcuts/manual-link-progress.ts',
   merger: 'frontend/features/shortcuts/candidate-merger.ts', shortcuts: 'frontend/steam/shortcuts.ts',
   details: 'frontend/steam/library-details.ts', modal: 'frontend/core/modal.ts',
+  launchDetails: 'frontend/steam/shortcut-details.ts',
   properties: 'frontend/features/shortcuts/properties.ts',
 }).map(([key, file]) => [key, ts.transpileModule(fs.readFileSync(key === 'manual' && process.env.DETECTION_REVIEW_MANUAL_SOURCE
   ? process.env.DETECTION_REVIEW_MANUAL_SOURCE : file, 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
 }).outputText]));
-const browser = await chromium.launch({ headless: true, channel: process.env.PLAYWRIGHT_CHANNEL || 'msedge' });
+const browser = await chromium.launch({ headless: true, ...browserLaunchOptions() });
 try {
   const page = await browser.newPage();
   const pageErrors = []; page.on('pageerror', error => pageErrors.push(error.message));
@@ -45,9 +48,9 @@ try {
       RetryingRequestCache: class { get(_key, loader) { return loader(); } clear() {} },
       expandCandidatesWithEditions: values => values,
       getShortcutDetailsBackend: async () => { state.events.push('context'); state.detailsCalls++; return state.details(); },
-      detectGameCandidatesLocalBackend: async ({ request_json }) => { const request = JSON.parse(request_json); state.events.push('local'); state.requests.push(request); return { candidates: await state.local(request) }; },
+      detectGameCandidatesLocalBackend: async ({ request_json }) => { const request = JSON.parse(request_json); state.events.push('local'); state.requests.push(request); const value = await state.local(request); return Array.isArray(value) ? { candidates: value } : value; },
       detectGameCandidatesBackend: async ({ request_json }) => { const request = JSON.parse(request_json); state.requests.push(request); const value = await state.remote(request); return Array.isArray(value) ? { candidates: value } : value; },
-      getAllShortcutRecords: () => [record], shortcutAlreadyLinked: () => false, findMappingForShortcut: () => null,
+      getAllShortcutRecords: () => state.records || [record], shortcutAlreadyLinked: () => false, findMappingForShortcut: () => null,
       isShortcutDismissed: () => false, undismissShortcut() {},
       shortcutRuntimeHost: () => ({ getMainWindowDoc: () => document }),
       navigateToLibraryShortcut: (_doc, shortcutId) => { state.navigated = shortcutId; },
@@ -69,8 +72,8 @@ try {
       if (modules[key]) return modules[key];
       const exports = {}; modules[key] = exports;
       const require = spec => {
-        const selected = { './detection': 'detection', './candidate-merger': 'merger', '../../steam/shortcuts': 'shortcuts',
-          '../../steam/library-details': 'details', '../../core/modal': 'modal', './manual-link-progress': 'progress' }[spec];
+        const selected = { './detection': 'detection', './candidate-merger': 'merger', './manual-link-review': 'review', '../../steam/shortcuts': 'shortcuts',
+          '../../steam/library-details': 'details', '../../core/modal': 'modal', './manual-link-progress': 'progress', '../../steam/shortcut-details': 'launchDetails' }[spec];
         return selected ? load(selected) : mocks;
       };
       new Function('require', 'exports', sources[key])(require, exports); return exports;
@@ -90,8 +93,8 @@ try {
     owner.appStore = { m_mapApps: new Map([[id, { appid: id, display_name: 'bf3' }]]) };
     ownerDoc.body.innerHTML = `<input value="C:\\Wrong\\other.exe"><section role="dialog" class="PagedSettingsDialog" data-appid="3000000002"><input value="C:\\OtherGame\\other.exe"></section>`;
     let ownerReads = 0, foreignReads = 0;
-    owner.SteamClient = { Apps: { GetCachedAppDetails: () => { ownerReads++; return { strShortcutExe: exe, strShortcutStartDir: folder }; } } };
-    window.SteamClient = { Apps: { GetCachedAppDetails: () => { foreignReads++; return { strShortcutExe: 'C:\\Wrong\\other.exe' }; } } };
+    owner.SteamClient = { Apps: { RegisterForAppDetails: (_id, callback) => { ownerReads++; callback({ unAppID: id, strShortcutExe: exe, strShortcutStartDir: folder }); return { unregister() {} }; } } };
+    window.SteamClient = { Apps: { RegisterForAppDetails: (_id, callback) => { foreignReads++; callback({ unAppID: id, strShortcutExe: 'C:\\Wrong\\other.exe' }); return { unregister() {} }; } } };
     const owned = await detection.buildShortcutDetectionContext(ownerDoc, 'bf3', id);
     check(owned.exePath === exe && owned.startDir === folder && ownerReads === 1 && foreignReads === 0,
       'Context reads full BF3 path from its owning SteamClient, never the background realm or another Properties dialog');
@@ -101,7 +104,42 @@ try {
     ownerDoc.body.innerHTML += `<section role="dialog" class="PagedSettingsDialog" data-appid="${id}"><input value="&quot;${exe}&quot;"><input value="&quot;${folder}&quot;"></section>`;
     const properties = detection.buildImmediateShortcutDetectionContext(ownerDoc, 'bf3', id);
     check(properties.exePath === exe && properties.startDir === folder, 'Only identity-owned native Properties supplies its original quoted target and start directory');
+
+    // Explicitly cleared native arguments must outrank stale overview/VDF copies.
+    owner.appStore.m_mapApps.set(id, { appid: id, display_name: 'bf3', strShortcutLaunchOptions: '-old-overview-appid 111' });
+    let nativeLaunchDetails = { unAppID: id, strShortcutExe: exe, strShortcutStartDir: folder, strLaunchOptions: '' };
+    owner.appDetailsStore = { GetAppDetails: requestedId => requestedId === id ? nativeLaunchDetails : null };
+    state.details = () => ({ exe_path: exe, start_dir: folder, launch_options: '-old-vdf-appid 222' });
+    const explicitlyCleared = detection.buildImmediateShortcutDetectionContext(ownerDoc, 'bf3', id, { strArguments: '-old-fallback-appid 333' });
+    check(explicitlyCleared.launchOptions === '',
+      'An explicit empty native launch-options field is preserved instead of resurrecting stale overview or fallback arguments');
+    const hydratedCleared = await detection.buildShortcutDetectionContext(ownerDoc, 'bf3', id);
+    check(hydratedCleared.launchOptions === '',
+      'Asynchronous VDF hydration cannot restore stale arguments after native Steam details explicitly cleared them');
+    nativeLaunchDetails = { unAppID: id, strShortcutExe: exe, strShortcutStartDir: folder };
+    owner.appStore.m_mapApps.set(id, { appid: id, display_name: 'bf3' });
+    const genuinelyMissing = await detection.buildShortcutDetectionContext(ownerDoc, 'bf3', id);
+    check(genuinelyMissing.launchOptions === '-old-vdf-appid 222',
+      'VDF arguments remain available as a fallback when every native launch-options field is genuinely absent');
+    state.details = () => ({});
     frame.remove(); window.SteamClient = undefined;
+
+    // Review ownership includes popup documents, not only the module's global document.
+    const popupFrames = [document.createElement('iframe'), document.createElement('iframe')];
+    popupFrames.forEach(popup => document.body.appendChild(popup));
+    const [firstPopupDoc, secondPopupDoc] = popupFrames.map(popup => popup.contentDocument);
+    manual.showShortcutManualLinkModal(firstPopupDoc, context, { candidates: [strong] });
+    const previousPopupModal = firstPopupDoc.getElementById('gdl-manual-link-modal');
+    manual.showShortcutManualLinkModal(secondPopupDoc, { ...context, shortcutAppId: id + 30 }, { candidates: [strong] });
+    const currentPopupModal = secondPopupDoc.getElementById('gdl-manual-link-modal');
+    check(!previousPopupModal.isConnected && currentPopupModal?.isConnected,
+      'Opening review in another Steam popup disposes the previous document modal instead of leaving two active reviews');
+    firstPopupDoc.dispatchEvent(new popupFrames[0].contentWindow.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    check(currentPopupModal.isConnected,
+      'The previous popup document releases its Escape listener and cannot dismiss the current review');
+    secondPopupDoc.dispatchEvent(new popupFrames[1].contentWindow.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    check(!currentPopupModal.isConnected, 'Escape in the current owning popup still disposes its own review');
+    popupFrames.forEach(popup => popup.remove());
 
     state.requests = []; state.events = []; state.detailsCalls = 0;
     window.appStore.m_mapApps.set(id, { appid: id, display_name: 'bf3' });
@@ -117,10 +155,93 @@ try {
     check(modal().querySelector('.gdl-manual-link-exe-summary').textContent === `Game path: ${exe}`, 'Review displays the complete original executable path rather than a basename or title');
     releaseContext({ exe_path: exe, start_dir: folder });
     await waitFor(() => state.requests.some(request => request.phase === 'remote'), 'Remote phase did not run');
+    const firstRemoteDeadline = state.requests.find(request => request.phase === 'remote').expires_at_ms;
+    check(Number.isFinite(firstRemoteDeadline) && firstRemoteDeadline > Date.now() && firstRemoteDeadline < Date.now() + 6500,
+      'Remote detection supplies a future backend deadline that expires before the frontend lookup budget');
     await new Promise(resolve => setTimeout(resolve, 20));
     check(state.requests.every(request => request.exe_path === exe && request.start_dir === folder), 'Both local phases and remote enrichment retain the original full launch definition');
     check(selected().value === strong.appid && selected().options[1].value === strong.appid, 'A 7-point remote result cannot displace stronger local BF3 evidence');
     check(state.requests.filter(request => request.phase === 'local').length === 1, 'Unchanged full executable context reuses its first local detection instead of repeating the same IPC');
+    close();
+
+    // A second game's native-add event must create its own review identity.
+    const rocketId = id + 10, rocketExe = 'E:\\Juegos\\Rocket League\\Binaries\\Win64\\RocketLeague.exe';
+    const rocket = { appid: '252950', name: 'Rocket League', score: 99, confidence: 'exact', evidence_tier: 'strong' };
+    const rocketContext = { shortcutAppId: rocketId, title: 'RocketLeague', exePath: rocketExe, startDir: 'E:\\Juegos\\Rocket League', launchOptions: '' };
+    const originalRecord = { ...record };
+    manual.showShortcutManualLinkModal(document, context, { candidates: [strong] });
+    record.id = rocketId; record.title = rocketContext.title;
+    record.app = { appid: rocketId, display_name: rocketContext.title, strShortcutExe: rocketExe, strShortcutStartDir: rocketContext.startDir };
+    window.appStore.m_mapApps.set(rocketId, record.app);
+    let releaseRocketLocal;
+    state.local = () => new Promise(resolve => { releaseRocketLocal = resolve; });
+    state.details = () => ({ exe_path: rocketExe, start_dir: rocketContext.startDir });
+    state.remote = () => [rocket];
+    manual.requestNativeAddShortcutReview(rocketId, rocketContext.title, document);
+    await waitFor(() => releaseRocketLocal, 'Second-game detection did not start');
+    check(modal()._shortcutAppId === rocketId && name() === rocketContext.title && selected().value === '',
+      'A newly opened game review immediately replaces a different game dialog before asynchronous detection returns');
+    releaseRocketLocal([rocket]);
+    await waitFor(() => selected().value === rocket.appid, 'Second-game review did not publish Rocket League');
+    check(modal()._shortcutAppId === rocketId && modal().querySelector('.gdl-manual-link-exe-summary').textContent === `Game path: ${rocketExe}`,
+      'Candidate identity, executable summary and final review all belong to the same newly added game');
+    close(); record.app = { appid: rocketId, display_name: rocketContext.title };
+    window.appStore.m_mapApps.set(rocketId, record.app); state.requests = []; state.details = () => ({});
+    state.local = request => request.exe_path === rocketExe ? [rocket] : [];
+    manual.requestNativeAddShortcutReview(rocketId, rocketContext.title, document, { exePath: rocketExe, startDir: rocketContext.startDir });
+    await waitFor(() => state.requests.length && modal(), 'Native-add executable hint fixture did not start');
+    check(state.requests[0].exe_path === rocketExe && state.requests[0].start_dir === rocketContext.startDir
+      && modal().querySelector('.gdl-manual-link-exe-summary').textContent === `Game path: ${rocketExe}`,
+      'The original native-add selection supplies a full executable before Steam publishes overview or VDF details');
+    await waitFor(() => selected().value === rocket.appid, 'Native-add executable hint was not used for detection');
+    close(); Object.assign(record, originalRecord); window.appStore.m_mapApps.delete(rocketId);
+    window.appStore.m_mapApps.set(id, record.app);
+    state.local = request => request.exe_path ? [strong] : [weak]; state.remote = () => [weak]; state.details = () => ({});
+
+    // In-flight local results must not publish into a directly replaced dialog.
+    let releaseStaleLocal;
+    state.local = () => new Promise(resolve => { releaseStaleLocal = resolve; });
+    state.details = () => ({ exe_path: exe, start_dir: folder });
+    manual.requestNativeAddShortcutReview(id, 'bf3', document);
+    await waitFor(() => releaseStaleLocal, 'Stale local fixture did not start');
+    manual.showShortcutManualLinkModal(document, rocketContext, { candidates: [rocket] });
+    state.local = () => [strong]; releaseStaleLocal([strong]);
+    await new Promise(resolve => setTimeout(resolve, 40));
+    check(modal()._shortcutAppId === rocketId && name() === rocket.name && selected().value === rocket.appid
+      && modal().querySelector('.gdl-manual-link-exe-summary').textContent === `Game path: ${rocketExe}`,
+      'Delayed local discovery for a previous game cannot replace a different dialog candidate or executable');
+    close(); state.details = () => ({}); state.requests = [];
+    state.local = request => request.exe_path ? [strong] : [weak];
+
+    // An exhausted empty lookup must settle every part of the same dialog.
+    manual.showShortcutManualLinkModal(document, context, { candidates: [] }, { source: 'native-add-auto', loading: true });
+    modal()._updateCandidates([], false); modal()._markEnrichmentComplete();
+    check(!selected().textContent.includes('Searching') && selected().textContent.includes('No automatic suggestions'),
+      'Settling an empty enrichment clears the stale searching option as well as the message and status');
+    check(!modal().querySelector('.gdl-manual-link-dialog-message').textContent.includes('Searching')
+      && !modal().querySelector('.gdl-manual-link-status').textContent.includes('Searching') && confirm().disabled,
+      'A successful empty lookup consistently ends searching and requires a deliberate manual AppID');
+    close();
+
+    // Failure to obtain evidence is different from an actual empty result.
+    manual.showShortcutManualLinkModal(document, { ...context, exePath: '', startDir: '' }, { candidates: [] }, { source: 'native-add-auto', loading: true });
+    modal()._updateCandidates([], false); modal()._markEnrichmentComplete(true);
+    check(!selected().textContent.includes('Searching')
+      && modal().querySelector('.gdl-manual-link-dialog-message').textContent.includes('Steam search could not finish')
+      && modal().querySelector('.gdl-manual-link-status').textContent.includes('Steam search could not finish'),
+      'Unavailable launch context or detection does not falsely claim a completed no-match search or retain a searching option');
+    const unavailableInput = modal().querySelector('.gdl-manual-link-manual-appid');
+    unavailableInput.value = strong.appid; unavailableInput.dispatchEvent(new Event('input', { bubbles: true }));
+    check(!confirm().disabled, 'A settled unavailable search still permits an explicit manual AppID');
+    close();
+
+    manual.showShortcutManualLinkModal(document, context, { candidates: [] }, { loading: true });
+    const pendingManualInput = modal().querySelector('.gdl-manual-link-manual-appid');
+    pendingManualInput.value = '123456'; pendingManualInput.dispatchEvent(new Event('input', { bubbles: true }));
+    modal()._updateCandidates([], false); modal()._markEnrichmentComplete(true);
+    check(!selected().textContent.includes('Searching') && selected().textContent.includes('Search unavailable')
+      && pendingManualInput.value === '123456' && !confirm().disabled,
+      'A lookup settling while a manual AppID is present also clears the searching placeholder without disturbing the manual choice');
     close();
 
     // Weak candidates remain available for deliberate manual selection.
@@ -171,6 +292,20 @@ try {
       'Missing executable triggers a bounded context retry despite an already known shortcut title');
     await waitFor(() => state.requests.some(request => request.phase === 'remote'), 'Late-context remote enrichment missing'); close();
 
+    // Closing an old generation must release the same game's next review immediately.
+    let releasePreviousReviewContext;
+    state.requests = []; state.detailsCalls = 0;
+    state.details = () => state.detailsCalls === 1 ? new Promise(resolve => { releasePreviousReviewContext = resolve; }) : { exe_path: exe, start_dir: folder };
+    manual.requestNativeAddShortcutReview(id, 'bf3', document);
+    await waitFor(() => releasePreviousReviewContext && state.requests.length, 'Previous review generation did not reach its pending context');
+    close(); manual.requestNativeAddShortcutReview(id, 'bf3', document);
+    await waitFor(() => state.requests.length >= 2 && modal(), 'Replacement review generation did not start');
+    releasePreviousReviewContext({ exe_path: exe, start_dir: folder });
+    await waitFor(() => selected().value === strong.appid, 'A cancelled previous generation left the immediately reopened review permanently searching');
+    check(modal()._shortcutAppId === id && modal().querySelector('.gdl-manual-link-exe-summary').textContent === `Game path: ${exe}`,
+      'An immediately reopened review progresses using its own generation while the previous context is still settling');
+    close();
+
     state.requests = []; state.detailsCalls = 0;
     state.details = () => new Promise(resolve => { releaseContext = resolve; });
     manual.requestNativeAddShortcutReview(id, 'bf3', document);
@@ -185,10 +320,23 @@ try {
     await new Promise(resolve => setTimeout(resolve, 30));
     check(!modal(), 'A manually opened review also stays closed when delayed context arrives');
 
+    // An explicit native shortcut ID must remain authoritative before the new row is indexed.
+    state.details = () => ({}); state.local = () => []; state.remote = () => [];
+    state.records = [{ id, title: 'Shared title', app: { appid: id, display_name: 'Shared title' } }];
+    const pendingNewId = id + 20;
+    check(manual.requestManualShortcutLink(pendingNewId, 'Shared title', document), 'A valid newly published shortcut ID may open review before appearing in the registry');
+    check(modal()?._shortcutAppId === pendingNewId,
+      'A newly added explicit shortcut ID cannot be replaced by an older shortcut merely because their titles match');
+    close();
+    state.records.push({ id: id + 21, title: 'Shared title', app: { appid: id + 21, display_name: 'Shared title' } });
+    check(!manual.requestManualShortcutLink(0, 'Shared title', document) && !modal(),
+      'Without an authoritative ID, duplicate shortcut titles cannot select an arbitrary identity or invent a synthetic hash ID');
+    state.records = null; state.local = request => request.exe_path ? [strong] : [weak];
+
     // Terminal identity failures must not queue a different executable for retry.
     record.app = { appid: id, display_name: 'bf3', strShortcutExe: exe, strShortcutStartDir: folder };
     window.appStore.m_mapApps.set(id, record.app);
-    for (const code of ['shortcut_identity_changed', 'shortcut_identity_ambiguous', 'shortcut_not_found']) for (const thrown of [false, true]) {
+    for (const code of ['shortcut_identity_changed', 'shortcut_identity_ambiguous', 'shortcut_not_found', 'steam_appid_file_protection_failed']) for (const thrown of [false, true]) {
       manual.showShortcutManualLinkModal(document, context, { candidates: [weak] }, { source: 'native-add-auto' }); choose(weak.appid);
       state.linkResult = () => { if (thrown) throw new Error(code); return { ok: false, error: `Error: ${code}` }; };
       const before = state.links.length, cancelled = state.cancelled.length; confirm().click();
@@ -210,8 +358,11 @@ try {
       'Late detection and context results cannot replace selection, clear progress or re-enable controls during linking');
     check(modal().querySelector('.gdl-manual-link-exe-summary').textContent === `Game path: ${exe}`, 'Empty late context cannot erase a known full executable path');
     check(![...modal().querySelectorAll('[data-step]')].some(step => step.style.color === 'rgb(164, 208, 7)'), 'No stage is marked complete before the foreground link is confirmed');
+    modal()._updateContext({ ...context, exePath: 'D:\\Another game\\other.exe', startDir: 'D:\\Another game', launchOptions: '--different-game' });
     finishLink({ ok: true, shortcutAppId: id, setup: { artworkComplete: false, iconApplied: true } });
     await waitFor(() => state.job && !modal().querySelector('.gdl-manual-link-cancel').disabled, 'Partial setup was not queued');
+    check(state.job.shortcutExecutable === exe && state.job.existingLaunchOptions === context.launchOptions,
+      'A late different launch definition cannot retarget the queued continuation away from the executable and options confirmed at submission');
     check(!modal().querySelector('.gdl-manual-link-status').textContent.includes('Linked.') && confirm().disabled, 'Partial setup remains pending without a premature linked/success message');
     const latePaste = modal().querySelector('.gdl-manual-link-manual-appid'); latePaste.value = weak.appid; latePaste.dispatchEvent(new Event('input', { bubbles: true }));
     check(latePaste.value === '' && confirm().disabled, 'A late clipboard input cannot replace or re-enable a queued link selection');
@@ -247,6 +398,26 @@ try {
     check((await detection.detectShortcutCandidatesLocal(context)).candidates[0].appid === strong.appid, 'A timed-out local request cannot poison the next successful detection');
     state.remote = () => new Promise(() => {});
     check(await detection.enrichShortcutCandidatesRemote(context, [strong]) === null, 'Unresponsive remote enrichment ends without blocking manual linking or preserving a forever-loading state');
+    state.local = () => ({ candidates: [], transient_error: true }); state.remote = () => null;
+    manual.requestNativeAddShortcutReview(id, 'bf3', document);
+    await waitFor(() => modal()?.querySelector('.gdl-manual-link-status').textContent.includes('Steam search could not finish'),
+      'Transient local and unavailable remote detection must settle as unavailable in the production review workflow');
+    check(!selected().textContent.includes('Searching') && !modal().querySelector('.gdl-manual-link-dialog-message').textContent.includes('No reliable match'),
+      'Transient empty evidence is not converted into a confident no-match message by asynchronous review completion');
+    const retry = modal().querySelector('.gdl-manual-link-retry-search');
+    const retryManualInput = modal().querySelector('.gdl-manual-link-manual-appid');
+    retryManualInput.value = '123456'; retryManualInput.dispatchEvent(new Event('input', { bubbles: true }));
+    check(retry.style.display !== 'none' && !retry.disabled, 'A failed production lookup exposes an actionable retry search control');
+    const previousRemoteRequests = state.requests.filter(request => request.phase === 'remote').length;
+    state.remote = () => [strong]; retry.click();
+    await waitFor(() => state.requests.filter(request => request.phase === 'remote').length > previousRemoteRequests
+      && [...selected().options].some(option => option.value === strong.appid), 'Retry search did not perform new detection and publish the recovered result');
+    check(retryManualInput.value === '123456' && name() === 'Manual Steam AppID' && !confirm().disabled
+      && modal().querySelector('.gdl-manual-link-id').textContent === 'Steam AppID 123456',
+      'Retrying a transient search preserves manual AppID input and does not silently select the recovered automatic candidate');
+    check(retry.style.display === 'none' && !modal().querySelector('.gdl-manual-link-status').textContent.includes('could not finish'),
+      'A successful retry clears the unavailable state and hides its retry control');
+    close(); state.local = () => [strong];
     window.setTimeout = originalTimeout; state.remote = () => [weak];
 
     const propertiesApi = load('properties');
@@ -308,7 +479,7 @@ try {
       check(document.querySelector('#fixture-properties .gdl-candidate-meta').textContent.includes('[LOW]') && !propsTitle().includes('Detected:'), 'Explicit Properties preview retains uncertainty instead of displaying a misleading high-confidence badge');
     }
     state.local = () => [weak]; state.remote = () => [weak];
-    for (const code of ['shortcut_identity_changed', 'shortcut_identity_ambiguous', 'shortcut_not_found']) for (const thrown of [false, true]) {
+    for (const code of ['shortcut_identity_changed', 'shortcut_identity_ambiguous', 'shortcut_not_found', 'steam_appid_file_protection_failed']) for (const thrown of [false, true]) {
       mountProperties(); await waitFor(() => hasPropertyCandidate(weak.appid), 'Terminal Properties fixture is missing candidate'); chooseProperty(weak.appid);
       state.linkResult = () => { if (thrown) throw new Error(code); return { ok: false, error: `Error: ${code}` }; };
       const before = state.links.length, cancelled = state.cancelled.length; propsSave().click();

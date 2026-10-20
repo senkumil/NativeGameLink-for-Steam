@@ -37,7 +37,7 @@ os.execute=function()error('remote detection must not execute processes')end
 io.popen=function()error('remote detection must not execute shells')end
 local function make(options)
  options=options or{}
- local calls, encoded, serial, opened, closed={},{},0,0,0
+ local calls, timings, encoded, serial, opened, closed={},{},{},0,0,0
  local function encode(value)serial=serial+1;local id='json:'..serial;encoded[id]=value;return id end
  local cjson={encode=encode,decode=function(value)if not encoded[value]then error('unregistered fixture JSON '..tostring(value))end;return encoded[value]end}
  local files=options.files or{}
@@ -54,9 +54,10 @@ local function make(options)
  local util=factories.util({})
  local function respond(value)return{status=200,body=encode(value)}end
  local function decode_term(url)return(url:match('[?&]term=([^&]+)')or url:match('[?&]search=([^&]+)')or''):gsub('%%(%x%x)',function(hex)return string.char(tonumber(hex,16))end)end
- local http={get=function(url)
+ local http={get=function(url,http_options)
   calls[#calls+1]=url
-  if options.http then local value=options.http(url,decode_term(url),#calls);if value~=nil then return value.status and value or respond(value)end end
+  timings[#timings+1]={url=url,timeout=http_options and http_options.timeout}
+  if options.http then local value=options.http(url,decode_term(url),#calls,http_options);if value~=nil then return value.status and value or respond(value)end end
   if url:find('/api/storesearch/',1,true)then
    local term=decode_term(url)
    local items=options.search and options.search(term)or{}
@@ -81,7 +82,7 @@ local function make(options)
   shortcut_registry={preferred_account_id=function()return options.account end},
   shortcut_detection_pe={read_pe_metadata=function()return options.product,options.description end,is_generic_product_name=function()return false end},
   shortcut_detection_local=options.localer})
- return{detector=detector,catalog=catalog,calls=calls,
+ return{detector=detector,catalog=catalog,calls=calls,timings=timings,
   detect=function(request)return cjson.decode(detector.detect_game_candidates(encode(request)))end,
   shortcut=function(id,title)return cjson.decode(detector.get_shortcut_details(id,title))end,
   balanced=function()return opened==closed end}
@@ -216,6 +217,103 @@ local absent=make({files=files,entries={{name='111'}},account='222'})
 check(absent.shortcut('2147483652','bf3').error=='shortcut_not_found','known active account never borrows another account shortcut')
 local numeric=make({files=files,entries={{name='111'}},account=111})
 check(numeric.shortcut('2147483652','bf3').exe_path==shortcut.exe_path,'numeric preferred account normalizes safely')
+
+-- Deterministic elapsed wall time, including blocked HTTP. All production
+-- modules run unchanged; only their HTTP adapter and OS clock are simulated.
+local native_time, elapsed = os.time, 40000.125
+os.time=function()return math.floor(elapsed)end
+local generic_id, generic_name = '901001','Ordinary Game Delta'
+local generic_item={id=901001,name=generic_name,type='app',header_image='header.jpg'}
+local generic_details={['901001']={success=true,data={name=generic_name,type='game'}}}
+local generic_info={['901001']={common={name=generic_name,type='game'},config={launch={{executable='delta.exe'}}}}}
+local generic_claims={Q900={claims={P1733={{mainsnak={datavalue={value=generic_id}}}}}}}
+local generic_local={appid=generic_id,name=generic_name,score=72,evidence_tier='supporting'}
+local function generic_request(extra)
+ local value={title=generic_name,exe_path='X:\\Arbitrary Root\\Ordinary Game Delta\\delta.exe',start_dir='X:\\Arbitrary Root\\Ordinary Game Delta',
+  language='english',expires_at_ms=elapsed*1000+5500,local_candidates={generic_local}}
+ for key,value2 in pairs(extra or{})do value[key]=value2 end
+ return value
+end
+local slow=true
+local delayed=make({aliases={},product=generic_name,details=generic_details,appinfo=generic_info,
+ search=function()return{generic_item}end,localer={discover_local_candidates=function()return{candidates={generic_local}}end},
+ http=function(_,_,_,opts)
+  if slow then elapsed=elapsed+opts.timeout;return{status=503,body=''}end
+ end})
+local began=elapsed
+result=delayed.detect(generic_request())
+check(elapsed-began<=5.5,'all provider and fallback timeouts share one 5.5-second detection budget')
+check(#delayed.calls<=2,'expired normal detection does not keep issuing Store or graph requests')
+check(result.transient_error==true and result.validation_state=='partial','budget exhaustion is an incomplete result, not a confirmed miss')
+check(result.candidates[1]and result.candidates[1].appid==generic_id,'deadline retains independently discovered local candidates')
+for _,timing in ipairs(delayed.timings)do check(timing.timeout>0 and timing.timeout<=2.5,'normal endpoint timeout is clipped and positive')end
+slow=false
+local failed_calls=#delayed.calls
+result=delayed.detect(generic_request())
+check(#delayed.calls>failed_calls and result.candidates[1]and result.candidates[1].appid==generic_id,'next request retries incomplete discovery after network recovery')
+check(result.transient_error~=true and result.candidates[1].executable_match,'recovery restores officially verified executable proof')
+local recovered_calls=#delayed.calls
+result=delayed.detect(generic_request({expires_at_ms=elapsed*1000-10000}))
+check(#delayed.calls==recovered_calls and result.transient_error~=true,'confirmed positive cache needs no HTTP even with an expired caller deadline')
+
+elapsed=50000.999
+local recovery=make({aliases={},product=generic_name,http=function(_,_,_,opts)
+ elapsed=elapsed+opts.timeout;return{status=503,body=''}end})
+began=elapsed
+result=recovery.detect(generic_request({language='spanish',recovery_mode=true,local_candidates={}}))
+check(elapsed-began<=5.5,'localized Store and English recovery consume the same coarse-clock budget')
+check(#recovery.calls==2,'recovery stops after budget instead of six Store searches and graph fallbacks')
+check(recovery.timings[1].timeout==4 and recovery.timings[2].timeout<1,'English retry receives only the remaining budget')
+check(result.transient_error==true,'failed recovery remains retryable')
+
+local queued=make({aliases={},product=generic_name})
+result=queued.detect(generic_request({expires_at_ms=elapsed*1000-2000}))
+check(#queued.calls==0,'a request delivered after its deadline never starts HTTP')
+check(result.transient_error==true and result.candidates[1]and result.candidates[1].appid==generic_id,'queued expiry returns partial local evidence')
+
+elapsed=60000.25
+local graph_failed=true
+local graph_retry=make({aliases={},product=generic_name,details=generic_details,appinfo=generic_info,entities=generic_claims,
+ graph=function()return{{id='Q900',label=generic_name,description='video game'}}end,
+ http=function(url)if graph_failed and url:find('wbsearchentities',1,true)then return{status=503,body=''}end end})
+result=graph_retry.detect(generic_request({local_candidates={}}))
+check(#result.candidates==0 and result.transient_error==true,'successful empty Store plus failed graph cannot become a confirmed negative')
+check(result.validation_state=='partial','graph transport failure propagates through the aggregate detector')
+graph_failed=false
+failed_calls=#graph_retry.calls
+result=graph_retry.detect(generic_request({local_candidates={}}))
+check(#graph_retry.calls>failed_calls and result.candidates[1]and result.candidates[1].appid==generic_id,'failed graph lookup is retried by the very next aggregate request')
+check(result.transient_error~=true,'a complete graph and official validation can be retained normally')
+local confirmed_empty=make({aliases={}})
+local nothing,empty_confirmed=confirmed_empty.catalog.resolve_catalog_appids('An Unpublished Synthetic Title')
+check(#nothing==0 and empty_confirmed==true,'successful empty graph response is distinguishable from a transport error')
+
+elapsed=70000.5
+local validation_failed=true
+local validation_retry=make({aliases={},product=generic_name,details=generic_details,appinfo=generic_info,
+ search=function()return{generic_item}end,http=function(url)
+  if validation_failed and(url:find('/v1/info/',1,true)or url:find('/api/appdetails',1,true))then return{status=503,body=''}end
+ end})
+result=validation_retry.detect(generic_request({local_candidates={}}))
+check(result.candidates[1]and result.transient_error==true,'Store candidates remain visible when optional official validation fails')
+local seen_urls={}
+for _,url in ipairs(validation_retry.calls)do
+ check(not seen_urls[url],'failed official metadata is requested at most once in one detection attempt')
+ seen_urls[url]=true
+end
+validation_failed=false
+failed_calls=#validation_retry.calls
+result=validation_retry.detect(generic_request({local_candidates={}}))
+check(#validation_retry.calls>failed_calls and result.transient_error~=true,'validation failure is not retained in aggregate candidate cache')
+check(result.candidates[1]and result.candidates[1].executable_match,'later official validation upgrades retained candidate evidence')
+
+elapsed=80000.5
+local malformed=make({aliases={},http=function(url)
+ if url:find('/api/storesearch/',1,true)then return{error='temporary_provider_error'}end
+end})
+result=malformed.detect(generic_request({local_candidates={}}))
+check(result.transient_error==true,'malformed successful HTTP payload is not cached as an empty Store result')
+os.time=native_time
 io.open=native_open
-print('Remote detection runtime: '..checks..' production Lua assertions passed (captured Steam BF3 results, evidence ranking, catalog safety, transient retry, exact VDF identity).')
+print('Remote detection runtime: '..checks..' production Lua assertions passed (evidence ranking, catalog safety, global elapsed-time budgets, transient retry, exact VDF identity).')
 `);

@@ -3,6 +3,7 @@ import { detectGameCandidatesBackend, detectGameCandidatesLocalBackend, getShort
 import { getSteamLanguage } from '../../steam/localization';
 import { RetryingRequestCache } from '../../core/request-cache';
 import { committedHeaderAppId } from '../../steam/library-details';
+import { readFreshShortcutLaunchDetails, readShortcutLaunchDetails } from '../../steam/shortcut-details';
 import { expandCandidatesWithEditions } from './editions';
 export { expandCandidatesWithEditions } from './editions';
 import {
@@ -68,15 +69,28 @@ function readShortcutPathFromProperties(doc: Document, shortcutAppId: number): {
 	return { exePath, startDir, launchOptions };
 }
 
+function knownShortcutLaunchOptions(...sources: any[]): string | undefined {
+	for (const source of sources) {
+		for (const container of [source, source?.app_overview, source?.m_appOverview, source?.overview]) {
+			for (const key of ['strLaunchOptions', 'strShortcutLaunchOptions', 'm_strShortcutLaunchOptions', 'shortcut_launch_options', 'strArguments']) {
+				if (typeof container?.[key] === 'string') return container[key].trim();
+			}
+		}
+	}
+	return undefined;
+}
+
 /** Preserve the committed launch definition before asynchronous VDF/IPC work. */
 export function buildImmediateShortcutDetectionContext(doc: Document | null, title: string, shortcutAppId: number, fallbackApp?: any): ShortcutDetectionContext {
 	const app = getShortcutAppById(shortcutAppId, doc || undefined);
+	const details = readShortcutLaunchDetails(shortcutAppId, doc);
 	const fromProperties = doc ? readShortcutPathFromProperties(doc, shortcutAppId) : { exePath: '', startDir: '', launchOptions: '' };
-	const field = (...keys: string[]): string => readShortcutOverviewField(app, ...keys) || readShortcutOverviewField(fallbackApp, ...keys);
+	const field = (...keys: string[]): string => readShortcutOverviewField(details, ...keys)
+		|| readShortcutOverviewField(app, ...keys) || readShortcutOverviewField(fallbackApp, ...keys);
 	const exePath = cleanShortcutPath(field('strShortcutExe', 'm_strShortcutExe', 'shortcut_exe', 'strExePath') || fromProperties.exePath);
 	return { shortcutAppId, title: String(title || field('display_name', 'm_strDisplayName', 'strDisplayName', 'strAppName') || shortcutPathBasename(exePath)).trim(),
 		exePath, startDir: cleanShortcutPath(field('strShortcutStartDir', 'm_strShortcutStartDir', 'shortcut_start_dir') || fromProperties.startDir || shortcutPathDirectory(exePath)),
-		launchOptions: field('strShortcutLaunchOptions', 'm_strShortcutLaunchOptions', 'shortcut_launch_options', 'strArguments') || fromProperties.launchOptions };
+		launchOptions: knownShortcutLaunchOptions(details, app, fallbackApp) ?? fromProperties.launchOptions };
 }
 
 export async function buildShortcutDetectionContext(
@@ -94,6 +108,7 @@ export async function buildShortcutDetectionContext(
 	const app = getShortcutAppById(validId, doc || undefined);
 	const immediate = buildImmediateShortcutDetectionContext(doc, title, validId, app);
 	let { exePath, startDir, launchOptions } = immediate;
+	let launchOptionsKnown = knownShortcutLaunchOptions(readShortcutLaunchDetails(validId, doc), app) !== undefined;
 	const appsApi = ((doc?.defaultView || (typeof window !== 'undefined' ? window : null)) as any)?.SteamClient?.Apps;
 	let backendTitle = '';
 
@@ -105,21 +120,11 @@ export async function buildShortcutDetectionContext(
 	);
 
 	if (!exePath || !startDir) {
-		if (typeof appsApi?.GetCachedAppDetails === 'function') {
-			for (const id of [shortcutAppId, shortcutAppId - 4294967296]) {
-				try {
-					const raw = await withDetectionBudget(Promise.resolve(appsApi.GetCachedAppDetails(id)), 300);
-					if (raw == null) continue;
-					let details: any = raw;
-					if (typeof raw === 'string') details = JSON.parse(raw);
-					if (!details || typeof details !== 'object') continue;
-					exePath ||= readShortcutOverviewField(details, 'strShortcutExe', 'm_strShortcutExe', 'shortcut_exe', 'strExePath');
-					startDir ||= readShortcutOverviewField(details, 'strShortcutStartDir', 'm_strShortcutStartDir', 'shortcut_start_dir');
-					launchOptions ||= readShortcutOverviewField(details, 'strShortcutLaunchOptions', 'm_strShortcutLaunchOptions', 'shortcut_launch_options', 'strLaunchOptions');
-					if (exePath && startDir) break;
-				} catch {}
-			}
-		}
+		const details = await readFreshShortcutLaunchDetails(shortcutAppId, doc);
+		exePath ||= readShortcutOverviewField(details, 'strShortcutExe', 'm_strShortcutExe', 'shortcut_exe', 'strExePath');
+		startDir ||= readShortcutOverviewField(details, 'strShortcutStartDir', 'm_strShortcutStartDir', 'shortcut_start_dir');
+		const freshOptions = knownShortcutLaunchOptions(details);
+		if (freshOptions !== undefined) { launchOptions = freshOptions; launchOptionsKnown = true; }
 	}
 
 	try {
@@ -130,7 +135,7 @@ export async function buildShortcutDetectionContext(
 		if (details && typeof details === 'object' && !details.error) {
 			exePath ||= String(details.exe_path || '');
 			startDir ||= String(details.start_dir || '');
-			launchOptions ||= String(details.launch_options || '');
+			if (!launchOptionsKnown && !launchOptions) launchOptions = String(details.launch_options || '');
 			backendTitle = String(details.title || '').trim();
 			if (exePath) {
 				backendLog(`Resolved shortcut executable from shortcuts.vdf for ${title || backendTitle || shortcutAppId}`);
@@ -274,6 +279,7 @@ export async function enrichShortcutCandidatesRemote(
 				phase: 'remote',
 				local_candidates: (localCandidates || []).slice(0, 6),
 				recovery_mode: recoveryMode,
+				expires_at_ms: Date.now() + 5500,
 			}),
 		}), 6500);
 		if (signal?.aborted) return null;

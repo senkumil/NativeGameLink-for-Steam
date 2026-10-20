@@ -63,7 +63,7 @@ if (!aliasSource.includes('["pes2013"]') || !aliasSource.includes('auto_appid = 
 		|| !detectorSource.includes('automatic_alias_appid')
 		|| !detectorSource.includes('"maintained_alias"')
 		|| !detectorSource.includes('validation_source = "steam_appinfo"')
-		|| !detectorSource.includes('local appinfo = detection_fetch_appinfo(appid)')) {
+		|| !detectorSource.includes('local appinfo = detection_fetch_appinfo(appid, budget)')) {
 	throw new Error('Legacy AppID suggestions must seed maintained aliases and validate direct evidence through Steam appinfo.');
 }
 

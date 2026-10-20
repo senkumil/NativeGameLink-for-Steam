@@ -1,3 +1,4 @@
+import './helpers/installed-steam-check.mjs';
 // Real Chromium/Steam-CSS coverage for synchronous playbar startup and observers.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';

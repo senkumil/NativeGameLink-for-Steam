@@ -1,4 +1,5 @@
 // Real-source first-header Info coverage, including native/shortcut transitions.
+import './helpers/installed-steam-check.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';

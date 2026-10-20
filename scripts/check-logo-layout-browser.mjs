@@ -1,3 +1,4 @@
+import './helpers/installed-steam-check.mjs';
 // Measure final logo positions with this Steam client's own CSS and pin algorithm.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';

@@ -1,3 +1,4 @@
+import './helpers/installed-steam-check.mjs';
 // Exercise real plugin rendering against the installed Steam playbar CSS.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';

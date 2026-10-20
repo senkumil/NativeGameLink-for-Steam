@@ -188,89 +188,111 @@ local function file_exists(path)
     return false
 end
 
+local function is_windows_path(path)
+    if path:match("^%a:") or path:match("^[\\/][\\/]") then return true end
+    if path:sub(1, 1) == "/" then return false end
+    return path:find("\\", 1, true) ~= nil
+end
+
 local function clean_path_input(p)
-    local s = tostring(p or ""):gsub('^["\']+', ''):gsub('["\']+$', '')
-    s = s:gsub("/", "\\")
+    local s = tostring(p or ""):match("^%s*(.-)%s*$") or ""
+    local quote = s:sub(1, 1)
+    if (quote == '"' or quote == "'") and s:sub(-1) == quote then s = s:sub(2, -2) end
     s = s:match("^%s*(.-)%s*$") or ""
-    return s:gsub("\\+$", "")
+    if is_windows_path(s) then
+        s = s:gsub("/", "\\")
+        if s:match("^%a:\\+$") then return s:sub(1, 2) .. "\\" end
+        return s:gsub("\\+$", "")
+    end
+    return s == "/" and s or s:gsub("/+$", "")
+end
+
+local function steam_appid_path(directory, name)
+    if type(deps.fs.join) == "function" then return deps.fs.join(directory, name) end
+    local separator = is_windows_path(directory) and "\\" or "/"
+    return directory:gsub("[\\/]+$", "") .. separator .. name
+end
+
+local function steam_appid_request(request_json)
+    local ok_req, req = pcall(deps.cjson.decode, tostring(request_json or "{}"))
+    if not ok_req or type(req) ~= "table" then req = {} end
+    local exe_path = clean_path_input(req.exe_path or req.shortcutExecutable or req.executable or "")
+    local start_dir = clean_path_input(req.start_dir or req.startDir or "")
+    local search_dirs = {}
+    local seen_dirs = {}
+    local function add_dir(d)
+        local clean = clean_path_input(d)
+        local identity = is_windows_path(clean) and clean:lower() or clean
+        if clean ~= "" and not seen_dirs[identity] then
+            seen_dirs[identity] = true
+            table.insert(search_dirs, clean)
+        end
+    end
+    add_dir(start_dir)
+    if exe_path ~= "" then
+        local dir = clean_path_input(deps.fs.parent_path(exe_path))
+        for _ = 1, 4 do
+            if not dir or dir == "" then break end
+            add_dir(dir)
+            local p = clean_path_input(deps.fs.parent_path(dir))
+            if not p or p == dir then break end
+            dir = p
+        end
+    end
+    return req, search_dirs
+end
+
+local function steam_appid_deadline_expired(req)
+    local deadline = tonumber(req.expires_at_ms)
+    -- os.time has second precision. Reserve that second so an IPC which waited
+    -- in the backend queue cannot mutate the game after its caller timed out.
+    return deadline and deadline > 0 and os.time() * 1000 >= deadline - 1000
+end
+
+local function maintain_steam_appid_file(request_json, restore)
+    local req, search_dirs = steam_appid_request(request_json)
+    local changed_key = restore and "restored" or "modified"
+    if #search_dirs == 0 then
+        return deps.cjson.encode({ ok = true, [changed_key] = false, skipped = "missing_target" })
+    end
+    local changed, errors = false, {}
+    local function failed(path, code, detail)
+        errors[#errors + 1] = { path = path, error = code, detail = detail }
+    end
+    for _, d in ipairs(search_dirs) do
+        local appid_path = steam_appid_path(d, "steam_appid.txt")
+        local bak_path = steam_appid_path(d, "steam_appid.txt.gdl_bak")
+        local source = restore and bak_path or appid_path
+        local destination = restore and appid_path or bak_path
+        if file_exists(source) then
+            if file_exists(destination) then
+                -- Never discard the first backup or overwrite a newly created
+                -- original: both can contain data which the user still needs.
+                failed(source, restore and "steam_appid_restore_conflict" or "steam_appid_backup_conflict")
+            elseif steam_appid_deadline_expired(req) then
+                failed(source, "steam_appid_deadline_exceeded")
+                break
+            else
+                local called, renamed, reason = pcall(os.rename, source, destination)
+                if called and renamed then changed = true
+                else failed(source, "steam_appid_rename_failed", tostring(called and reason or renamed)) end
+            end
+        end
+    end
+    local result = { ok = #errors == 0, [changed_key] = changed }
+    if #errors > 0 then
+        result.error = errors[1].error
+        result.errors = errors
+    end
+    return deps.cjson.encode(result)
 end
 
 function M.neutralize_steam_appid_file(request_json)
-    local ok_req, req = pcall(deps.cjson.decode, tostring(request_json or "{}"))
-    if not ok_req or type(req) ~= "table" then req = {} end
-    local exe_path = clean_path_input(req.exe_path or req.shortcutExecutable or req.executable or "")
-    local start_dir = clean_path_input(req.start_dir or req.startDir or "")
-    if exe_path == "" and start_dir == "" then
-        return deps.cjson.encode({ ok = true, modified = false, skipped = "missing_target" })
-    end
-    local search_dirs = {}
-    local seen_dirs = {}
-    local function add_dir(d)
-        local clean = clean_path_input(d)
-        if clean ~= "" and not seen_dirs[clean:lower()] then
-            seen_dirs[clean:lower()] = true
-            table.insert(search_dirs, clean)
-        end
-    end
-    add_dir(start_dir)
-    if exe_path ~= "" then
-        local dir = clean_path_input(deps.fs.parent_path(exe_path))
-        for _ = 1, 4 do
-            if not dir or dir == "" then break end
-            add_dir(dir)
-            local p = clean_path_input(deps.fs.parent_path(dir))
-            if not p or p == dir then break end
-            dir = p
-        end
-    end
-    local modified = false
-    for _, d in ipairs(search_dirs) do
-        local appid_path = d .. "\\steam_appid.txt"
-        if file_exists(appid_path) then
-            local bak_path = d .. "\\steam_appid.txt.gdl_bak"
-            pcall(os.remove, bak_path)
-            local ok_ren = os.rename(appid_path, bak_path)
-            if ok_ren then modified = true end
-        end
-    end
-    return deps.cjson.encode({ ok = true, modified = modified })
+    return maintain_steam_appid_file(request_json, false)
 end
 
 function M.restore_steam_appid_file(request_json)
-    local ok_req, req = pcall(deps.cjson.decode, tostring(request_json or "{}"))
-    if not ok_req or type(req) ~= "table" then req = {} end
-    local exe_path = clean_path_input(req.exe_path or req.shortcutExecutable or req.executable or "")
-    local start_dir = clean_path_input(req.start_dir or req.startDir or "")
-    local search_dirs = {}
-    local seen_dirs = {}
-    local function add_dir(d)
-        local clean = clean_path_input(d)
-        if clean ~= "" and not seen_dirs[clean:lower()] then
-            seen_dirs[clean:lower()] = true
-            table.insert(search_dirs, clean)
-        end
-    end
-    add_dir(start_dir)
-    if exe_path ~= "" then
-        local dir = clean_path_input(deps.fs.parent_path(exe_path))
-        for _ = 1, 4 do
-            if not dir or dir == "" then break end
-            add_dir(dir)
-            local p = clean_path_input(deps.fs.parent_path(dir))
-            if not p or p == dir then break end
-            dir = p
-        end
-    end
-    local restored = false
-    for _, d in ipairs(search_dirs) do
-        local bak_path = d .. "\\steam_appid.txt.gdl_bak"
-        local appid_path = d .. "\\steam_appid.txt"
-        if file_exists(bak_path) and not file_exists(appid_path) then
-            local ok_ren = os.rename(bak_path, appid_path)
-            if ok_ren then restored = true end
-        end
-    end
-    return deps.cjson.encode({ ok = true, restored = restored })
+    return maintain_steam_appid_file(request_json, true)
 end
 
 function M.binary_cstring(data, position)

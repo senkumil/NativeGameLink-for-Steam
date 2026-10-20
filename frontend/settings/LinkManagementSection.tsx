@@ -58,6 +58,8 @@ function bulkLinkReasonLabel(reason: string | undefined): string {
 			return gdlText('bulk_link_reason_detection', 'Candidate detection failed.');
 		case 'invalid_appid':
 			return gdlText('bulk_link_reason_invalid_appid', 'The detected Steam AppID was invalid.');
+		case 'steam_appid_file_protection_failed':
+			return gdlText('steam_appid_file_protection_failed', 'Could not disable steam_appid.txt. The link was not completed because Steam could open a second game session.');
 		case 'refusing_to_modify_native_steam_app':
 			return gdlText('bulk_link_reason_native', 'The entry was not recognized as a non-Steam shortcut.');
 		case 'canonical_data_unavailable':

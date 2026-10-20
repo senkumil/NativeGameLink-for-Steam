@@ -1,5 +1,5 @@
 import type { ShortcutLinkResult, SteamGameData } from '../../domain/types';
-import { backendLog, neutralizeSteamAppIdFileBackend } from '../../api/backend';
+import { backendLog } from '../../api/backend';
 import { getCanonicalGameData, getGameData } from '../../core/game-data';
 import { shortcutMappingKey, titleMappingKey, updateMappingsChecked } from '../../core/mappings';
 import { normalizeTitle } from '../../core/text';
@@ -15,6 +15,7 @@ import { findMappingForShortcut, getAllShortcutRecords, refreshShortcutRecordsFr
 import { rememberOriginalShortcutTitle, rememberShortcutSteamAppId } from './link-history';
 import { runShortcutMutations, shortcutMutationKeys } from './operation-lock';
 import { LinkOrchestrator } from './link-orchestrator';
+import { shortcutAppIdFileTarget, updateShortcutAppIdFile } from './steam-appid-file';
 import { fetchPlaytimeStatsBatch, setInstantPlaytimeStats } from '../playtime/service';
 
 let shortcutIdentityMutationDepth = 0;
@@ -204,6 +205,7 @@ export async function synchronizeShortcutOfficialIdentity(options: {
 	shortcutIdentityMutationDepth += 1;
 	try {
 		const staleIds = new Set<number>([originalShortcutId]);
+		const appIdFileTarget = shortcutAppIdFileTarget(originalShortcutId);
 		let noLauncherConfigured = false;
 		let nameApplied = false;
 		let nameReady = false;
@@ -362,6 +364,7 @@ export async function synchronizeShortcutOfficialIdentity(options: {
 			const mappingRemove = Array.from(staleIds)
 				.filter(staleId => staleId !== shortcutAppId)
 				.map(staleId => shortcutMappingKey(staleId));
+			if (!await updateShortcutAppIdFile('neutralize', appIdFileTarget)) throw new Error('steam_appid_file_protection_failed');
 			const mappingUpdated = await withTimeout(
 				updateMappingsChecked({ set: mappingSet, remove: mappingRemove }),
 				12000,
@@ -371,6 +374,7 @@ export async function synchronizeShortcutOfficialIdentity(options: {
 				return false;
 			});
 			if (!mappingUpdated) {
+				await updateShortcutAppIdFile('restore', appIdFileTarget);
 				throw new Error('mapping_identity_update_failed');
 			}
 			rememberShortcutSteamAppId(shortcutAppId, options.steamAppId);
@@ -391,15 +395,6 @@ export async function synchronizeShortcutOfficialIdentity(options: {
 			}).catch(err => {
 				backendLog(`Playtime sync warning on link for ${shortcutAppId}: ${err}`);
 			});
-			const shortcutObj = getShortcutAppById(shortcutAppId);
-			const shortcutExe = readShortcutOverviewField(shortcutObj, 'strShortcutExe', 'm_strShortcutExe', 'shortcut_exe', 'strExePath');
-			const shortcutStartDir = readShortcutOverviewField(shortcutObj, 'strShortcutStartDir', 'm_strShortcutStartDir', 'shortcut_start_dir', 'strStartDir');
-			void neutralizeSteamAppIdFileBackend({
-				request_json: JSON.stringify({
-					exe_path: shortcutExe,
-					start_dir: shortcutStartDir,
-				}),
-			}).catch(error => backendLog('Neutralize steam_appid.txt skipped: ' + error));
 			try { options.onIdentityResolved?.(shortcutAppId, officialName, Array.from(staleIds)); }
 			catch (error) { backendLog('Post-link library handoff failed: ' + error); }
 		}

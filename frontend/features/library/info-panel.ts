@@ -707,14 +707,18 @@ export function ensureNativeInfoButton(doc: Document, model: NativeGameInfo): vo
 	if (session) removeNativeInfoButton(doc);
 	const isCurrent = (): boolean => isCurrentInfoShortcut(doc, shortcutId, model.key)
 		&& infoButtonSessions.get(doc)?.sync === syncButtons;
-	const playbarModule = PLAYBAR_CLASS_MODULE(doc);
-	const classes = playbarModule.classes;
+	let playbarModule = PLAYBAR_CLASS_MODULE(doc);
+	let classes = playbarModule.classes;
 	const syncButtons = (): void => {
 		if (isPublicSteamLibraryRoute(doc)) {
 			removeNativeInfoButton(doc);
 			return;
 		}
 		if (!isCurrent()) return;
+		// The first route paint can precede Steam's class exports. Re-resolve
+		// within the existing session so a provisional control can recover.
+		playbarModule = PLAYBAR_CLASS_MODULE(doc);
+		classes = playbarModule.classes;
 		const containers = nativeInfoButtonContainers(doc, classes, shortcutId);
 		const viewportHeight = Math.max(0, doc.defaultView?.innerHeight || doc.documentElement.clientHeight || 0);
 		const isViewportRendered = (container: HTMLElement): boolean => {
@@ -772,6 +776,22 @@ export function ensureNativeInfoButton(doc: Document, model: NativeGameInfo): vo
 				container.insertBefore(button, favorite);
 			} else if (button.dataset.gdlScrollTopActive !== '1' && !button.querySelector('.SVGIcon_Information')) {
 				normalizeInformationButtonIcon(button, playbarModule.native ? (classes.DotDotDot || '') : '');
+			}
+			if (playbarModule.native) {
+				if (button.classList.contains('gdl-info-button-fallback')) button.classList.remove('gdl-info-button-fallback');
+				if (!hasCssModuleClass(button, classes.MenuButton)) addCssModuleClass(button, classes.MenuButton);
+				const svg = button.querySelector('svg');
+				let wrapper = svg?.parentElement;
+				if (svg && wrapper === button) {
+					wrapper = doc.createElement('div');
+					button.insertBefore(wrapper, svg);
+					wrapper.appendChild(svg);
+				}
+				if (wrapper && wrapper !== button && !hasCssModuleClass(wrapper, classes.DotDotDot)) addCssModuleClass(wrapper, classes.DotDotDot);
+				const active = hasCssModuleClass(button, classes.MenuActive);
+				if (button.getAttribute('aria-expanded') === 'true') {
+					if (!active) addCssModuleClass(button, classes.MenuActive);
+				} else if (active) removeCssModuleClass(button, classes.MenuActive);
 			}
 			if (button.dataset.gameKey !== model.key) button.dataset.gameKey = model.key;
 			// Steam can clone the sticky controls with our attributes and icon,

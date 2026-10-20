@@ -379,7 +379,7 @@ export async function processPendingLinkJobs(targetDoc?: Document | null): Promi
 
 			current.attempts += 1;
 			current.lastError = String(result?.error || (isMapped && !resourcesComplete ? 'resource_sync_incomplete' : 'link_failed')).replace(/^Error:\s*/, '');
-			const isTerminalError = new Set(['invalid_appid', 'refusing_to_modify_native_steam_app', 'shortcut_not_found', 'shortcut_identity_ambiguous', 'shortcut_identity_changed']).has(current.lastError);
+			const isTerminalError = new Set(['invalid_appid', 'refusing_to_modify_native_steam_app', 'shortcut_not_found', 'shortcut_identity_ambiguous', 'shortcut_identity_changed', 'steam_appid_file_protection_failed']).has(current.lastError);
 			const hardFailure = current.attempts >= 5 || isTerminalError;
 			if (hardFailure) {
 				current.status = 'failed';

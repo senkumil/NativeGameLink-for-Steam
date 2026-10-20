@@ -2,6 +2,7 @@ import { listShortcutsBackend, backendLog } from '../../api/backend';
 import { findMappingByExe, findMappingForTitle, isMappingSnapshotVerified, mappings, shortcutMappingKey, titleMappingKey, updateMappingsChecked } from '../../core/mappings';
 import { normalizeTitle } from '../../core/text';
 import { getShortcutAppById, getSteamAppStore, readShortcutOverviewField, replaceFallbackShortcutApps, shortcutExecutableIdentity, toSignedShortcutAppId } from '../../steam/shortcuts';
+import { readShortcutLaunchDetails } from '../../steam/shortcut-details';
 
 export interface ShortcutRecord {
 	id: number;
@@ -100,6 +101,20 @@ export function getAllShortcutRecords(doc?: Document | null): ShortcutRecord[] {
 		if (!id || seen.has(id)) return;
 		const title = String(app?.display_name || app?.m_strDisplayName || app?.strDisplayName || app?.strAppName || app?.name || '').trim();
 		if (!title) return;
+		// Steam stores launch fields in appDetailsStore, separate from its live
+		// overview. Complete this read-only record before de-duplicating the VDF
+		// row; otherwise an overview without an executable hides valid evidence.
+		const details = readShortcutLaunchDetails(id, doc);
+		const fallback = backendShortcutRecords.find(record => record.id === id)?.app;
+		const field = (...keys: string[]): string => readShortcutOverviewField(app, ...keys)
+			|| readShortcutOverviewField(details, ...keys) || readShortcutOverviewField(fallback, ...keys);
+		const exe = field('strShortcutExe', 'm_strShortcutExe', 'shortcut_exe', 'strExePath');
+		const launchKeys = ['strShortcutLaunchOptions', 'm_strShortcutLaunchOptions', 'shortcut_launch_options', 'strLaunchOptions'];
+		const launchSource = [app, details, fallback].find(source => launchKeys.some(key => typeof source?.[key] === 'string'));
+		const launchKey = launchKeys.find(key => typeof launchSource?.[key] === 'string');
+		if (exe) app = { ...app, display_name: title, strShortcutExe: exe,
+			strShortcutStartDir: field('strShortcutStartDir', 'm_strShortcutStartDir', 'shortcut_start_dir'),
+			strShortcutLaunchOptions: launchKey ? launchSource[launchKey] : '' };
 		seen.add(id);
 		records.push({ id, title, app });
 	};

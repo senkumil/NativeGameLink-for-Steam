@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import ts from 'typescript';
+import { browserLaunchOptions } from './helpers/browser-launch.mjs';
 const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE_PATH || 'playwright');
 const source = fs.readFileSync('frontend/features/shortcuts/properties.ts', 'utf8');
@@ -20,7 +21,7 @@ const html = new Function('SHORTCUT_PROPERTIES_STYLE', 'escapeHtml', 'gdlText', 
 );
 assert.ok(html.indexOf('<div class="gdl-auto-detect ') < html.indexOf('<div class="gdl-native-setting-row gdl-link-actions'), 'actions follow suggestions');
 assert.doesNotMatch(html, /gdl-tracking-executable|Use the real game executable/, 'Properties must not render executable replacement controls');
-const browser = await chromium.launch({ headless: true, channel: 'msedge' });
+const browser = await chromium.launch({ headless: true, ...browserLaunchOptions() });
 try {
   for (const width of [680, 420]) {
     const page = await browser.newPage({ viewport: { width: width + 40, height: 700 } });

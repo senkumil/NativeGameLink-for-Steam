@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import ts from 'typescript';
+import { browserLaunchOptions } from './helpers/browser-launch.mjs';
 const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE_PATH || 'playwright');
 const source = ts.transpileModule(fs.readFileSync('frontend/features/shortcuts/manual-link.ts', 'utf8'), {
@@ -18,7 +19,7 @@ const detectorSource = ts.transpileModule(fs.readFileSync('frontend/features/sho
   + '\nexport { looksLikeNativeAddAction, looksLikeAddSelectedAction };', {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
 }).outputText;
-const browser = await chromium.launch({ headless: true, channel: process.env.PLAYWRIGHT_CHANNEL || 'msedge' });
+const browser = await chromium.launch({ headless: true, ...browserLaunchOptions() });
 try {
   for (const viewport of [{ width: 1920, height: 1080 }, { width: 800, height: 450 }, { width: 360, height: 640 }]) {
     const page = await browser.newPage({ viewport });
@@ -52,6 +53,7 @@ try {
         shouldAutoApplyNoLauncher: () => false,
         getPendingLinkJob: () => null,
         isShortcutIdentityMutationInProgress: () => false,
+        invalidateShortcutReview: () => 0,
       };
       const detectionExports = {};
       new Function('require', 'exports', detectionCode)(() => ({ ...mocks, RetryingRequestCache: class {} }), detectionExports);

@@ -1,5 +1,5 @@
 import { loc } from '../../steam/localization';
-import { shortcutExecutableIdentity } from '../../steam/shortcuts';
+import { cleanShortcutPath, shortcutExecutableIdentity } from '../../steam/shortcuts';
 import { shortcutRuntimeHost } from './host';
 
 function isRenderedNativeElement(doc: Document, element: Element): element is HTMLElement {
@@ -47,6 +47,7 @@ function isNativeAddTitle(element: HTMLElement): boolean {
 	const scopedText = titleText || normalizedDialogText(element.textContent);
 
 	const nativeAddTokens = [
+		loc('AddNonSteam_Title', ''),
 		loc('AddShortcut_Title', ''),
 		loc('Menu_AddNonSteamGame', ''),
 		loc('AddNonSteamGame', ''),
@@ -160,8 +161,8 @@ function executableStringsFromElement(element: Element): string[] {
 		// title/data attribute while visually truncating the row.
 		const matches = text.match(/(?:"?[a-z]:[\\/][^\n\r<>|]{1,420}?\.exe"?|\/(?:home|usr|opt|applications)\/[^\n\r<>|]{1,420}?(?:\.exe|\.appimage))/gi) || [];
 		for (const match of matches) {
-			const normalized = shortcutExecutableIdentity(match.replace(/^"|"$/g, ''));
-			if (normalized && !values.includes(normalized)) values.push(normalized);
+			const path = cleanShortcutPath(match);
+			if (path && !values.some(value => shortcutExecutableIdentity(value) === shortcutExecutableIdentity(path))) values.push(path);
 		}
 	};
 	push(element.textContent);
@@ -188,12 +189,48 @@ function isSelectedControl(doc: Document, element: HTMLElement): boolean {
 	return /(?:^|\s|_)(?:checked|selected|active)(?:$|\s|_)/.test(cls);
 }
 
+export interface NativeAddProgramSelection { title: string; exePath: string }
+
+function nativeProgramSelection(element: HTMLElement): (NativeAddProgramSelection & { selected?: boolean }) | null {
+	// The native row component owns the original program name and executable.
+	// Read its own props rather than deriving a name from a filename or from the
+	// currently selected Library page, which can show another game entirely.
+	try {
+		const key = Object.getOwnPropertyNames(element).find(name => name.startsWith('__reactFiber$') || name.startsWith('__reactInternalInstance$'));
+		let fiber = key ? (element as any)[key] : null;
+		for (let depth = 0; fiber && depth < 8; depth += 1, fiber = fiber.return) {
+			const props = fiber.memoizedProps || fiber.pendingProps;
+			const app = props?.app;
+			if (!app || typeof app.strAppName !== 'string' || typeof app.strExePath !== 'string') continue;
+			const exePath = cleanShortcutPath(app.strExePath);
+			if (!/^(?:[a-z]:[\\/]|\\\\|\/)/i.test(exePath)) return null;
+			return { title: app.strAppName.trim(), exePath, selected: props.bIsSelected };
+		}
+	} catch {}
+	return null;
+}
+
 function nearestExecutableRow(control: HTMLElement): HTMLElement | null {
 	let current: HTMLElement | null = control;
 	for (let depth = 0; current && depth < 9; depth += 1, current = current.parentElement) {
-		if (executableStringsFromElement(current).length > 0) return current;
+		if (current === current.ownerDocument.body || current.matches('[role="dialog"], [aria-modal="true"]')) return null;
+		const executables = executableStringsFromElement(current);
+		if (executables.length > 1) return null;
+		if (executables.length === 1 || nativeProgramSelection(current)) return current;
 	}
 	return null;
+}
+
+function selectedProgramRow(row: HTMLElement): NativeAddProgramSelection | null {
+	const paths = executableStringsFromElement(row);
+	const native = nativeProgramSelection(row);
+	if (native) return native.selected !== false && (paths.length === 0 || (paths.length === 1
+		&& shortcutExecutableIdentity(paths[0]) === shortcutExecutableIdentity(native.exePath)))
+		? { title: native.title, exePath: native.exePath } : null;
+	if (paths.length !== 1) return null;
+	const label = row.querySelector<HTMLElement>('[data-app-name], [class*="AppName"], [class*="ProgramName"]');
+	const title = String(label?.getAttribute('data-app-name') || label?.textContent || row.getAttribute('data-app-name') || '').trim();
+	return { title, exePath: paths[0] };
 }
 
 /** Detect Steam's native Add a Non-Steam Game picker structurally.
@@ -230,7 +267,11 @@ export function documentHasNativeAddNonSteamDialog(doc: Document): boolean {
 			'[role="row"], tr, [class*="ListRow"], [class*="listrow"], [class*="Program"], [class*="program"]',
 		)).filter(element => isRenderedNativeElement(doc, element));
 		const executables = executableStringsFromElement(candidate);
-		const hasSelectionList = rowLike.length >= 1 || checkboxLike.length >= 2;
+		const hasNativeProgramRow = checkboxLike.some(control => {
+			const row = nearestExecutableRow(control);
+			return Boolean(row && nativeProgramSelection(row));
+		});
+		const hasSelectionList = rowLike.length >= 1 || checkboxLike.length >= 2 || hasNativeProgramRow;
 		if (matchesTitle && hasSelectionList && (searchFields.length >= 1 || executables.length >= 1)) return true;
 		// Fallback for client builds whose dialog title is not exposed in the DOM.
 		// Require a real search box and repeated selectable rows; a Properties
@@ -244,8 +285,8 @@ export function documentHasNativeAddNonSteamDialog(doc: Document): boolean {
  * Capturing this is essential because deleting and re-adding the same shortcut
  * can reuse the exact same Shortcut AppID, making an ID-only before/after diff
  * impossible to distinguish from Steam's stale appStore entry. */
-export function nativeAddSelectedExecutableIdentities(): string[] {
-	const result: string[] = [];
+export function nativeAddSelectedPrograms(): NativeAddProgramSelection[] {
+	const result: NativeAddProgramSelection[] = [];
 	for (const doc of candidateSteamDocuments()) {
 		if (!documentHasNativeAddNonSteamDialog(doc)) continue;
 		const controls = Array.from(doc.querySelectorAll<HTMLElement>(
@@ -254,12 +295,20 @@ export function nativeAddSelectedExecutableIdentities(): string[] {
 		for (const control of controls) {
 			const row = nearestExecutableRow(control);
 			if (!row) continue;
-			for (const executable of executableStringsFromElement(row)) {
-				if (!result.includes(executable)) result.push(executable);
-			}
+			const selection = selectedProgramRow(row);
+			if (selection && !result.some(value => value.title === selection.title
+				&& shortcutExecutableIdentity(value.exePath) === shortcutExecutableIdentity(selection.exePath))) result.push(selection);
 		}
 	}
 	return result;
+}
+
+export function nativeAddSelectedExecutablePaths(): string[] {
+	return Array.from(new Set(nativeAddSelectedPrograms().map(selection => selection.exePath)));
+}
+
+export function nativeAddSelectedExecutableIdentities(): string[] {
+	return nativeAddSelectedExecutablePaths().map(shortcutExecutableIdentity);
 }
 
 export function nativeAddNonSteamDialogOpen(): boolean {

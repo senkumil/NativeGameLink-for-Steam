@@ -1,3 +1,4 @@
+import './helpers/installed-steam-check.mjs';
 // Exercise the current plugin in a real Chromium DOM with Steam's installed CSS.
 // No browser package or running Steam session is required.
 import assert from 'node:assert/strict';

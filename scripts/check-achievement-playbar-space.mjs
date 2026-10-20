@@ -101,7 +101,7 @@ function harness(native = true, blueprint = false) {
 {
   const h = harness(false), bar = h.makeBar(), stat = h.makeStat(bar);
   h.syncAchievementPlaybarSpace(h.doc);
-  assert.equal(stat.style.getPropertyValue('margin-inline-end'), '45px', 'Class discovery failure uses the actual 40px compatibility Info control');
+  assert.equal(stat.style.getPropertyValue('margin-inline-end'), '47px', 'Class discovery failure keeps the same 32px control and 10px native margin');
 }
 
 {

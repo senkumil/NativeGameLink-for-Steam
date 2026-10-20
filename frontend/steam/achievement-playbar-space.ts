@@ -1,5 +1,5 @@
 import { PLAYBAR_CLASS_MODULE } from './css';
-import { closestWithCssModuleClass, elementsWithCssModuleClass, hasNativeUiBlueprint, NATIVE_UI_BLUEPRINT_KEYS } from './native-dom';
+import { closestWithCssModuleClass, elementsWithCssModuleClass } from './native-dom';
 
 interface PendingInfoSpace {
 	value: string;
@@ -35,10 +35,8 @@ function hasInformationControl(doc: Document, buttons: HTMLElement): boolean {
 export function syncAchievementPlaybarSpace(doc: Document): void {
 	const module = PLAYBAR_CLASS_MODULE(doc);
 	const classes = module.classes;
-	// The native MenuButton is 32px with a 10px trailing margin. The compatibility
-	// Info control is 40px and has no native margin when class discovery fails.
-	// Info also prefers a captured native button when class discovery falls back.
-	const controlWidth = module.native || hasNativeUiBlueprint(NATIVE_UI_BLUEPRINT_KEYS.infoButton) ? 42 : 40;
+	// Both the native and provisional controls use 32px plus a 10px margin.
+	const controlWidth = 42;
 	for (const stat of doc.querySelectorAll<HTMLElement>('[data-gdl-playbar-achievements="1"]')) {
 		const playbar = closestWithCssModuleClass(stat, classes.Container);
 		const buttons = playbar && elementsWithCssModuleClass(playbar, classes.AppButtonsContainer)[0];

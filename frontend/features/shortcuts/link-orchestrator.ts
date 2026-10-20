@@ -1,10 +1,11 @@
 import type { ShortcutLinkResult, SteamGameData } from '../../domain/types';
-import { backendLog, neutralizeSteamAppIdFileBackend } from '../../api/backend';
+import { backendLog } from '../../api/backend';
 import { getCanonicalGameData, getGameData } from '../../core/game-data';
 import { shortcutMappingKey, titleMappingKey, updateMappingsChecked } from '../../core/mappings';
 import { normalizeTitle } from '../../core/text';
 import { gdlText } from '../../steam/localization';
 import { getShortcutAppById, readShortcutOverviewField, shortcutExecutableIdentity } from '../../steam/shortcuts';
+import { readFreshShortcutLaunchDetails } from '../../steam/shortcut-details';
 import {
 	applyOfficialShortcutIcon, getModernLibraryAssets, invalidateLibraryAssetCaches,
 	refreshModernLibraryAssets, reserveShortcutArtworkTarget, spoofArtwork, type ArtworkApplyResult,
@@ -27,6 +28,7 @@ import {
 	saveShortcutManifest, clearShortcutManifest, createLinkTransaction,
 } from './transaction';
 import { getShortcutEdition, saveShortcutEdition } from './editions';
+import { shortcutAppIdFileTarget, updateShortcutAppIdFile } from './steam-appid-file';
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, errorCode: string): Promise<T> {
 	return new Promise<T>((resolve, reject) => {
@@ -70,9 +72,25 @@ async function confirmShortcutRename(
 				app, 'strShortcutExe', 'm_strShortcutExe', 'shortcut_exe', 'strExePath',
 			)) === expected);
 		if (matches(getShortcutAppById(previousId, options.doc || undefined))) return previousId;
-		const candidates = getAllShortcutRecords(options.doc)
+		const records = getAllShortcutRecords(options.doc);
+		if (records.some(record => record.id === previousId && matches(record.app))) return previousId;
+		const candidates = records
 			.filter(record => !idsBeforeRename.has(record.id) && matches(record.app));
 		if (candidates.length > 1) throw new Error('shortcut_identity_ambiguous');
+		if (expected && (wait === 500 || wait === 800)) {
+			const incomplete = records.filter(record => (record.id === previousId || !idsBeforeRename.has(record.id))
+				&& shortcutDisplayName(record.app) === name
+				&& !readShortcutOverviewField(record.app, 'strShortcutExe', 'm_strShortcutExe', 'shortcut_exe', 'strExePath'));
+			if (incomplete.length > 2) throw new Error('shortcut_identity_ambiguous');
+			const fresh = await Promise.all(incomplete.map(async record => ({ id: record.id,
+				details: await readFreshShortcutLaunchDetails(record.id, options.doc) })));
+			if (!tx.isCurrent()) throw new Error('transaction_aborted');
+			const confirmed = fresh.filter(item => shortcutExecutableIdentity(readShortcutOverviewField(item.details, 'strShortcutExe')) === expected
+				&& (!item.details?.strDisplayName || item.details.strDisplayName === name)
+				&& shortcutDisplayName(getShortcutAppById(item.id, options.doc || undefined)) === name);
+			if (confirmed.length > 1) throw new Error('shortcut_identity_ambiguous');
+			if (confirmed.length === 1) return confirmed[0].id;
+		}
 		const candidate = candidates[0]?.id || 0;
 		if (candidate && candidate === stableCandidate) return candidate;
 		stableCandidate = candidate;
@@ -121,8 +139,12 @@ export class LinkOrchestrator {
 				const exact = Number(initialId);
 				const app = Number.isFinite(exact) && exact >= 2147483648 ? getShortcutAppById(exact, options.doc || undefined) : null;
 				if (app) {
-					const executable = shortcutExecutableIdentity(readShortcutOverviewField(
+					let executable = shortcutExecutableIdentity(readShortcutOverviewField(
 						app, 'strShortcutExe', 'm_strShortcutExe', 'shortcut_exe', 'strExePath',
+					));
+					if (!executable && expectedExecutable) executable = shortcutExecutableIdentity(readShortcutOverviewField(
+						getAllShortcutRecords(options.doc).find(record => record.id === exact)?.app,
+						'strShortcutExe', 'm_strShortcutExe', 'shortcut_exe', 'strExePath',
 					));
 					if (expectedExecutable && executable && executable !== expectedExecutable) {
 						throw new Error('shortcut_identity_changed');
@@ -158,6 +180,13 @@ export class LinkOrchestrator {
 		// confirmation before waiting for an unrelated backend/VDF request.
 		const immediate = resolveLiveIdentity();
 		if (immediate) return immediate;
+		if (initialId && expectedExecutable && getShortcutAppById(initialId, options.doc || undefined)) {
+			const details = await readFreshShortcutLaunchDetails(initialId, options.doc);
+			if (!tx.isCurrent()) throw new Error('transaction_aborted');
+			const executable = shortcutExecutableIdentity(readShortcutOverviewField(details, 'strShortcutExe'));
+			if (executable && executable !== expectedExecutable) throw new Error('shortcut_identity_changed');
+			if (executable === expectedExecutable) { tx.resolvedShortcutAppId = initialId; return initialId; }
+		}
 		await refreshShortcutRecordsFromBackend().catch((): void => {});
 		const waits = [0, 100, 250, 500, 900, 1500, 2500];
 		for (const wait of waits) {
@@ -341,6 +370,7 @@ export class LinkOrchestrator {
 		shortcutAppId: number,
 		staleIds: Set<number>,
 		options: OrchestratorLinkOptions,
+		fileTarget = shortcutAppIdFileTarget(shortcutAppId, options.doc, options.shortcutExecutable),
 	): Promise<void> {
 		tx.phase = 'committing_mapping';
 		if (!tx.isCurrent()) throw new Error('transaction_aborted');
@@ -361,6 +391,10 @@ export class LinkOrchestrator {
 			.filter(staleId => staleId !== shortcutAppId)
 			.map(staleId => shortcutMappingKey(staleId));
 
+		const protectedFile = await updateShortcutAppIdFile('neutralize', fileTarget);
+		if (!tx.isCurrent()) throw new Error('transaction_aborted');
+		if (!protectedFile) throw new Error('steam_appid_file_protection_failed');
+
 		const mappingUpdated = await withTimeout(
 			updateMappingsChecked({ set: mappingSet, remove: mappingRemove }),
 			12000,
@@ -368,21 +402,12 @@ export class LinkOrchestrator {
 		).catch((): boolean => false);
 
 		if (!mappingUpdated) {
+			await updateShortcutAppIdFile('restore', fileTarget);
 			throw new Error('mapping_identity_update_failed');
 		}
 
 		rememberShortcutSteamAppId(shortcutAppId, tx.targetSteamAppId);
 
-		const shortcutObj = getShortcutAppById(shortcutAppId, options.doc || undefined);
-		const shortcutExe = readShortcutOverviewField(shortcutObj, 'strShortcutExe', 'm_strShortcutExe', 'shortcut_exe', 'strExePath') || options.shortcutExecutable || '';
-		const shortcutStartDir = readShortcutOverviewField(shortcutObj, 'strShortcutStartDir', 'm_strShortcutStartDir', 'shortcut_start_dir', 'strStartDir');
-
-		void neutralizeSteamAppIdFileBackend({
-			request_json: JSON.stringify({
-				exe_path: shortcutExe,
-				start_dir: shortcutStartDir,
-			}),
-		}).catch((): void => {});
 	}
 
 	/**
@@ -492,6 +517,7 @@ export class LinkOrchestrator {
 			onStatus(gdlText('linked_updating', '✓ Match verified for "{name}". Applying name, icon and artwork...', { name: canonicalName || title }), '#5ba32b');
 
 			// Step 3: Mutate identity
+			const appIdFileTarget = shortcutAppIdFileTarget(Number(tx.resolvedShortcutAppId), options.doc, options.shortcutExecutable);
 			const identityResult = await this.mutateShortcutIdentity(tx, options, data, canonicalName);
 			if (!tx.isCurrent()) throw new Error('transaction_aborted');
 
@@ -547,7 +573,7 @@ export class LinkOrchestrator {
 			// Step 5: Publish the stable shortcut -> Steam mapping atomically. The
 			// mapping subscriber owns the one visible Library refresh for a new or
 			// changed AppID.
-			await this.commitMapping(tx, finalShortcutId, identityResult.staleIds, options);
+			await this.commitMapping(tx, finalShortcutId, identityResult.staleIds, options, appIdFileTarget);
 			if (!tx.isCurrent()) throw new Error('transaction_aborted');
 			releaseArtworkReservation();
 			releaseArtworkReservation = (): void => {};
@@ -589,7 +615,9 @@ export class LinkOrchestrator {
 			tx.error = String(e);
 			backendLog('LinkOrchestrator error: ' + e);
 			const error = e instanceof Error ? e.message : String(e).replace(/^Error:\s*/, '');
-			onStatus(error === 'shortcut_rename_pending'
+			onStatus(error === 'steam_appid_file_protection_failed'
+				? gdlText('steam_appid_file_protection_failed', 'Could not disable steam_appid.txt. The link was not completed because Steam could open a second game session.')
+				: error === 'shortcut_rename_pending'
 				? gdlText('shortcut_rename_pending', 'Steam is updating the shortcut identity. NativeGameLink will finish the link in the background without using the previous entry.')
 				: gdlText('save_failed', 'Could not complete the link. It remains unlinked and can be retried.'),
 				error === 'shortcut_rename_pending' ? '#e5ad37' : '#ff6b6b');

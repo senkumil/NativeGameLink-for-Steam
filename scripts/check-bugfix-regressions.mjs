@@ -8,6 +8,7 @@ const detectionTs = read('frontend/features/shortcuts/detection.ts');
 const properties = read('frontend/features/shortcuts/properties.ts');
 const propertiesStyle = read('frontend/features/shortcuts/properties-style.ts');
 const manualLink = read('frontend/features/shortcuts/manual-link.ts');
+const manualLinkReview = read('frontend/features/shortcuts/manual-link-review.ts');
 const manualLinkProgress = read('frontend/features/shortcuts/manual-link-progress.ts');
 const factoryReset = read('frontend/features/shortcuts/factory-reset.ts');
 const factoryUi = read('frontend/settings/FactoryResetSection.tsx');
@@ -126,8 +127,8 @@ assert(properties.includes('detectShortcutCandidatesLocal') && properties.includ
 assert(propertiesStyle.includes('color-scheme: dark') && propertiesStyle.includes('.gdl-native-select option'), 'Properties suggestion dropdown keeps Steam-dark option colors');
 assert(properties.includes('candidateForPreview') && properties.includes('linkedPreviewCandidate'), 'Properties preview resolves the exact selected AppID, including the currently linked entry');
 assert(properties.includes('previousSelectionStillAvailable') && properties.includes('suggestionUserInteracted && previousSelectionStillAvailable'), 'async candidate enrichment preserves an explicit user dropdown selection');
-assert(manualLink.includes('detectShortcutCandidatesLocal') && manualLink.includes('enrichShortcutCandidatesRemote'), 'Manual review modal also uses progressive local + remote suggestions');
-assert(manualLink.includes('buildImmediateShortcutDetectionContext') && manualLink.includes('detectShortcutCandidatesLocal(immediateContext)'), 'manual detection starts with the available executable and folder before asynchronous hydration');
+assert(manualLinkReview.includes('detectShortcutCandidatesLocal') && manualLinkReview.includes('enrichShortcutCandidatesRemote'), 'Manual review modal also uses progressive local + remote suggestions');
+assert(manualLinkReview.includes('buildImmediateShortcutDetectionContext') && manualLinkReview.includes('detectShortcutCandidatesLocal(immediateContext)'), 'manual detection starts with the available executable and folder before asynchronous hydration');
 assert(manualLink.includes('function displayConfidence') && manualLink.includes('return displayReviewConfidence(candidate)')
   && detectionTs.includes('export function displayReviewConfidence') && detectionTs.includes('candidate.score >= 90')
   && detectionTs.includes('candidate.negative_reasons?.length'), 'manual and Properties confidence badges share evidence and contradiction rules');

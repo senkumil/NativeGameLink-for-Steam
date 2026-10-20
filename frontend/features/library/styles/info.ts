@@ -5,12 +5,14 @@ export function ensureInfoPanelStyles(doc: Document): void {
 		[data-gdl-game-info-button="1"] { cursor:pointer;display:flex !important;align-items:center !important;justify-content:center !important;visibility:visible !important;opacity:1 !important;flex:0 0 auto !important; }
 		/* Native MenuButton/DotDotDot classes own the icon dimensions. */
 		[data-gdl-game-info-button="1"].gdl-info-button-fallback {
-			width:40px;height:40px;display:flex;align-items:center;justify-content:center;
+			width:32px;height:32px;margin-right:10px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;
 			padding:0;border:0;border-radius:2px;background:rgba(58,69,83,.72);color:#a8b0ba;
 		}
 		[data-gdl-game-info-button="1"].gdl-info-button-fallback:hover,
 		[data-gdl-game-info-button="1"].gdl-info-button-fallback.gdl-info-active { background:rgba(78,91,108,.88);color:#fff;box-shadow:inset 0 1px 0 rgba(255,255,255,.12); }
 		[data-gdl-game-info-button="1"].gdl-info-button-fallback svg { width:24px;height:24px;display:block; }
+		[data-gdl-game-info-button="1"].gdl-info-button-fallback .SVGIcon_Information .I { fill:currentColor; }
+		[data-gdl-game-info-button="1"].gdl-info-button-fallback .SVGIcon_Information circle[fill="none"] { stroke:currentColor; }
 
 		#gdl-game-info-panel {
 			transition: height 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.28s ease-in-out, transform 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;

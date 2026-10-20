@@ -4,17 +4,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import ts from 'typescript';
+import { createRequire } from 'node:module';
+import { browserLaunchOptions } from './helpers/browser-launch.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const edge = process.env.ACHIEVEMENT_BROWSER_EXECUTABLE || process.env.CLOUD_BROWSER_EXECUTABLE
-  || 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
-const playwrightModulePath = process.env.PLAYWRIGHT_MODULE_PATH || path.join(process.env.USERPROFILE || '',
-  '.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright/index.mjs');
-const playwrightPath = fs.existsSync(playwrightModulePath) && fs.statSync(playwrightModulePath).isDirectory()
-  ? path.join(playwrightModulePath, 'index.mjs') : playwrightModulePath;
-assert(fs.existsSync(edge), `Edge executable missing: ${edge}`);
-assert(fs.existsSync(playwrightPath), `Playwright missing; set PLAYWRIGHT_MODULE_PATH: ${playwrightPath}`);
-const { chromium } = await import(pathToFileURL(playwrightPath).href);
+const require = createRequire(import.meta.url);
+const { chromium } = require(process.env.PLAYWRIGHT_MODULE_PATH || 'playwright');
 
 const sources = Object.fromEntries([
   ['sidebar', 'frontend/features/achievements/sidebar.ts'],
@@ -335,7 +330,8 @@ html{background:#262c33}body{margin:28px;font-family:"Motiva Sans",Arial,sans-se
 #gdl-achievements-section{width:356px}#fixture-caption{font-size:12px;color:#8f98a0;margin-bottom:20px}
 </style></head><body><div id="fixture-caption">Achievement sidebar</div><section id="gdl-achievements-section">
 <h2 class="gdl-native-section-heading">Logros</h2><div id="gdl-achievements-content"></div></section></body></html>`);
-const browser = await chromium.launch({ executablePath: edge, headless: true,
+const browser = await chromium.launch({ ...browserLaunchOptions(), ...(process.env.ACHIEVEMENT_BROWSER_EXECUTABLE
+  ? { executablePath: process.env.ACHIEVEMENT_BROWSER_EXECUTABLE } : {}), headless: true,
   args: ['--allow-file-access-from-files', '--disable-background-networking', '--no-first-run'] });
 let report;
 try {

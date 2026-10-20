@@ -162,14 +162,14 @@ function readProjectFile(relPath) {
 }
 
 // --------------------------------------------------------------------------
-// DFAST12: Modal generation guard against race conditions
+// DFAST12: Review owns both its generation and the exact modal instance
 // --------------------------------------------------------------------------
 {
-	const manualLinkTs = readProjectFile('frontend/features/shortcuts/manual-link.ts');
-	if (!manualLinkTs.includes('globalDetectionGeneration')
-		|| !manualLinkTs.includes('currentGeneration')
-		|| !manualLinkTs.includes('globalDetectionGeneration !== currentGeneration')) {
-		throw new Error('DFAST12 Failed: manual-link.ts missing generation ID guard against async race conditions.');
+	const reviewTs = readProjectFile('frontend/features/shortcuts/manual-link-review.ts');
+	if (!reviewTs.includes('globalDetectionGeneration === currentGeneration')
+		|| !reviewTs.includes("getElementById('gdl-manual-link-modal') === ownedModal")
+		|| !reviewTs.includes('ownedModal?._shortcutAppId === record.id')) {
+		throw new Error('DFAST12 Failed: review workflow must scope async responses to its generation, modal, and shortcut ID.');
 	}
 	console.log('✓ DFAST12 Passed: Generation ID guard prevents out-of-order or stale async responses from updating modal.');
 }
@@ -179,8 +179,9 @@ function readProjectFile(relPath) {
 // --------------------------------------------------------------------------
 {
 	const manualLinkTs = readProjectFile('frontend/features/shortcuts/manual-link.ts');
-	if (!manualLinkTs.includes('loadingShown && !manualLinkModalPresent(immediateDoc)')) {
-		throw new Error('DFAST13 Failed: manual-link.ts does not check for modal presence before continuing detection.');
+	const reviewTs = readProjectFile('frontend/features/shortcuts/manual-link-review.ts');
+	if (!manualLinkTs.includes('invalidateShortcutReview()') || !reviewTs.includes('if (!ownsReview()) return;')) {
+		throw new Error('DFAST13 Failed: closing a modal must invalidate pending detection and late responses must abort.');
 	}
 	console.log('✓ DFAST13 Passed: Detection gracefully aborts when modal is closed by user.');
 }
@@ -312,6 +313,7 @@ function readProjectFile(relPath) {
 {
 	const frontendFiles = [
 		'frontend/features/shortcuts/manual-link.ts',
+		'frontend/features/shortcuts/manual-link-review.ts',
 		'frontend/features/shortcuts/detection.ts',
 		'frontend/features/shortcuts/candidate-merger.ts',
 		'frontend/features/shortcuts/bulk-link.ts',

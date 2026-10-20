@@ -4,7 +4,8 @@ import vm from 'node:vm';
 import ts from 'typescript';
 
 function load(file, mocks, globals = {}) {
- const context = vm.createContext({ exports: {}, require: () => mocks, ...globals });
+ const context = vm.createContext({ exports: {}, require: specifier => specifier === './steam-appid-file'
+  ? load('frontend/features/shortcuts/steam-appid-file.ts', mocks, globals) : mocks, ...globals });
  vm.runInContext(ts.transpileModule(fs.readFileSync(file, 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
  }).outputText, context);
@@ -103,7 +104,7 @@ const input = (id, extra = {}) => ({ shortcutAppId: id, title: 'Same Game', stea
  assert.equal(state.calls.length, 1, 'A renderer restart resumes interrupted running work');
  assert.equal(api.getPendingLinkJob(interrupted.id), null);
 }
-for (const error of ['invalid_appid', 'Error: refusing_to_modify_native_steam_app', 'shortcut_identity_ambiguous', 'shortcut_identity_changed']) {
+for (const error of ['invalid_appid', 'Error: refusing_to_modify_native_steam_app', 'shortcut_identity_ambiguous', 'shortcut_identity_changed', 'steam_appid_file_protection_failed']) {
  const { api, state } = queueHarness();
  state.result = async () => ({ ok: false, error });
  const job = api.enqueueLinkJob(input(3000000001));
@@ -164,6 +165,7 @@ for (const error of ['invalid_appid', 'Error: refusing_to_modify_native_steam_ap
  let timerId = 0;
  const { refreshShortcutRecordsFromBackend: refresh, getAllShortcutRecords: records } = load('frontend/features/shortcuts/registry.ts', {
   backendLog() {}, getSteamAppStore: () => null, replaceFallbackShortcutApps: value => snapshots.push(value),
+  readShortcutLaunchDetails: () => null, readShortcutOverviewField: (app, ...keys) => keys.map(key => app?.[key]).find(Boolean) || '',
   listShortcutsBackend: () => new Promise(resolve => requests.push(resolve)),
  }, { setTimeout: (callback, delay) => { const id = ++timerId; timers.set(id, { callback, delay }); return id; },
   clearTimeout: id => timers.delete(id) });
@@ -206,6 +208,7 @@ for (const error of ['invalid_appid', 'Error: refusing_to_modify_native_steam_ap
  const { LinkOrchestrator } = load('frontend/features/shortcuts/link-orchestrator.ts', {
   refreshShortcutRecordsFromBackend: async () => {}, getAllShortcutRecords: () => records,
   getShortcutAppById: id => records.find(record => record.id === id)?.app,
+  readFreshShortcutLaunchDetails: async () => null,
   shortcutExecutableIdentity: value => String(value || '').toLowerCase(),
   readShortcutOverviewField: app => app.exe,
  }, { setTimeout: callback => { callback(); return 1; }, clearTimeout() {} });
@@ -239,31 +242,35 @@ for (const error of ['invalid_appid', 'Error: refusing_to_modify_native_steam_ap
 // Steam may regenerate a shortcut ID when its display name changes. Both link
 // entry points must keep the original launcher as the executable identity,
 // including when an old persisted/UI payload still supplies replacement paths.
-function identityHarness() {
+function identityHarness({ overviewOnly = false, neutralizeAck, neutralizeResult = { ok: true } } = {}) {
  const originalId = 3000000001, renamedId = 3000000002;
  const selectedExe = 'C:/Games/SparkingZERO/SparkingZERO.exe';
  const selectedStartDir = 'C:/Games/SparkingZERO';
  const replacementExe = 'C:/Games/SparkingZERO/Binaries/Win64/SparkingZERO-Win64-Shipping.exe';
- const state = { writes: [], neutralized: [], renames: 0, mapping: null, edition: null, mappingAccepted: true };
+ const state = { writes: [], neutralized: [], restored: [], renames: 0, mapping: null, edition: null, mappingAccepted: true };
  let record = { id: originalId, title: 'Original shortcut', app: {
   display_name: 'Original shortcut', strShortcutExe: selectedExe, strShortcutStartDir: selectedStartDir,
  } };
+ const overview = Object.seal({ appid: originalId, display_name: 'Original shortcut' });
  const readField = (app, ...keys) => keys.map(key => app?.[key]).find(value => value != null && value !== '') || '';
  const mocks = {
   backendLog() {},
   gdlText: (_key, fallback) => fallback,
-  getShortcutAppById: id => id === record.id ? record.app : null,
+  getShortcutAppById: id => id === record.id ? (overviewOnly ? overview : record.app) : null,
   getAllShortcutRecords: () => [record],
   findMappingForShortcut: () => null,
   refreshShortcutRecordsFromBackend: async () => {},
   readShortcutOverviewField: readField,
+  readShortcutLaunchDetails: id => id === record.id ? record.app : null, readFreshShortcutLaunchDetails: async () => null,
+  cleanShortcutPath: value => String(value || '').trim().replace(/^"|"$/g, ''),
+  shortcutPathDirectory: value => String(value || '').replace(/[\\/][^\\/]*$/, ''),
   shortcutExecutableIdentity: value => String(value || '').toLowerCase(),
   getGameData: async () => ({ name: 'DRAGON BALL: Sparking! ZERO', steam_appid: 1790600 }),
   getCanonicalGameData: async () => ({ name: 'DRAGON BALL: Sparking! ZERO', steam_appid: 1790600 }),
   getShortcutEdition: () => state.edition,
   resolveShortcutIdAfterRename: async (_name, previousId, _ids, executable) => {
    assert.equal(previousId, originalId);
-   assert.equal(executable, selectedExe, 'Rename recovery must use the selected launcher executable');
+   assert.equal(executable, overviewOnly ? '' : selectedExe, 'Rename recovery reads only the fields actually published by its overview');
    return renamedId;
   },
   rememberOriginalShortcutTitle() {}, rememberShortcutSteamAppId() {},
@@ -272,7 +279,13 @@ function identityHarness() {
   shortcutMappingKey: id => `shortcut:${id}`, titleMappingKey: title => `title:${title}`,
   normalizeTitle: value => value.toLowerCase(),
   updateMappingsChecked: async mapping => { state.mapping = mapping; return state.mappingAccepted; },
-  neutralizeSteamAppIdFileBackend: async ({ request_json }) => { state.neutralized.push(JSON.parse(request_json)); },
+  neutralizeSteamAppIdFileBackend: async ({ request_json }) => {
+   state.neutralized.push(JSON.parse(request_json));
+   return neutralizeAck ? await neutralizeAck : JSON.stringify(neutralizeResult);
+  },
+  restoreSteamAppIdFileBackend: async ({ request_json }) => {
+   state.restored.push(JSON.parse(request_json)); return JSON.stringify({ ok: true });
+  },
   fetchPlaytimeStatsBatch: async () => new Map(),
   shortcutRuntimeHost: () => ({}),
   getModernLibraryAssets: async () => null,
@@ -286,7 +299,7 @@ function identityHarness() {
  const globals = { setTimeout, clearTimeout, window: { dispatchEvent() {}, SteamClient: { Apps: {
   SetShortcutExe: async (id, value) => { state.writes.push(['exe', id, value]); record.app.strShortcutExe = value; },
   SetShortcutStartDir: async (id, value) => { state.writes.push(['startDir', id, value]); record.app.strShortcutStartDir = value; },
-  SetShortcutName: async (_id, title) => { state.renames += 1; record = { ...record, id: renamedId, title,
+  SetShortcutName: async (_id, title) => { state.renames += 1; overview.appid = renamedId; overview.display_name = title; record = { ...record, id: renamedId, title,
    app: { ...record.app, display_name: title } }; },
  } } }, CustomEvent: class {} };
  const { LinkOrchestrator } = load('frontend/features/shortcuts/link-orchestrator.ts', mocks, globals);
@@ -294,7 +307,7 @@ function identityHarness() {
  const options = { shortcutAppId: originalId, title: 'Original shortcut', currentTitle: 'Original shortcut',
   steamAppId: '1790600', shortcutExecutable: selectedExe, trackingExecutable: replacementExe,
   trackingStartDir: 'C:/Games/SparkingZERO/Binaries/Win64', deferAssetSync: true, refreshLibrary: false };
- return { state, options, selectedExe, selectedStartDir, renamedId, linking, LinkOrchestrator, globals };
+ return { state, options, selectedExe, selectedStartDir, renamedId, linking, LinkOrchestrator, globals, overview };
 }
 {
  const { state, options, globals, linking } = identityHarness();
@@ -359,16 +372,49 @@ for (const entry of ['synchronizeShortcutOfficialIdentity', 'linkShortcutToSteam
  assert.equal(state.renames, 1, `${entry} still applies the official display name`);
  assert.deepEqual(state.writes, [], `${entry} must never replace the selected executable or start directory`);
  assert.equal(state.mapping.set[`shortcut:${renamedId}`], options.steamAppId, `${entry} commits the regenerated identity`);
- assert.deepEqual(state.neutralized, [{ exe_path: selectedExe, start_dir: selectedStartDir }],
+ assert.deepEqual(state.neutralized.map(({ exe_path, start_dir }) => ({ exe_path, start_dir })), [{ exe_path: selectedExe, start_dir: selectedStartDir }],
   `${entry} filesystem maintenance uses the preserved selected executable`);
+ assert.ok(state.neutralized[0].expires_at_ms > Date.now() && state.neutralized[0].expires_at_ms <= Date.now() + 4000,
+  `${entry} bounds the backend filesystem operation with a future deadline`);
+}
+for (const entry of ['synchronizeShortcutOfficialIdentity', 'linkShortcutToSteam']) {
+ let acknowledge;
+ const neutralizeAck = new Promise(resolve => { acknowledge = resolve; });
+ const { state, options, selectedExe, selectedStartDir, linking, overview } = identityHarness({ overviewOnly: true, neutralizeAck });
+ let finished = false;
+ const work = linking[entry](options).then(result => { finished = true; return result; });
+ const deadline = Date.now() + 1000;
+ while (!state.neutralized.length && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 0));
+ assert.equal(state.neutralized.length, 1, `${entry} reaches protection when its overview lacks all launch fields`);
+ assert.equal(state.neutralized[0].exe_path, selectedExe, `${entry} reads the executable from the matching native details`);
+ assert.equal(state.neutralized[0].start_dir, selectedStartDir, `${entry} reads the complete start directory from the matching native details`);
+ assert.equal(Object.hasOwn(overview, 'strShortcutExe'), false, `${entry} leaves the native overview untouched`);
+ assert.equal(finished, false, `${entry} awaits the protection acknowledgement before completing`);
+ assert.equal(state.mapping, null, `${entry} cannot publish a mapping while protection is pending`);
+ acknowledge(JSON.stringify({ ok: true, modified: true }));
+ const result = await work;
+ assert.equal(result[entry === 'linkShortcutToSteam' ? 'ok' : 'complete'], true, `${entry} completes after protection is confirmed`);
+}
+for (const entry of ['synchronizeShortcutOfficialIdentity', 'linkShortcutToSteam']) {
+ const { state, options, linking } = identityHarness({ overviewOnly: true, neutralizeResult: { ok: false, error: 'steam_appid_backup_conflict' } });
+ if (entry === 'linkShortcutToSteam') {
+  const result = await linking[entry](options);
+  assert.equal(result.ok, false, 'Protection failure cannot produce a successful link result');
+  assert.equal(result.error, 'steam_appid_file_protection_failed', 'Protection failure remains a terminal link error');
+ } else await assert.rejects(linking[entry](options), /steam_appid_file_protection_failed/);
+ assert.equal(state.mapping, null, `${entry} never publishes a mapping after rejected protection`);
+ assert.equal(state.restored.length, 0, `${entry} does not restore a backup that protection refused to touch`);
 }
 {
- const { state, options, linking, renamedId } = identityHarness();
+ const { state, options, linking, renamedId, selectedExe, selectedStartDir } = identityHarness();
  state.mappingAccepted = false;
  const result = await linking.linkShortcutToSteam(options);
  assert.equal(result.ok, false);
  assert.equal(result.error, 'mapping_identity_update_failed');
  assert.equal(result.shortcutAppId, renamedId, 'A post-rename error preserves the confirmed new identity for the durable retry');
+ assert.equal(state.restored.length, 1, 'Mapping publication failure restores the protection backup before returning');
+ assert.equal(state.restored[0].exe_path, selectedExe, 'Mapping rollback restores only the selected executable directory');
+ assert.equal(state.restored[0].start_dir, selectedStartDir, 'Mapping rollback preserves the selected start directory');
 }
 {
  const { state, LinkOrchestrator, options } = identityHarness();
@@ -396,6 +442,7 @@ for (const entry of ['synchronizeShortcutOfficialIdentity', 'linkShortcutToSteam
  const candidates = { candidates: [{ appid: '1790600', name: 'DRAGON BALL: Sparking! ZERO', score: 99, confidence: 'exact' }] };
  const detection = load('frontend/features/shortcuts/detection.ts', {
   RetryingRequestCache: class { get(_key, loader) { return loader(); } },
+  readShortcutLaunchDetails: () => null, readFreshShortcutLaunchDetails: async () => null,
   getShortcutAppById: () => ({ strShortcutExe: selectedExe, strShortcutStartDir: selectedStartDir, strShortcutLaunchOptions: '-windowed' }),
   readShortcutOverviewField: readField,
   cleanShortcutPath: value => String(value || '').trim().replace(/^"|"$/g, ''),

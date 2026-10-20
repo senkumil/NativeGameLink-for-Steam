@@ -6,12 +6,13 @@ import { mountModalDialog, wirePasteButton } from '../../core/modal';
 import { gdlText } from '../../steam/localization';
 import { cleanShortcutPath, findActiveShortcutAppId, SHORTCUT_THRESHOLD } from '../../steam/shortcuts';
 import { shortcutRuntimeHost } from './host';
-import { findMappingForShortcut, getAllShortcutRecords, shortcutAlreadyLinked } from './registry';
-import { buildImmediateShortcutDetectionContext, buildShortcutDetectionContext, detectShortcutCandidatesLocal, enrichShortcutCandidatesRemote, mergeCandidateLists, reliableReviewCandidate, displayReviewConfidence, withDetectionBudget } from './detection';
+import { getAllShortcutRecords, shortcutAlreadyLinked } from './registry';
+import { reliableReviewCandidate, displayReviewConfidence } from './detection';
+import { inspectShortcutReview, invalidateShortcutReview, isShortcutReviewInFlight, type ShortcutLinkReviewSource } from './manual-link-review';
 import { cancelPendingLinkJobs, enqueueLinkJob, stageLinkJobForRecovery, type PendingLinkJob } from './link-job-queue';
 import { observeManualLinkJob } from './manual-link-progress';
 import { isShortcutIdentityMutationInProgress, linkShortcutToSteam, shouldAutoApplyNoLauncher } from './linking';
-import { isShortcutDismissed, undismissShortcut } from './dismissed';
+import { undismissShortcut } from './dismissed';
 import { navigateToLibraryShortcut } from '../../steam/navigation';
 import { clearShortcutEdition, saveShortcutEdition } from './editions';
 function displayConfidence(candidate: ShortcutDetectionCandidate): 'HIGH' | 'MEDIUM' | 'LOW' {
@@ -21,40 +22,36 @@ function getCandidateKey(candidate: ShortcutDetectionCandidate): string {
 	return candidate.candidate_key || (candidate.edition ? `${candidate.appid}:edition:${candidate.edition}` : candidate.appid);
 }
 function retryableLinkError(error: unknown): boolean {
-	return !['invalid_appid', 'refusing_to_modify_native_steam_app', 'shortcut_identity_changed', 'shortcut_identity_ambiguous', 'shortcut_not_found']
+	return !['invalid_appid', 'refusing_to_modify_native_steam_app', 'shortcut_identity_changed', 'shortcut_identity_ambiguous', 'shortcut_not_found', 'steam_appid_file_protection_failed']
 		.includes(String(error || '').replace(/^Error:\s*/i, '').trim());
 }
 let shortcutLinkInProgress = false;
-const shortcutDetectionInFlight = new Set<number>();
-const shortcutDetectionScheduled = new Set<number>();
+const shortcutDetectionScheduled = new Map<number, symbol>();
 function shortcutMutationInProgress(): boolean {
 	return shortcutLinkInProgress || isShortcutIdentityMutationInProgress();
 }
 let activeModalEscapeHandler: ((e: KeyboardEvent) => void) | null = null;
-function manualLinkModalPresent(doc?: Document | null): boolean {
-	try {
-		if (doc?.getElementById('gdl-manual-link-modal')) return true;
-	} catch {}
-	try {
-		const hostDoc = shortcutRuntimeHost().getMainWindowDoc();
-		if (hostDoc?.getElementById('gdl-manual-link-modal')) return true;
-	} catch {}
-	try {
-		return Boolean(typeof document !== 'undefined' && document.getElementById('gdl-manual-link-modal'));
-	} catch { return false; }
+let activeModalDocument: Document | null = null;
+let activeModalElement: HTMLElement | null = null;
+function disposeActiveModal(): void {
+	if (activeModalEscapeHandler) {
+		try { activeModalDocument?.removeEventListener('keydown', activeModalEscapeHandler); } catch {}
+	}
+	(activeModalElement as any)?._dispose?.();
+	activeModalElement?.remove();
+	activeModalEscapeHandler = null;
+	activeModalDocument = null;
+	activeModalElement = null;
 }
 function closeShortcutManualLinkModal(doc: Document, _shortcutAppId: number, _dismiss: boolean): void {
-	globalDetectionGeneration += 1;
-	if (activeModalEscapeHandler) {
-		try { doc.removeEventListener('keydown', activeModalEscapeHandler); } catch {}
-		try { document.removeEventListener('keydown', activeModalEscapeHandler); } catch {}
-		activeModalEscapeHandler = null;
-	}
+	invalidateShortcutReview();
+	shortcutDetectionScheduled.delete(_shortcutAppId);
+	disposeActiveModal();
 	const remove = (modal: HTMLElement | null): void => { (modal as any)?._dispose?.(); modal?.remove(); };
 	remove(doc.getElementById('gdl-manual-link-modal'));
 	try { remove(document.getElementById('gdl-manual-link-modal')); } catch {}
 }
-export type ShortcutLinkReviewSource = 'manual' | 'native-add-auto';
+export type { ShortcutLinkReviewSource } from './manual-link-review';
 export function showShortcutManualLinkModal(
 	doc: Document,
 	context: ShortcutDetectionContext,
@@ -69,6 +66,7 @@ export function showShortcutManualLinkModal(
 		(existingModal as any)._updateCandidates(detection.candidates || [], !options.loading, detection.rejected_appids);
 		return;
 	}
+	disposeActiveModal();
 	if (existingModal) {
 		(existingModal as any)._dispose?.();
 		existingModal.remove();
@@ -120,6 +118,7 @@ export function showShortcutManualLinkModal(
 				<label class="gdl-manual-link-launcher" style="display:none;align-items:flex-start;gap:8px;margin-top:12px;color:#acb2b8;font-size:12px;line-height:1.35;cursor:pointer;"><input class="gdl-manual-link-launcher-input" type="checkbox" style="margin-top:2px;" /><span><strong style="color:#dcdedf;font-weight:500;">${escapeHtml(gdlText('skip_launcher', 'Try to skip the launcher'))}</strong><br />${escapeHtml(gdlText('launcher_detected', 'This target looks like a game launcher. You may optionally add -nolauncher.'))}</span></label>
 				<div class="gdl-manual-link-progress" style="display:flex;gap:7px;margin-top:15px;color:#8f98a0;font-size:11px;"><span data-step="link" style="padding:5px 8px;border-radius:12px;background:rgba(255,255,255,.05);">${escapeHtml(gdlText('auto_link_step_link', '1 · Link'))}</span><span data-step="identity" style="padding:5px 8px;border-radius:12px;background:rgba(255,255,255,.05);">${escapeHtml(gdlText('auto_link_step_identity', '2 · Prepare'))}</span><span data-step="assets" style="padding:5px 8px;border-radius:12px;background:rgba(255,255,255,.05);">${escapeHtml(gdlText('auto_link_step_assets', '3 · Finish'))}</span></div>
 				<div class="gdl-manual-link-status" aria-live="polite" style="display:none;margin-top:11px;padding:9px 11px;border:1px solid rgba(255,255,255,.08);border-radius:3px;background:rgba(0,0,0,.16);font-size:12px;line-height:1.4;color:#8f98a0;"></div>
+				<button type="button" class="gdl-manual-link-retry-search" style="display:none;margin-top:10px;padding:7px 12px;border:1px solid #3d4450;border-radius:2px;background:#20242b;color:#66c0f4;cursor:pointer;">${escapeHtml(gdlText('link_search_retry', 'Retry search'))}</button>
 				<div style="display:flex;justify-content:flex-end;gap:9px;margin-top:14px;"><button class="gdl-manual-link-cancel" style="padding:9px 17px;border:0;border-radius:2px;background:#3d4450;color:#dcdedf;cursor:pointer;">${escapeHtml(automaticNativeAddReview ? gdlText('reject_link', 'Reject') : gdlText('cancel', 'Cancel'))}</button><button class="gdl-manual-link-confirm" style="padding:9px 18px;border:0;border-radius:2px;background:linear-gradient(90deg,#06bfff,#2d73ff);color:#fff;cursor:pointer;">${escapeHtml(gdlText('link_game', 'Link game'))}</button></div>
 			</div>
 		</div>`;
@@ -134,6 +133,8 @@ export function showShortcutManualLinkModal(
 	const status = overlay.querySelector('.gdl-manual-link-status') as HTMLElement;
 	const progress = overlay.querySelector('.gdl-manual-link-progress') as HTMLElement;
 	const confirm = overlay.querySelector('.gdl-manual-link-confirm') as HTMLButtonElement;
+	const retrySearch = overlay.querySelector('.gdl-manual-link-retry-search') as HTMLButtonElement;
+	retrySearch.addEventListener('click', () => { if (!busy()) (overlay as any)._retrySearch?.(); });
 	const cancel = overlay.querySelector('.gdl-manual-link-cancel') as HTMLButtonElement;
 	const clearCandidateImage = (): void => {
 		image.onload = null;
@@ -189,20 +190,29 @@ export function showShortcutManualLinkModal(
 		if (locked) lockedManualAppId = manualAppIdInput.value;
 		select.disabled = locked || !currentCandidates.length;
 		manualAppIdInput.disabled = launcherInput.disabled = locked;
+		retrySearch.disabled = locked;
 		(overlay.querySelector('.gdl-manual-link-paste') as HTMLButtonElement).disabled = locked;
 	};
 	let imageRequestRevision = 0;
 	let manualLookupTimer: ReturnType<typeof setTimeout> | null = null;
 	let enrichmentComplete = !loading;
+	let searchUnavailable = Boolean(detection.error || detection.transient_error);
+	const emptySearchMessage = (): string => searchUnavailable
+		? gdlText('link_search_unavailable', 'Steam search could not finish. You can retry or enter the AppID manually.')
+		: gdlText('no_match_found', 'No reliable match was found. You can enter the AppID manually.');
 	const selectedCandidate = (): ShortcutDetectionCandidate | undefined => currentCandidates.find(item => getCandidateKey(item) === select.value);
 	const refreshReviewLabels = (): void => {
+		if (!currentCandidates.length && select.options[0]) select.options[0].textContent = !enrichmentComplete
+			? gdlText('link_searching', 'Searching for Steam matches…') : searchUnavailable
+			? gdlText('link_search_unavailable_title', 'Search unavailable') : gdlText('no_suggestions_found', 'No automatic suggestions (enter the AppID below)');
 		const confident = reliableReviewCandidate(selectedCandidate()) && !manualAppIdInput.value.trim();
 		const pending = !enrichmentComplete && !currentCandidates.length;
 		overlay.querySelector('.gdl-manual-link-dialog-title')!.textContent = automaticNativeAddReview && confident ? gdlText('auto_link_title', 'Steam game detected') : gdlText('link_game', 'Link game');
-		overlay.querySelector('.gdl-manual-link-dialog-subtitle')!.textContent = confident ? gdlText('auto_link_ready_to_review', 'Match ready for review') : pending ? gdlText('link_searching', 'Searching for Steam matches…') : gdlText('detection_uncertain', 'Choose the correct result or enter the AppID manually.');
+		overlay.querySelector('.gdl-manual-link-dialog-subtitle')!.textContent = confident ? gdlText('auto_link_ready_to_review', 'Match ready for review') : pending ? gdlText('link_searching', 'Searching for Steam matches…') : !currentCandidates.length && searchUnavailable ? gdlText('link_search_unavailable_title', 'Search unavailable') : gdlText('detection_uncertain', 'Choose the correct result or enter the AppID manually.');
 		overlay.querySelector('.gdl-manual-link-dialog-message')!.textContent = pending ? gdlText('link_searching', 'Searching for Steam matches…') : confident && automaticNativeAddReview
 			? gdlText('auto_link_message', 'A likely Steam match was found for “{name}”. Confirm it before NativeGameLink loads the game data.', { name: activeContext.title })
-			: !currentCandidates.length && enrichmentComplete ? gdlText('no_match_found', 'No reliable match was found. You can enter the AppID manually.') : gdlText('detection_uncertain', 'Choose the correct result or enter the AppID manually.');
+			: !currentCandidates.length && enrichmentComplete ? emptySearchMessage() : gdlText('detection_uncertain', 'Choose the correct result or enter the AppID manually.');
+		retrySearch.style.display = enrichmentComplete && searchUnavailable ? '' : 'none';
 	};
 	type ManualStatusTone = 'neutral' | 'active' | 'success' | 'warning' | 'error';
 	const setStatus = (message: string, tone: ManualStatusTone = 'neutral'): void => {
@@ -233,7 +243,7 @@ export function showShortcutManualLinkModal(
 			clearCandidateImage();
 			setStatus(
 				currentCandidates.length ? gdlText('detection_uncertain', 'Choose the correct result or enter the AppID manually.') : enrichmentComplete
-					? gdlText('no_match_found', 'No reliable match was found. You can enter the AppID manually.')
+					? emptySearchMessage()
 					: gdlText('link_searching', 'Searching for Steam matches…'),
 				enrichmentComplete ? 'warning' : 'active',
 			);
@@ -321,17 +331,18 @@ export function showShortcutManualLinkModal(
 		if (manualAppIdInput.value.trim()) renderManualAppId(); else renderCandidate();
 	};
 	(overlay as any)._updateCandidates = updateCandidatesInPlace;
-	(overlay as any)._markEnrichmentComplete = (): void => {
+	(overlay as any)._beginEnrichment = (): void => {
 		if (busy()) return;
+		searchUnavailable = false;
+		enrichmentComplete = false;
+		if (manualAppIdInput.value.trim()) renderManualAppId(); else renderCandidate();
+	};
+	(overlay as any)._markEnrichmentComplete = (unavailable = false): void => {
+		if (busy()) return;
+		searchUnavailable = unavailable;
 		enrichmentComplete = true;
 		overlay.removeAttribute('data-gdl-link-loading');
-		if (currentCandidates.length === 0) {
-			const subtitleEl = overlay.querySelector('.gdl-manual-link-dialog-subtitle') as HTMLElement | null;
-			if (subtitleEl) subtitleEl.textContent = gdlText('no_suggestions_found', 'No automatic suggestions (enter the AppID below)');
-			const dialogMsgEl = overlay.querySelector('.gdl-manual-link-dialog-message') as HTMLElement | null;
-			if (dialogMsgEl && !userHasInteracted) dialogMsgEl.textContent = gdlText('no_match_found', 'No reliable match was found. You can enter the AppID manually.');
-			if (manualAppIdInput.value.trim()) renderManualAppId(); else renderCandidate();
-		}
+		if (manualAppIdInput.value.trim()) renderManualAppId(); else renderCandidate();
 	};
 	const renderManualAppId = () => {
 		if (busy()) return;
@@ -432,7 +443,7 @@ export function showShortcutManualLinkModal(
 	(overlay as any)._updateContext = (nextContext: ShortcutDetectionContext): void => {
 		if (!nextContext || Number(nextContext.shortcutAppId) !== Number(activeContext.shortcutAppId)) return;
 		activeContext = { ...activeContext, ...nextContext, exePath: nextContext.exePath || activeContext.exePath,
-			startDir: nextContext.startDir || activeContext.startDir, launchOptions: nextContext.launchOptions || activeContext.launchOptions };
+			startDir: nextContext.startDir || activeContext.startDir, launchOptions: nextContext.launchOptions ?? activeContext.launchOptions };
 		exeSummary.textContent = pathSummary();
 		exeSummary.title = cleanShortcutPath(activeContext.exePath || activeContext.startDir || '');
 		if (manualAppIdInput.value.trim()) renderManualAppId(); else renderCandidate();
@@ -461,6 +472,7 @@ export function showShortcutManualLinkModal(
 		}
 	};
 	const dismiss = () => {
+		if (targetDoc.getElementById('gdl-manual-link-modal') !== overlay) return;
 		stopQueuedLinkWatch();
 		modalSubmitting = false;
 		closeShortcutManualLinkModal(targetDoc, activeContext.shortcutAppId, false);
@@ -473,10 +485,6 @@ export function showShortcutManualLinkModal(
 	overlay.querySelector('.gdl-manual-link-close')?.addEventListener('click', dismiss);
 	cancel.addEventListener('click', dismiss);
 	overlay.addEventListener('click', event => { if (event.target === overlay) dismiss(); });
-	if (activeModalEscapeHandler) {
-		try { targetDoc.removeEventListener('keydown', activeModalEscapeHandler); } catch {}
-		try { document.removeEventListener('keydown', activeModalEscapeHandler); } catch {}
-	}
 	activeModalEscapeHandler = (event: KeyboardEvent) => {
 		if (event.key === 'Escape') {
 			event.preventDefault();
@@ -484,6 +492,8 @@ export function showShortcutManualLinkModal(
 			dismiss();
 		}
 	};
+	activeModalDocument = targetDoc;
+	activeModalElement = overlay;
 	targetDoc.addEventListener('keydown', activeModalEscapeHandler);
 	const watchQueuedLink = (job: PendingLinkJob): void => {
 		stopQueuedLinkWatch();
@@ -523,13 +533,8 @@ export function showShortcutManualLinkModal(
 				: gdlText('link_status_preparing', 'Preparing game…'), state.status === 'queued' && state.attempts > 0 ? 'warning' : 'active');
 		});
 	};
-	const queueLinkInBackground = (steamAppId: string, shortcutAppId = activeContext.shortcutAppId, repairResources = false): void => {
-		const job = enqueueLinkJob({
-			title: activeContext.title, shortcutAppId, steamAppId,
-			skipLauncher: launcherInput.checked || shouldAutoApplyNoLauncher(steamAppId),
-			existingLaunchOptions: activeContext.launchOptions,
-			shortcutExecutable: activeContext.exePath || '', repairResources,
-		});
+	const queueLinkInBackground = (input: Parameters<typeof enqueueLinkJob>[0], shortcutAppId = input.shortcutAppId, repairResources = false): void => {
+		const job = enqueueLinkJob({ ...input, shortcutAppId, repairResources });
 		setStatus(gdlText('link_queued_background', 'Continuing setup in the background…'), 'active');
 		watchQueuedLink(job);
 	};
@@ -612,7 +617,7 @@ export function showShortcutManualLinkModal(
 					setStatus(gdlText('link_ready_library', '✓ Ready. The game is prepared in your library.'), 'success');
 				} else {
 					setProgress(2, false, 3);
-					queueLinkInBackground(steamAppId, result.shortcutAppId || activeContext.shortcutAppId, true);
+					queueLinkInBackground(linkInput, result.shortcutAppId || linkInput.shortcutAppId, true);
 				}
 				if (resourcesComplete) confirm.style.display = 'none';
 				cancel.textContent = resourcesComplete ? gdlText('done', 'Done') : gdlText('close', 'Close');
@@ -624,14 +629,14 @@ export function showShortcutManualLinkModal(
 			}
 			if (!result.ok) {
 				if (retryableLinkError(result.error)) {
-					queueLinkInBackground(steamAppId, result.shortcutAppId || activeContext.shortcutAppId);
+					queueLinkInBackground(linkInput, result.shortcutAppId || linkInput.shortcutAppId);
 				} else {
 					cancelPendingLinkJobs(result.shortcutAppId || activeContext.shortcutAppId, activeContext.title);
 				}
 				backendLog(`Link did not complete for ${activeContext.title}: ${result.error || 'unknown_error'}`);
 			}
 		} catch (error) {
-			if (retryableLinkError(error)) queueLinkInBackground(steamAppId);
+			if (retryableLinkError(error)) queueLinkInBackground(linkInput);
 			else { cancelPendingLinkJobs(activeContext.shortcutAppId, activeContext.title); setStatus(String(error), 'error'); }
 			backendLog(`Background link failed for ${activeContext.title}: ${error}`);
 		} finally {
@@ -650,238 +655,60 @@ export function showShortcutManualLinkModal(
 	});
 	mountModalDialog(overlay);
 }
-let globalDetectionGeneration = 0;
-async function inspectShortcutReview(
-	record: { id: number; title: string; app?: any },
-	source: ShortcutLinkReviewSource,
-	targetDoc?: Document | null,
-): Promise<void> {
-	if (source !== 'manual' && shortcutAlreadyLinked(record.id) && !isShortcutDismissed(record.id)) return;
-	const immediateDoc = (targetDoc && targetDoc.body)
-		? targetDoc
-		: (shortcutRuntimeHost().getMainWindowDoc() || (typeof document !== 'undefined' ? document : null));
-	const immediateContext = buildImmediateShortcutDetectionContext(immediateDoc, record.title, record.id, record.app);
-	const currentGeneration = ++globalDetectionGeneration;
-	const loadingShown = Boolean(immediateDoc?.body && !immediateDoc.getElementById('gdl-manual-link-modal'));
-	if (loadingShown) {
-		showShortcutManualLinkModal(immediateDoc as Document, immediateContext, { candidates: [] }, { source, loading: true });
-		const createdModal = immediateDoc?.getElementById('gdl-manual-link-modal');
-		createdModal?.setAttribute('data-gdl-link-loading', '1');
-	}
-	let titleOnlyCandidates: ShortcutDetectionCandidate[] = [];
-	let firstLocalDetection: ShortcutDetectionResult | null = null;
-	const contextPromise = buildShortcutDetectionContext(immediateDoc, record.title, record.id).then(context => {
-		const modal = immediateDoc?.getElementById('gdl-manual-link-modal') as any;
-		if (context && globalDetectionGeneration === currentGeneration && modal?._shortcutAppId === record.id) modal._updateContext?.(context);
-		return context;
-	}).catch((): null => null);
-	try {
-		const titleOnlyDetection = await detectShortcutCandidatesLocal(immediateContext);
-		firstLocalDetection = titleOnlyDetection;
-		if (globalDetectionGeneration !== currentGeneration) return;
-		titleOnlyCandidates = (titleOnlyDetection?.candidates || []).slice();
-		if (titleOnlyCandidates.length > 0) {
-			const fastModal = immediateDoc?.getElementById('gdl-manual-link-modal');
-			if (fastModal && (fastModal as any)._updateCandidates) {
-				(fastModal as any)._updateCandidates(titleOnlyCandidates, false);
-			}
-		}
-	} catch (error) {
-		backendLog(`Title-only AppID discovery failed for ${record.title}: ${error}`);
-	}
-	if (shortcutMutationInProgress() && source === 'manual') {
-		let waitMs = 0;
-		while (shortcutMutationInProgress() && waitMs < 1200) {
-			await new Promise(resolve => setTimeout(resolve, 200));
-			waitMs += 200;
-		}
-	}
-	if (shortcutMutationInProgress() && source !== 'manual') {
-		backendLog(`Ignoring automatic link review for ${record.title} while another identity operation is active.`);
-		return;
-	}
-	if (source !== 'manual' && shortcutDetectionInFlight.has(record.id)) return;
-	shortcutDetectionInFlight.add(record.id);
-	let modalRendered = false;
-	try {
-		let context = await contextPromise;
-		for (let attempt = 1; !context?.exePath && !immediateContext.exePath && attempt < 3; attempt++) {
-			if (globalDetectionGeneration !== currentGeneration || (loadingShown && !manualLinkModalPresent(immediateDoc))) return;
-			await new Promise(resolve => setTimeout(resolve, 100));
-			context = await buildShortcutDetectionContext(immediateDoc, record.title, record.id);
-		}
-		context = { ...immediateContext, ...context, exePath: context?.exePath || immediateContext.exePath,
-			startDir: context?.startDir || immediateContext.startDir, launchOptions: context?.launchOptions || immediateContext.launchOptions };
-		if (!context.title && !context.exePath) {
-			backendLog(`Manual link review has no title or executable for shortcut ${record.title} (${record.id})`);
-			if (source === 'manual') {
-				const fallbackDoc = (immediateDoc && immediateDoc.body)
-					? immediateDoc
-					: (shortcutRuntimeHost().getMainWindowDoc() || (typeof document !== 'undefined' ? document : null));
-				if (fallbackDoc) {
-					showShortcutManualLinkModal(fallbackDoc, context, { candidates: [] }, { source: 'manual', loading: false });
-					modalRendered = true;
-				}
-			}
-			return;
-		}
-		if (globalDetectionGeneration !== currentGeneration) return;
-		if (loadingShown && !manualLinkModalPresent(immediateDoc)) return;
-		const hydratedModal = immediateDoc?.getElementById('gdl-manual-link-modal');
-		if (hydratedModal && (hydratedModal as any)._updateContext) {
-			(hydratedModal as any)._updateContext(context);
-		}
-		const sameLaunchDefinition = context.exePath === immediateContext.exePath && context.startDir === immediateContext.startDir
-			&& context.launchOptions === immediateContext.launchOptions;
-		const localDetection = sameLaunchDefinition && firstLocalDetection && !firstLocalDetection.transient_error && !firstLocalDetection.error
-			? firstLocalDetection : await detectShortcutCandidatesLocal(context);
-		if (globalDetectionGeneration !== currentGeneration) return;
-		if (loadingShown && !manualLinkModalPresent(immediateDoc)) return;
-		let activeCandidates = mergeCandidateLists(titleOnlyCandidates, localDetection?.candidates || []);
-		const existingMappedId = findMappingForShortcut(record.id, record.title, context.exePath);
-		if (existingMappedId && /^\d+$/.test(existingMappedId)) {
-			const mappedData = await withDetectionBudget(getGameData(existingMappedId), 1200);
-			if (mappedData) {
-				const existingIndex = activeCandidates.findIndex(candidate => candidate.appid === existingMappedId);
-				if (existingIndex >= 0) {
-					const [item] = activeCandidates.splice(existingIndex, 1);
-					item.score = 100;
-					activeCandidates.unshift(item);
-				} else {
-					activeCandidates.unshift({
-						appid: existingMappedId,
-						name: mappedData.name || record.title,
-						score: 100,
-						direct: true,
-						confidence: 'high',
-						image: mappedData.header_image,
-						validation_state: 'confirmed',
-					});
-				}
-			}
-		}
-		if (globalDetectionGeneration !== currentGeneration || (loadingShown && !manualLinkModalPresent(immediateDoc))) return;
-		const doc = (immediateDoc && immediateDoc.body)
-			? immediateDoc
-			: (shortcutRuntimeHost().getMainWindowDoc() || (typeof document !== 'undefined' ? document : null));
-		if (!doc?.body) return;
-		const currentModal = doc.getElementById('gdl-manual-link-modal');
-		if (currentModal && (currentModal as any)._updateCandidates) {
-			(currentModal as any)._updateCandidates(activeCandidates, false);
-			modalRendered = true;
-		} else {
-			showShortcutManualLinkModal(doc, context, { candidates: activeCandidates }, { source, loading: activeCandidates.length === 0 });
-			modalRendered = true;
-		}
-		const enrichmentContext = context;
-		const localSnapshot = activeCandidates.slice();
-		void enrichShortcutCandidatesRemote(enrichmentContext, localSnapshot).then(remoteDetection => {
-			if (globalDetectionGeneration !== currentGeneration) return;
-			const liveDoc = (immediateDoc && immediateDoc.body)
-				? immediateDoc
-				: (shortcutRuntimeHost().getMainWindowDoc() || (typeof document !== 'undefined' ? document : null));
-			const liveModal = liveDoc?.getElementById('gdl-manual-link-modal');
-			if (!liveModal || (liveModal as any)._shortcutAppId !== record.id || !(liveModal as any)._updateCandidates) return;
-			if (remoteDetection && (remoteDetection.candidates.length > 0 || remoteDetection.rejected_appids?.length)) {
-				let merged = mergeCandidateLists(localSnapshot, remoteDetection.candidates, remoteDetection.rejected_appids);
-				if (existingMappedId && /^\d+$/.test(existingMappedId)) {
-					const existingIndex = merged.findIndex(c => c.appid === existingMappedId);
-					if (existingIndex > 0) {
-						const [item] = merged.splice(existingIndex, 1);
-						item.score = 100;
-						merged.unshift(item);
-					}
-				}
-				(liveModal as any)._updateCandidates(merged, true, remoteDetection.rejected_appids);
-			} else {
-				(liveModal as any)._markEnrichmentComplete?.();
-			}
-		}).catch(err => {
-			backendLog(`Remote candidate enrichment error for ${record.title}: ${err}`);
-			const liveDoc = (immediateDoc && immediateDoc.body)
-				? immediateDoc
-				: (shortcutRuntimeHost().getMainWindowDoc() || (typeof document !== 'undefined' ? document : null));
-			const liveModal = liveDoc?.getElementById('gdl-manual-link-modal');
-			if (liveModal && (liveModal as any)._markEnrichmentComplete) {
-				(liveModal as any)._markEnrichmentComplete();
-			}
-		});
-	} catch (error) {
-		backendLog(`Manual shortcut review failed for ${record.title}: ${error}`);
-		if (globalDetectionGeneration !== currentGeneration || (loadingShown && !manualLinkModalPresent(immediateDoc))) return;
-		if (source === 'manual' && !modalRendered) {
-			try {
-				const fallbackDoc = immediateDoc || shortcutRuntimeHost().getMainWindowDoc() || (typeof document !== 'undefined' ? document : null);
-				if (fallbackDoc) {
-					showShortcutManualLinkModal(fallbackDoc, immediateContext, { candidates: [] }, { source: 'manual', loading: false });
-					modalRendered = true;
-				}
-			} catch {}
-		}
-	} finally {
-		if (loadingShown && !modalRendered && source !== 'manual') {
-			const liveDoc = (immediateDoc && immediateDoc.body)
-				? immediateDoc
-				: (shortcutRuntimeHost().getMainWindowDoc() || (typeof document !== 'undefined' ? document : null));
-			liveDoc?.querySelector('#gdl-manual-link-modal[data-gdl-link-loading="1"]')?.remove();
-		}
-		shortcutDetectionScheduled.delete(record.id);
-		shortcutDetectionInFlight.delete(record.id);
-	}
-}
 function scheduleShortcutReview(
 	record: { id: number; title: string; app?: any },
 	delay = 50,
 	source: ShortcutLinkReviewSource = 'manual',
 	targetDoc?: Document | null,
+	launchContext?: Partial<ShortcutDetectionContext>,
 ): void {
 	if (!Number.isFinite(record.id) || record.id < 2147483648 || !record.title.trim()) return;
-	if (source !== 'manual' && (shortcutDetectionScheduled.has(record.id) || shortcutDetectionInFlight.has(record.id))) return;
-	shortcutDetectionScheduled.add(record.id);
+	if (source !== 'manual' && (shortcutDetectionScheduled.has(record.id) || isShortcutReviewInFlight(record.id))) return;
+	const scheduledToken = Symbol();
+	shortcutDetectionScheduled.set(record.id, scheduledToken);
 	const exec = () => {
-		void inspectShortcutReview(record, source, targetDoc).finally(() => shortcutDetectionScheduled.delete(record.id));
+		if (shortcutDetectionScheduled.get(record.id) !== scheduledToken) return;
+		shortcutDetectionScheduled.delete(record.id);
+		void inspectShortcutReview(record, source, targetDoc, { showReview: showShortcutManualLinkModal, isMutationInProgress: shortcutMutationInProgress }, launchContext);
 	};
 	if (delay > 0) setTimeout(exec, delay);
 	else exec();
 }
-function resolveOrSynthesizeShortcutRecord(shortcutAppId: number, gameTitle = '', targetDoc?: Document | null): { id: number; title: string; app: any } | null {
+function resolveShortcutReviewRecord(shortcutAppId: number, gameTitle = '', targetDoc?: Document | null): { id: number; title: string; app: any } | null {
 	const numericId = Number(shortcutAppId);
-	let normalizedId = Number.isFinite(numericId) && numericId < SHORTCUT_THRESHOLD ? (numericId >>> 0) : numericId;
+	const normalizedId = Number.isInteger(numericId) && numericId >= -2147483648 && numericId <= 0xffffffff ? numericId >>> 0 : 0;
 	const records = getAllShortcutRecords();
-	if (!records.some(candidate => candidate.id === normalizedId) && gameTitle.trim()) {
+	const cleanTitle = gameTitle.trim();
+	// New native shortcuts can precede registry hydration. Their supplied ID must
+	// never be replaced with a same-title entry or the game behind the dialog.
+	if (normalizedId >= SHORTCUT_THRESHOLD) {
+		return records.find(candidate => candidate.id === normalizedId)
+			|| { id: normalizedId, title: cleanTitle || 'Non-Steam Game', app: null };
+	}
+	if (!cleanTitle) return null;
+	const titleMatches = records.filter(candidate => normalizeTitle(candidate.title) === normalizeTitle(cleanTitle));
+	if (titleMatches.length === 1) return titleMatches[0];
+	if (titleMatches.length > 1) {
 		try {
 			const activeDoc = targetDoc || shortcutRuntimeHost().getMainWindowDoc();
-			const active = findActiveShortcutAppId(activeDoc as Document, gameTitle);
-			const activeId = Number(active || 0);
-			if (activeId >= SHORTCUT_THRESHOLD && records.some(candidate => candidate.id === activeId)) normalizedId = activeId;
+			const activeId = Number(findActiveShortcutAppId(activeDoc as Document, cleanTitle) || 0) >>> 0;
+			return titleMatches.find(candidate => candidate.id === activeId) || null;
 		} catch {}
 	}
-	const exact = normalizedId ? records.find(candidate => candidate.id === normalizedId) : undefined;
-	const titleMatches = gameTitle.trim() ? records.filter(candidate => normalizeTitle(candidate.title) === normalizeTitle(gameTitle)) : [];
-	const record = exact || (titleMatches.length === 1 ? titleMatches[0] : (titleMatches.find(c => !shortcutAlreadyLinked(c.id)) || titleMatches[0]));
-	if (record) return record;
-	const cleanTitle = gameTitle.trim();
-	if (!cleanTitle && (!normalizedId || normalizedId < SHORTCUT_THRESHOLD)) return null;
-	let fallbackId = normalizedId && normalizedId >= SHORTCUT_THRESHOLD ? normalizedId : 0;
-	if (!fallbackId && cleanTitle) {
-		let hash = 0;
-		for (let i = 0; i < cleanTitle.length; i++) hash = (hash * 31 + cleanTitle.charCodeAt(i)) >>> 0;
-		fallbackId = SHORTCUT_THRESHOLD + (hash % 1000000000);
-	}
-	return { id: fallbackId, title: cleanTitle || 'Non-Steam Game', app: null };
+	return null;
 }
 export function requestManualShortcutLink(shortcutAppId: number, gameTitle = '', targetDoc?: Document | null): boolean {
-	const record = resolveOrSynthesizeShortcutRecord(shortcutAppId, gameTitle, targetDoc);
+	const record = resolveShortcutReviewRecord(shortcutAppId, gameTitle, targetDoc);
 	if (!record) return false;
 	undismissShortcut(record.id);
 	scheduleShortcutReview(record, 0, 'manual', targetDoc);
 	return true;
 }
-export function requestNativeAddShortcutReview(shortcutAppId: number, gameTitle = '', targetDoc?: Document | null): boolean {
-	const record = resolveOrSynthesizeShortcutRecord(shortcutAppId, gameTitle, targetDoc);
+export function requestNativeAddShortcutReview(shortcutAppId: number, gameTitle = '', targetDoc?: Document | null, launchContext?: Partial<ShortcutDetectionContext>): boolean {
+	const record = resolveShortcutReviewRecord(shortcutAppId, gameTitle, targetDoc);
 	if (!record || shortcutAlreadyLinked(record.id)) return false;
 	undismissShortcut(record.id);
-	scheduleShortcutReview(record, 0, 'native-add-auto', targetDoc);
+	scheduleShortcutReview(record, 0, 'native-add-auto', targetDoc, record.id === (Number(shortcutAppId) >>> 0) ? launchContext : undefined);
 	return true;
 }
 export { linkAllShortcutsExperimental, type BulkLinkAllResult, type BulkLinkGameOutcome, type BulkLinkOutcomeStatus, type BulkLinkProgressPhase } from './bulk-link';

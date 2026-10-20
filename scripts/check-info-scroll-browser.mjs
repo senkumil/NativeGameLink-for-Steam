@@ -5,6 +5,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
+import { browserLaunchOptions } from './helpers/browser-launch.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const bundledPackages = process.env.CODEX_NODE_MODULES
@@ -13,7 +14,6 @@ const require = createRequire(import.meta.url);
 let chromium;
 try { ({ chromium } = require('playwright')); }
 catch { ({ chromium } = require(path.join(bundledPackages, 'playwright'))); }
-const edge = process.env.CLOUD_BROWSER_EXECUTABLE || 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
 const sources = Object.fromEntries([
   ['class-module-cache', 'frontend/steam/class-module-cache.ts'],
   ['css', 'frontend/steam/css.ts'], ['native-dom', 'frontend/steam/native-dom.ts'],
@@ -21,6 +21,7 @@ const sources = Object.fromEntries([
   ['achievement-playbar-space', 'frontend/steam/achievement-playbar-space.ts'],
   ['info-button-target', 'frontend/features/library/info-button-target.ts'],
   ['info-panel', 'frontend/features/library/info-panel.ts'],
+  ['info-style', 'frontend/features/library/styles/info.ts'],
 ].map(([name, filename]) => [name, ts.transpileModule(fs.readFileSync(name === 'info-panel' && process.env.INFO_PANEL_SOURCE
   ? process.env.INFO_PANEL_SOURCE : path.join(root, filename), 'utf8'),
   { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText]));
@@ -38,6 +39,10 @@ async function browserChecks({ sources, foreignOnly = false }) {
     steamLanguageSync: () => 'english' };
   const modules = {};
   const dependencies = {
+    './inject': { injectLibraryStyle: (doc, id, css) => {
+      if (doc.getElementById(id)) return;
+      const style = doc.createElement('style'); style.id = id; style.textContent = css; doc.head.appendChild(style);
+    } },
     '@steambrew/client': { findClassModule: predicate => predicate(classes) ? classes : null },
     './modules/SteamWebpackRuntime': { steamWebpackRuntime: { getRuntimeIdentity: () => classes, getAllModules: () => classes ? [{ id: 'fixture-classes', exports: classes }] : [] } },
     '../../core/text': { escapeHtml: value => String(value || '').replace(/[&<>"']/g, c =>
@@ -156,10 +161,27 @@ async function browserChecks({ sources, foreignOnly = false }) {
     content.style.height = '1600px'; content.textContent = 'Community content';
     pane.append(playbar, links, content); document.body.append(sidebar, pane);
     commit(playbar); commit(buttons);
+    load('info-style').ensureInfoPanelStyles(document);
+    const nativeStyles = document.createElement('style');
+    nativeStyles.textContent = '.SteamMenuButton{width:32px;height:32px;padding:0;border:0;margin-right:10px}.SteamDotDotDot svg{width:24px;height:24px}';
+    document.head.appendChild(nativeStyles);
+    let nativeClassesReady = false;
+    load('css').PLAYBAR_CLASS_MODULE = () => ({ classes, native: nativeClassesReady });
     info.ensureNativeInfoPanel(document, model); info.ensureNativeInfoButton(document, model);
     const panel = document.getElementById('gdl-game-info-panel');
     const original = buttons.querySelector('[data-gdl-game-info-button="1"]');
     check(Boolean(original), 'The committed linked header receives its Info control');
+    check(original.classList.contains('gdl-info-button-fallback') && original.getBoundingClientRect().width === 32
+      && original.getBoundingClientRect().height === 32, 'The provisional button already uses native 32px geometry');
+    check(getComputedStyle(original.querySelector('circle[fill="none"]')).stroke === getComputedStyle(original).color,
+      'The provisional information circle follows the icon color instead of keeping a black outline');
+    nativeClassesReady = true;
+    info.ensureNativeInfoButton(document, model);
+    check(buttons.querySelector('[data-gdl-game-info-button="1"]') === original
+      && original.classList.contains(classes.MenuButton) && !original.classList.contains('gdl-info-button-fallback'),
+      'Late native classes upgrade the existing control in the same game session');
+    check(original.querySelector('svg').parentElement.classList.contains(classes.DotDotDot),
+      'Late native classes also restore the native icon wrapper');
     sidebar.scrollTop = 340; pane.scrollTop = 650; await flush(); await flush();
     check(original.dataset.gdlScrollTopActive === '1', 'The original button becomes Back to top after details scrolling');
     original.click(); await flush(600);
@@ -217,7 +239,7 @@ async function browserChecks({ sources, foreignOnly = false }) {
   } catch (error) { return { ok: false, results, error: String(error.stack || error) }; }
 }
 
-const browser = await chromium.launch({ executablePath: edge, headless: true,
+const browser = await chromium.launch({ ...browserLaunchOptions(), headless: true,
   args: ['--disable-background-networking', '--no-first-run', '--no-default-browser-check'] });
 const reports = [];
 try {

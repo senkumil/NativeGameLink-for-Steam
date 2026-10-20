@@ -1,7 +1,6 @@
-import { backendLog, clearAllLinkedArtworksBackend, clearArtworkBackend, clearArtworkExceptIconBackend, restoreSteamAppIdFileBackend } from '../../api/backend';
+import { backendLog, clearAllLinkedArtworksBackend, clearArtworkBackend, clearArtworkExceptIconBackend } from '../../api/backend';
 import { removeShortcutMappingsChecked, shortcutMappingKey, updateMappingsChecked } from '../../core/mappings';
 import { normalizeTitle } from '../../core/text';
-import { getShortcutAppById, readShortcutOverviewField } from '../../steam/shortcuts';
 import { hasManagedArtworkSaved, supersedeArtworkApplications } from '../library/artwork';
 import { pauseLinkedGamePrefetch, resumeLinkedGamePrefetch } from '../library/prefetch';
 import { dismissShortcut, undismissShortcut } from './dismissed';
@@ -13,6 +12,7 @@ import { runShortcutMutations, shortcutMutationKeys } from './operation-lock';
 import { clearShortcutManifest, clearAllShortcutManifests } from './transaction';
 import { clearShortcutEdition } from './editions';
 import { purgeShortcutStorage, purgeShortcutCachesAndArtwork } from './purge';
+import { shortcutAppIdFileTarget, updateShortcutAppIdFile } from './steam-appid-file';
 export { purgeShortcutStorage, purgeShortcutCachesAndArtwork };
 
 export interface ShortcutUnlinkOptions {
@@ -41,10 +41,8 @@ async function unlinkShortcutFromSteamUnlocked(options: ShortcutUnlinkOptions): 
 	const shortcutAppId = normalizedShortcutAppId(options.shortcutAppId);
 	if (!shortcutAppId) return { ok: false, error: 'invalid_shortcut_id' };
 
-	const app = getShortcutAppById(shortcutAppId);
-	const exePath = String(options.exePath || readShortcutOverviewField(
-		app, 'strShortcutExe', 'm_strShortcutExe', 'shortcut_exe', 'strExePath',
-	) || '').trim();
+	const appIdFileTarget = shortcutAppIdFileTarget(shortcutAppId, options.doc, options.exePath || '');
+	const exePath = appIdFileTarget.exe_path;
 	const steamAppId = String(options.steamAppId
 		|| findMappingForShortcut(shortcutAppId, options.title, exePath)
 		|| '').trim();
@@ -111,13 +109,10 @@ async function unlinkShortcutFromSteamUnlocked(options: ShortcutUnlinkOptions): 
 		} else {
 			void clearArtworkExceptIconBackend({ shortcut_app_id: String(shortcutAppId) }).catch((_error: unknown): void => {});
 		}
-		const startDir = String(readShortcutOverviewField(app, 'strShortcutStartDir', 'm_strShortcutStartDir', 'shortcut_start_dir', 'strStartDir') || '').trim();
-		void restoreSteamAppIdFileBackend({
-			request_json: JSON.stringify({ exe_path: exePath, start_dir: startDir }),
-		}).catch(error => backendLog('Restore steam_appid.txt skipped: ' + error));
 	} catch (error) {
 		backendLog(`Unlink artwork cleanup failed for ${shortcutAppId}: ${error}`);
 	}
+	const appIdFileRestored = await updateShortcutAppIdFile('restore', appIdFileTarget);
 
 	if (!supersedeSettled) {
 		void supersedePromise.then(async () => {
@@ -141,16 +136,13 @@ async function unlinkShortcutFromSteamUnlocked(options: ShortcutUnlinkOptions): 
 	}
 
 	try { shortcutRuntimeHost().resetLibraryInjection?.(true, options.doc || undefined); } catch {}
-	backendLog(`Shortcut ${shortcutAppId} fully unlinked from Steam AppID ${steamAppId || 'unknown'}.`);
-	return { ok: true, shortcutAppId, steamAppId };
+	backendLog(`Shortcut ${shortcutAppId} unlinked from Steam AppID ${steamAppId || 'unknown'}; steam_appid.txt restore=${appIdFileRestored}.`);
+	return { ok: appIdFileRestored, shortcutAppId, steamAppId, ...(!appIdFileRestored ? { error: 'steam_appid_file_restore_failed' } : {}) };
 }
 
 export function unlinkShortcutFromSteam(options: ShortcutUnlinkOptions): Promise<ShortcutUnlinkResult> {
 	const shortcutAppId = normalizedShortcutAppId(options.shortcutAppId);
-	const app = shortcutAppId ? getShortcutAppById(shortcutAppId) : null;
-	const currentExePath = String(readShortcutOverviewField(
-		app, 'strShortcutExe', 'm_strShortcutExe', 'shortcut_exe', 'strExePath',
-	) || '').trim();
+	const currentExePath = shortcutAppId ? shortcutAppIdFileTarget(shortcutAppId, options.doc, options.exePath || '').exe_path : '';
 	return runShortcutMutations(shortcutMutationKeys({
 		shortcutAppId: options.shortcutAppId,
 		title: options.title,

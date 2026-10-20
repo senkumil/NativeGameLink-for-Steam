@@ -1,7 +1,7 @@
 import { backendLog } from '../../api/backend';
 import { getPreferences } from '../../core/preferences';
-import { readShortcutOverviewField, shortcutExecutableIdentity, shortcutStableIdentity } from '../../steam/shortcuts';
-import { candidateSteamDocuments, nativeAddNonSteamDialogOpen, nativeAddSelectedExecutableIdentities } from './native-add-guard';
+import { cleanShortcutPath, readShortcutOverviewField, shortcutExecutableIdentity, shortcutPathDirectory, shortcutStableIdentity } from '../../steam/shortcuts';
+import { candidateSteamDocuments, nativeAddNonSteamDialogOpen, nativeAddSelectedPrograms, type NativeAddProgramSelection } from './native-add-guard';
 import { getAllShortcutRecords, refreshShortcutRecordsFromBackend, shortcutAlreadyLinked, type ShortcutRecord } from './registry';
 import { requestNativeAddShortcutReview } from './manual-link';
 
@@ -10,6 +10,7 @@ let closeEvaluationTimers: ReturnType<typeof setTimeout>[] = [];
 let dialogOpen = false;
 let dialogObserved = false;
 let sessionArmedAt = 0;
+let sessionCommittedAt = 0;
 let sessionGeneration = 0;
 const STARTUP_WARMUP_MS = 6000;
 let pluginStartedAt = 0;
@@ -25,6 +26,7 @@ const handledExecutables = new Set<string>();
 let baselineIds = new Set<number>();
 let baselineIdentities = new Set<string>();
 let selectedExecutables = new Set<string>();
+const selectedPrograms = new Map<string, NativeAddProgramSelection>();
 
 const interactionListeners = new Map<Document, EventListener>();
 const documentObservers = new Map<Document, MutationObserver>();
@@ -100,12 +102,40 @@ function snapshotBaseline(): void {
 	baselineIds = new Set(records.map(record => record.id));
 	baselineIdentities = new Set(records.map(recordIdentity).filter(Boolean));
 	selectedExecutables.clear();
+	selectedPrograms.clear();
 }
 
 function captureCurrentSelections(): void {
-	for (const executable of nativeAddSelectedExecutableIdentities()) {
-		if (executable) selectedExecutables.add(executable);
+	// Keep the last rendered snapshot after Steam removes the picker, but do
+	// replace it while open so a program unchecked before Add is not retained.
+	if (!nativeAddNonSteamDialogOpen()) return;
+	selectedExecutables.clear();
+	selectedPrograms.clear();
+	for (const selection of nativeAddSelectedPrograms()) {
+		const path = cleanShortcutPath(selection.exePath);
+		const executable = shortcutExecutableIdentity(path);
+		if (executable) {
+			selectedExecutables.add(executable);
+			selectedPrograms.set(`${selection.title.normalize('NFC').trim()}\0${executable}`, { title: selection.title.trim(), exePath: path });
+		}
 	}
+}
+
+/** Join only an unambiguous native selection to its new session record. Modern
+ * Steam IDs need not be derived from executable/name hashes. The current route
+ * and executable basenames are not identity evidence for this association. */
+function selectedExecutableForRecord(record: ShortcutRecord): string {
+	if (!dialogOpen && (!sessionCommittedAt || Date.now() - sessionCommittedAt > 12000)) return '';
+	const executable = recordExecutable(record);
+	if (executable) return Array.from(selectedPrograms.values()).find(selection =>
+		shortcutExecutableIdentity(selection.exePath) === executable)?.exePath || '';
+	if (!isSessionNewRecord(record)) return '';
+	const title = record.title.normalize('NFC').trim();
+	const matches = Array.from(selectedPrograms.values()).filter(selection => selection.title.normalize('NFC').trim() === title);
+	if (matches.length !== 1 || !title) return '';
+	const records = getAllShortcutRecords().filter(candidate => isSessionNewRecord(candidate)
+		&& candidate.title.normalize('NFC').trim() === title);
+	return records.length === 1 && records[0].id === record.id ? matches[0].exePath : '';
 }
 
 function isSessionNewRecord(record: ShortcutRecord): boolean {
@@ -115,7 +145,7 @@ function isSessionNewRecord(record: ShortcutRecord): boolean {
 
 function recordWasExplicitlySelected(record: ShortcutRecord): boolean {
 	const executable = recordExecutable(record);
-	return Boolean(executable && selectedExecutables.has(executable));
+	return Boolean((executable && selectedExecutables.has(executable)) || selectedExecutableForRecord(record));
 }
 
 function triggerShortcutAutoReview(record: ShortcutRecord): boolean {
@@ -133,7 +163,9 @@ function triggerShortcutAutoReview(record: ShortcutRecord): boolean {
 	if (identity) knownShortcutIdentities.add(identity);
 
 	backendLog(`Auto review opening for newly added shortcut "${record.title}" (${record.id}).`);
-	return requestNativeAddShortcutReview(record.id, record.title);
+	const selectedPath = selectedExecutableForRecord(record);
+	return requestNativeAddShortcutReview(record.id, record.title, undefined,
+		selectedPath ? { exePath: selectedPath, startDir: shortcutPathDirectory(selectedPath) } : undefined);
 }
 
 function scanForNewlyAddedShortcuts(): void {
@@ -243,6 +275,7 @@ function onDialogOpened(): void {
 	dialogOpen = true;
 	dialogObserved = true;
 	sessionArmedAt = Date.now();
+	sessionCommittedAt = 0;
 	captureCurrentSelections();
 	backendLog(`Native Add Non-Steam session opened with ${baselineIds.size} existing shortcut(s).`);
 }
@@ -256,6 +289,7 @@ function armNativeAddSession(): void {
 	dialogOpen = true;
 	dialogObserved = false;
 	sessionArmedAt = Date.now();
+	sessionCommittedAt = 0;
 	backendLog(`Native Add Non-Steam session armed from Steam menu with ${baselineIds.size} existing shortcut(s).`);
 }
 
@@ -265,6 +299,7 @@ function onDialogClosed(): void {
 	dialogOpen = false;
 	dialogObserved = false;
 	sessionArmedAt = 0;
+	sessionCommittedAt = Date.now();
 	const generation = sessionGeneration;
 	for (const delay of [50, 150, 300, 500, 800, 1200, 1800, 2500, 4000, 6500, 9000]) {
 		closeEvaluationTimers.push(setTimeout(() => evaluateCommittedNativeAdds(generation), delay));
@@ -322,6 +357,7 @@ export function stopNativeAddAutoDetector(): void {
 	dialogOpen = false;
 	dialogObserved = false;
 	sessionArmedAt = 0;
+	sessionCommittedAt = 0;
 	pluginStartedAt = 0;
 	startupSettled = false;
 	registryRefreshAt = 0;
@@ -329,6 +365,7 @@ export function stopNativeAddAutoDetector(): void {
 	baselineIds.clear();
 	baselineIdentities.clear();
 	selectedExecutables.clear();
+	selectedPrograms.clear();
 	knownShortcutIds.clear();
 	knownShortcutIdentities.clear();
 	handledIds.clear();

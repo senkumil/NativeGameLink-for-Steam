@@ -35,6 +35,12 @@ jobs:
       - name: Install Chromium for portable browser tests
         run: npx playwright install --with-deps chromium
 
+      - name: Configure portable browser tests
+        run: |
+          browser_path="$(node -p "require('playwright').chromium.executablePath()")"
+          echo "CLOUD_BROWSER_EXECUTABLE=$browser_path" >> "$GITHUB_ENV"
+          echo "ACHIEVEMENT_BROWSER_EXECUTABLE=$browser_path" >> "$GITHUB_ENV"
+
       - name: Run full verification and production build
         env:
           NGL_INSTALLED_STEAM_CHECKS: unavailable

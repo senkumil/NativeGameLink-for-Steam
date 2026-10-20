@@ -1,12 +1,10 @@
 return function(deps)
 local logger = deps.logger
 local millennium = deps.millennium
-local http = deps.http
 local cjson = deps.cjson
 local fs = deps.fs
 local util = deps.util
 local config = deps.config
-local USER_AGENT = deps.user_agent or "NativeGameLink-for-Steam/2.0.0"
 local M = {}
 local detection_url_encode = util.url_encode
 local function detection_encode(value)
@@ -163,22 +161,8 @@ function M.get_shortcut_details(shortcut_app_id, shortcut_title)
     logger:info("Resolved shortcut details from shortcuts.vdf for " .. tostring(target_id or target_title))
     return detection_encode(record)
 end
-local function detection_http_json(url, timeout)
-    local ok_http, res, err = pcall(http.get, url, {
-        headers = {
-            ["Accept"] = "application/json",
-            ["User-Agent"] = USER_AGENT
-        },
-        timeout = timeout or 3
-    })
-    if not ok_http or not res or res.status ~= 200 then
-        return nil, tostring(err or res or "HTTP request failed")
-    end
-    local ok_json, body = pcall(cjson.decode, res.body or "")
-    if not ok_json or type(body) ~= "table" then return nil, "JSON parse failed" end
-    return body, nil
-end
-local function detection_fetch_appdetails(appid, language)
+local detection_http_json = deps.shortcut_detection_catalog.http_json
+local function detection_fetch_appdetails(appid, language, budget)
     local id = tostring(appid or "")
     if not id:match("^%d+$") then return nil end
     local lang = language or "english"
@@ -187,7 +171,7 @@ local function detection_fetch_appdetails(appid, language)
     if cached then return cached.data end
     local url = "https://store.steampowered.com/api/appdetails?appids=" .. id
         .. "&l=" .. detection_url_encode(lang)
-    local body = detection_http_json(url, 2.5)
+    local body = detection_http_json(url, 2.5, budget)
     local record = type(body) == "table" and body[id] or nil
     if type(record) == "table" and record.success and type(record.data) == "table" then
         detection_cache_set(detection_appdetails_cache, cache_key, { data = record.data, ttl = 1800 })
@@ -238,7 +222,7 @@ local function detection_find_appmanifest(exe_path)
     end
     return nil, nil
 end
-local function detection_store_search(query, language, recovery_mode)
+local function detection_store_search(query, language, recovery_mode, budget)
     local cleaned = detection_trim(query)
     if #cleaned < 2 then return {}, false end
     local lang = language or "english"
@@ -250,9 +234,13 @@ local function detection_store_search(query, language, recovery_mode)
             .. detection_url_encode(cleaned)
             .. "&l=" .. detection_url_encode(target_lang)
             .. "&cc=US"
-        local body = detection_http_json(url, timeout)
+        local body = detection_http_json(url, timeout, budget)
         if type(body) ~= "table" then return nil end
-        return type(body.items) == "table" and body.items or {}
+        if type(body.items) ~= "table" then
+            if budget then budget.incomplete = true end
+            return nil
+        end
+        return body.items
     end
     local timeout = recovery_mode and 4.0 or 2.5
     local items = fetch_for_language(lang, timeout)
@@ -263,12 +251,12 @@ local function detection_store_search(query, language, recovery_mode)
     detection_cache_set(detection_store_cache, cache_key, { items = items, confirmed = true, ttl = 600 })
     return items, true
 end
-local function detection_fetch_appinfo(appid)
+local function detection_fetch_appinfo(appid, budget)
     local id = tostring(appid or "")
     if not id:match("^%d+$") then return nil end
     local cached = detection_cache_get(detection_appinfo_cache, id, 1800)
     if cached then return cached.data end
-    local body = detection_http_json("https://api.steamcmd.net/v1/info/" .. id, 1.5)
+    local body = detection_http_json("https://api.steamcmd.net/v1/info/" .. id, 1.5, budget)
     local data = type(body) == "table" and type(body.data) == "table" and body.data[id] or nil
     if data then detection_cache_set(detection_appinfo_cache, id, { data = data, ttl = 1800 }) end
     return data
@@ -306,10 +294,10 @@ local function detection_add_reason(candidate, reason)
         table.insert(candidate.reasons, reason)
     end
 end
-local function detection_direct_result(appid, source, request, language, launcher, generic_launcher, fallback_name, identity_context)
-    local data = detection_fetch_appdetails(appid, language)
+local function detection_direct_result(appid, source, request, language, launcher, generic_launcher, fallback_name, identity_context, budget)
+    local data = detection_fetch_appdetails(appid, language, budget)
     local validation_source = "steam_store_appdetails"
-    local appinfo = detection_fetch_appinfo(appid)
+    local appinfo = detection_fetch_appinfo(appid, budget)
     local common = type(appinfo) == "table" and type(appinfo.common) == "table" and appinfo.common or nil
     local catalog = deps.shortcut_detection_catalog
     if catalog.reject_official(appid, data, identity_context)
@@ -456,10 +444,12 @@ function M.detect_game_candidates(request_json)
     }, "\31")
     local cached = detection_cache_get(detection_candidate_cache, cache_key, 600)
     if cached then return cached.json end
+    local budget = deps.shortcut_detection_catalog.new_request_budget(request.expires_at_ms)
     local folders = detection_folder_hints(request.exe_path, request.start_dir)
     local identity_context = { title = title_cleaned, exe_stem = exe_stem, rejected = {},
         pe_product = clean_pe_product, pe_desc = clean_pe_desc, folders = folders }
     local function encode_result(result)
+        if budget.incomplete then result.transient_error, result.validation_state = true, "partial" end
         local filtered, rejected = {}, {}
         for _, candidate in ipairs(result.candidates or {}) do
             if not identity_context.rejected[tostring(candidate.appid)] then filtered[#filtered + 1] = candidate end
@@ -476,10 +466,10 @@ function M.detect_game_candidates(request_json)
         if not direct_appid then direct_appid, direct_source = detection_find_appmanifest(request.exe_path) end
     end
     if direct_appid then
-        local direct = detection_direct_result(direct_appid, direct_source, request, language, launcher, generic_launcher, nil, identity_context)
+        local direct = detection_direct_result(direct_appid, direct_source, request, language, launcher, generic_launcher, nil, identity_context, budget)
         if direct then
             local encoded = encode_result(direct)
-            detection_cache_set(detection_candidate_cache, cache_key, { json = encoded, ttl = 600 })
+            if not budget.incomplete then detection_cache_set(detection_candidate_cache, cache_key, { json = encoded, ttl = 600 }) end
             return encoded
         end
     end
@@ -499,10 +489,10 @@ function M.detect_game_candidates(request_json)
         if identity_hint then
             local alias_appid, alias_name = automatic_alias_appid(identity_hint)
             if alias_appid then
-                local direct = detection_direct_result(alias_appid, "maintained_alias", request, language, launcher, generic_launcher, alias_name, identity_context)
+                local direct = detection_direct_result(alias_appid, "maintained_alias", request, language, launcher, generic_launcher, alias_name, identity_context, budget)
                 if direct then
                     local encoded = encode_result(direct)
-                    detection_cache_set(detection_candidate_cache, cache_key, { json = encoded, ttl = 600 })
+                    if not budget.incomplete then detection_cache_set(detection_candidate_cache, cache_key, { json = encoded, ttl = 600 }) end
                     return encoded
                 end
             end
@@ -578,7 +568,7 @@ function M.detect_game_candidates(request_json)
         local query_text = queries[query_index]
         local query_norm = detection_normalize(query_text)
         local is_short_query = #query_norm:gsub("%s+", "") <= 3
-        local items, search_confirmed = detection_store_search(query_text, language, recovery_mode)
+        local items, search_confirmed = detection_store_search(query_text, language, recovery_mode, budget)
 		if not search_confirmed then store_search_confirmed = false end
         local found_exact_match = false
         for rank = 1, math.min(#items, 15) do
@@ -679,8 +669,8 @@ function M.detect_game_candidates(request_json)
     local function validate_candidate(candidate)
         if candidate._validated then return end
         candidate._validated = true
-        local appinfo = detection_fetch_appinfo(candidate.appid) or {}
-        local details = detection_fetch_appdetails(candidate.appid, language)
+        local appinfo = detection_fetch_appinfo(candidate.appid, budget) or {}
+        local details = detection_fetch_appdetails(candidate.appid, language, budget)
         if deps.shortcut_detection_catalog.reject_official(candidate.appid, details, identity_context)
             or deps.shortcut_detection_catalog.reject_official(candidate.appid, appinfo.common, identity_context) then
             candidate.identity_collision = true
@@ -775,7 +765,7 @@ function M.detect_game_candidates(request_json)
         if #output >= 6 then break end
         if deps.shortcut_detection_catalog.viable_candidate(candidate, identity_context)
             and (candidate.alias_hint or (candidate.image or ""):find("header.jpg")) then
-            local official = detection_fetch_appdetails(candidate.appid, language)
+            local official = detection_fetch_appdetails(candidate.appid, language, budget)
             if type(official) == "table" then
                 deps.shortcut_detection_catalog.reject_official(candidate.appid, official, identity_context)
                 if official.name and tostring(official.name) ~= "" then candidate.name = tostring(official.name) end
@@ -824,15 +814,21 @@ function M.detect_game_candidates(request_json)
     end
     if #output == 0 and deps.shortcut_detection_catalog and deps.shortcut_detection_catalog.resolve_catalog_candidates then
         identity_context.language, identity_context.launcher, identity_context.generic_launcher = language, launcher, generic_launcher
-        local cat_cands = deps.shortcut_detection_catalog.resolve_catalog_candidates(request, identity_context,
-            { direct_result = detection_direct_result, fetch_appdetails = detection_fetch_appdetails, fetch_appinfo = detection_fetch_appinfo })
+        local cat_cands, catalog_confirmed = deps.shortcut_detection_catalog.resolve_catalog_candidates(request, identity_context, {
+            direct_result = function(id, source, req, lang, is_launcher, is_generic, fallback, identity)
+                return detection_direct_result(id, source, req, lang, is_launcher, is_generic, fallback, identity, budget)
+            end,
+            fetch_appdetails = function(id, lang) return detection_fetch_appdetails(id, lang, budget) end,
+            fetch_appinfo = function(id) return detection_fetch_appinfo(id, budget) end,
+        }, budget)
+        if catalog_confirmed == false then budget.incomplete = true end
         for _, cc in ipairs(cat_cands or {}) do table.insert(output, cc) end
     end
-    local validation_confirmed = store_search_confirmed and not (output[1] and output[1].validation_state == "partial")
+    local validation_confirmed = store_search_confirmed and not budget.incomplete and not (output[1] and output[1].validation_state == "partial")
     local result = {
         candidates = output, launcher_detected = launcher, generic_launcher = generic_launcher,
         executable = exe_basename, queries = queries, source = "steam_store_search",
-        ambiguous = output[1] and output[1].ambiguous or false, transient_error = not store_search_confirmed,
+        ambiguous = output[1] and output[1].ambiguous or false, transient_error = not store_search_confirmed or budget.incomplete,
         validation_state = validation_confirmed and "confirmed" or "partial",
     }
     local encoded = encode_result(result)

@@ -20,7 +20,7 @@ import { cancelPendingLinkJobs, enqueueLinkJob, hasPendingLinkJob, stageLinkJobF
 import { SHORTCUT_PROPERTIES_STYLE } from './properties-style';
 const GDL_PROP = 'gdl-properties-injected';
 function retryableLinkError(error: unknown): boolean {
-	return !['invalid_appid', 'refusing_to_modify_native_steam_app', 'shortcut_identity_changed', 'shortcut_identity_ambiguous', 'shortcut_not_found']
+	return !['invalid_appid', 'refusing_to_modify_native_steam_app', 'shortcut_identity_changed', 'shortcut_identity_ambiguous', 'shortcut_not_found', 'steam_appid_file_protection_failed']
 		.includes(String(error || '').replace(/^Error:\s*/i, '').trim());
 }
 

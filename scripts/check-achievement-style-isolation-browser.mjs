@@ -26,7 +26,7 @@ const sources = Object.fromEntries([
   ['mask', 'frontend/features/achievements/styles/mask.ts'],
   ['inject', 'frontend/features/achievements/styles/inject.ts'],
   ['native-achievement-layout', 'frontend/steam/native-achievement-layout.ts'],
-  ['css', 'frontend/steam/css.ts'], ['class-module-cache', 'frontend/steam/class-module-cache.ts'],
+  ['css', 'frontend/steam/css.ts'], ['pure-class-factory', 'frontend/steam/gamepad/components/pure-class-factory.ts'], ['class-module-cache', 'frontend/steam/class-module-cache.ts'],
   ['SteamWebpackRuntime', 'frontend/steam/modules/SteamWebpackRuntime.ts'],
   ['SteamUIModeService', 'frontend/steam/ui/SteamUIModeService.ts'],
   ['native-window-store', 'frontend/steam/native-window-store.ts'],

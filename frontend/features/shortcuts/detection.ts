@@ -169,7 +169,12 @@ export async function buildShortcutDetectionContext(
 	};
 }
 
-export const DETECTION_MODEL_VERSION = 'v12';
+export const DETECTION_MODEL_VERSION = 'v13';
+
+export function sameShortcutDetectionContext(left: ShortcutDetectionContext, right: ShortcutDetectionContext): boolean {
+	return left.shortcutAppId === right.shortcutAppId && left.title === right.title && left.exePath === right.exePath
+		&& left.startDir === right.startDir && left.launchOptions === right.launchOptions;
+}
 
 /** A suggestion can be preselected for review only with consistent identity evidence. */
 export function reliableReviewCandidate(candidate?: ShortcutDetectionCandidate): boolean {
@@ -231,10 +236,26 @@ export { mergeCandidateLists } from './candidate-merger';
 import { mergeCandidateLists } from './candidate-merger';
 
 
-export async function detectShortcutCandidatesLocal(context: ShortcutDetectionContext): Promise<ShortcutDetectionResult | null> {
+function decodedDetectionResult(raw: unknown): ShortcutDetectionResult | null {
+	let parsed: any = raw;
+	for (let attempt = 0; attempt < 3 && typeof parsed === 'string'; attempt++) parsed = JSON.parse(parsed);
+	if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !('candidates' in parsed || parsed.error)) return null;
+	if (!parsed.error && !Array.isArray(parsed.candidates)
+		&& !(parsed.candidates && typeof parsed.candidates === 'object' && !Object.keys(parsed.candidates).length)) return null;
+	return parseDetectionResult(parsed);
+}
+
+interface LocalDetectionObserver {
+	isCurrent: () => boolean;
+	onLateResult: (result: ShortcutDetectionResult) => void;
+}
+
+export async function detectShortcutCandidatesLocal(
+	context: ShortcutDetectionContext, observer?: LocalDetectionObserver,
+): Promise<ShortcutDetectionResult | null> {
 	const titleHint = detectionTitleHint(context.title);
 	try {
-		const raw = await withDetectionBudget(detectGameCandidatesLocalBackend({
+		const request = detectGameCandidatesLocalBackend({
 			request_json: JSON.stringify({
 				title: titleHint,
 				exe_path: context.exePath,
@@ -243,13 +264,29 @@ export async function detectShortcutCandidatesLocal(context: ShortcutDetectionCo
 				shortcut_app_id: String(context.shortcutAppId),
 				phase: 'local',
 			}),
-		}), 1800);
-		const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
-		if (!parsed || typeof parsed !== 'object') return null;
-		const result = parseDetectionResult(parsed);
-		result.candidates = expandCandidatesWithEditions(result.candidates);
-		result.phase = 'local';
-		result.validation_state = 'partial';
+		}).then(raw => {
+			const result = decodedDetectionResult(raw);
+			if (result) {
+				result.candidates = expandCandidatesWithEditions(result.candidates);
+				result.phase = 'local'; result.validation_state = 'partial';
+			}
+			return result;
+		}).catch((error): null => { backendLog(`Local AppID detection failed for ${context.title}: ${error}`); return null; });
+		// IPC can wait behind another backend call. Release the fast phase at
+		// 1800 ms, but keep a bounded observer for useful results already queued.
+		// Clear both callbacks at the deadline so a hung request retains no UI.
+		const observeLate = Boolean(observer);
+		let late = observer?.onLateResult || null, current = observer?.isCurrent || null, timedOut = false;
+		observer = undefined;
+		const release = (): void => { late = null; current = null; clearTimeout(deadline); };
+		const deadline = observeLate ? setTimeout(release, 10000) : undefined;
+		void request.then(result => {
+			try { if (timedOut && result && current?.()) late?.(result); }
+			catch (error) { backendLog(`Late local AppID publication failed: ${error}`); }
+			finally { release(); }
+		});
+		const result = await withDetectionBudget(request, 1800);
+		timedOut = true;
 		return result;
 	} catch (error) {
 		backendLog(`Local AppID detection failed for ${context.title}: ${error}`);
@@ -283,9 +320,8 @@ export async function enrichShortcutCandidatesRemote(
 			}),
 		}), 6500);
 		if (signal?.aborted) return null;
-		const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
-		if (!parsed || typeof parsed !== 'object') return null;
-		const result = parseDetectionResult(parsed);
+		const result = decodedDetectionResult(raw);
+		if (!result) return null;
 		result.candidates = expandCandidatesWithEditions(result.candidates);
 		result.phase = 'remote';
 		return result;
@@ -316,7 +352,11 @@ export async function detectShortcutCandidates(context: ShortcutDetectionContext
 							validation_state: 'partial',
 						};
 					}
-					return remoteResult || null;
+					if (!remoteResult) return null;
+					// A completed empty remote response cannot establish absence when
+					// local evidence was unavailable. Keep the next attempt retryable.
+					return !localResult || localResult.error || localResult.transient_error
+						? { ...remoteResult, transient_error: true, validation_state: 'partial' } : remoteResult;
 				}
 
 				const mergedCandidates = mergeCandidateLists(

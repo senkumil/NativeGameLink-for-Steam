@@ -154,4 +154,31 @@ offDuringRetry.service.clearLocalAchievementRequestCache(); retryWait.resolve(JS
 check(await offLate === null && offDuringRetry.published.length === 0, 'A verification response arriving after disable never publishes');
 check([h, duplicate, oversized, failed, timeout, retry, trusted, wrongApp, schemaFailure, offBeforeSchema, offDuringSchema, offDuringRetry].every(test => test.writes() === 0),
   'All success, failure, timeout and cancellation paths avoid native store writes');
+const slider = harness(), stalePoll = deferred();
+slider.backend(() => stalePoll.promise);
+const staleRead = slider.service.fetchLocalAchievementData(id, { stateAppId: shortcut });
+const preview = { ...verified(), simulation_enabled: true, unlocked: 1, achievements: [{ name: canonicalId, earned: true }] };
+slider.service.publishOptimisticAchievementUpdate({ steamAppId: id, stateAppId: shortcut, data: preview });
+stalePoll.resolve(JSON.stringify(verified()));
+check(await staleRead === null && slider.published.length === 1 && slider.published[0].data.unlocked === 1,
+  'An old zero-progress response cannot undo a newer slider preview');
+check(await slider.service.fetchLocalAchievementData(id, { stateAppId: shortcut, maxAgeMs: 0 }) === preview
+  && slider.backendCalls.length === 1, 'Polling retains the preview while the options write is pending');
+const other = { ...verified(), state_appid: '3000000002' };
+slider.backend(() => JSON.stringify(other));
+check((await slider.service.fetchLocalAchievementData(id, { stateAppId: '3000000002' })).unlocked === 0,
+  'A pending slider does not hold another installation of the same game');
+slider.service.releaseOptimisticAchievementUpdate(id, shortcut);
+slider.backend(() => JSON.stringify(preview));
+check((await slider.service.fetchLocalAchievementData(id, { stateAppId: shortcut })).unlocked === 1
+  && slider.backendCalls.length === 3, 'The save acknowledgement releases the exact pair for backend confirmation');
+slider.service.publishOptimisticAchievementUpdate({ steamAppId: id, stateAppId: shortcut, data: preview });
+const retiringPreview = slider.service.fetchLocalAchievementData(id, { stateAppId: shortcut });
+slider.service.releaseOptimisticAchievementUpdate(id, shortcut);
+check(await retiringPreview === null, 'A preview queued before acknowledgement cannot repaint after its hold is released');
+slider.service.publishOptimisticAchievementUpdate({ steamAppId: id, stateAppId: shortcut, data: preview });
+await slider.advance(15001);
+slider.backend(() => JSON.stringify(verified()));
+check((await slider.service.fetchLocalAchievementData(id, { stateAppId: shortcut, maxAgeMs: 0 })).unlocked === 0,
+  'An abandoned preview expires rather than retaining simulated state forever');
 console.log(`Achievement native schema passed: ${checks} assertions; coalescing, canonical IDs, schema-only IPC, bounded failures and cancellation.`);

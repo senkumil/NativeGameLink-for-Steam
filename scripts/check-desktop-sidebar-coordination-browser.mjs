@@ -42,7 +42,7 @@ const files = {
   'native-route': 'frontend/features/library/native-route.ts',
   'render-session': 'frontend/features/library/render-session.ts',
   'achievement-navigation': 'frontend/features/achievements/navigation.ts',
-  'class-module-cache': 'frontend/steam/class-module-cache.ts',
+  'pure-class-factory': 'frontend/steam/gamepad/components/pure-class-factory.ts', 'class-module-cache': 'frontend/steam/class-module-cache.ts',
   css: 'frontend/steam/css.ts', text: 'frontend/core/text.ts', dom: 'frontend/core/dom.ts',
   'steam-links': 'frontend/core/steam-links.ts',
   renderer: 'frontend/features/library/renderer.ts',

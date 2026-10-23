@@ -16,19 +16,23 @@ const SESSION_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slic
 let processing: Promise<void> | null = null;
 let retryTimer: ReturnType<typeof setTimeout> | null = null;
 let processingPauseDepth = 0;
-const settledJobs = new Map<string, { completed: boolean; shortcutAppId: number | null }>();
+const settledJobs = new Map<string, { completed: boolean; shortcutAppId: number | null; resourcesPending: boolean }>();
 
-function settleJob(job: Pick<PendingLinkJob, 'id' | 'createdAt' | 'shortcutAppId'>, completed: boolean): void {
+function settleJob(job: Pick<PendingLinkJob, 'id' | 'createdAt' | 'shortcutAppId'>, completed: boolean, resourcesPending = false): void {
 	const key = `${job.id}|${job.createdAt}`;
 	settledJobs.delete(key);
-	settledJobs.set(key, { completed, shortcutAppId: job.shortcutAppId });
+	settledJobs.set(key, { completed, shortcutAppId: job.shortcutAppId, resourcesPending });
 	while (settledJobs.size > 64) settledJobs.delete(settledJobs.keys().next().value!);
 }
 
-/** Missing jobs can mean cancellation as well as success. A dialog must only
- * show Ready after this renderer verified both the mapping and its resources. */
+/** Missing jobs can mean cancellation as well as success. Completion requires
+ * a verified link; optional resource status is reported separately. */
 export function getLinkJobCompletion(id: string, createdAt: number): boolean | undefined {
 	return settledJobs.get(`${id}|${createdAt}`)?.completed;
+}
+
+export function getLinkJobResourcesPending(id: string, createdAt: number): boolean {
+	return settledJobs.get(`${id}|${createdAt}`)?.resourcesPending === true;
 }
 
 /** A rename can regenerate the shortcut ID in the same write that retires its
@@ -47,6 +51,8 @@ export interface PendingLinkJob {
 	existingLaunchOptions: string;
 	shortcutExecutable: string;
 	repairResources?: boolean;
+	/** Confirmed by a successful transaction, including steam_appid protection. */
+	linkCommitted?: boolean;
 	attempts: number;
 	status: 'staged' | 'queued' | 'running' | 'failed';
 	phase?: 'identity' | 'assets';
@@ -86,13 +92,14 @@ function readJobs(): PendingLinkJob[] {
 					lastError: job.lastError,
 					shortcutExecutable: String(job.shortcutExecutable || ''),
 					repairResources: Boolean(job.repairResources),
+					linkCommitted: Boolean(job.linkCommitted),
 					phase: job.phase === 'identity' || job.phase === 'assets' ? job.phase : undefined,
 					// A staged foreground intent is inert only in the session that created it.
 					// If Steam/CEF was terminated, a new session promotes it to queued so the
 					// interrupted link can resume automatically.
-					status: job.status === 'failed' ? 'failed' : (sameSessionStage ? 'staged' : sameSessionRunning ? 'running' : 'queued'),
-					attempts: Number(job.attempts) || 0,
-					nextAttemptAt: Number(job.nextAttemptAt) || 0,
+					status: job.status === 'failed' && job.lastError !== 'resource_sync_incomplete' ? 'failed' : (sameSessionStage ? 'staged' : sameSessionRunning ? 'running' : 'queued'),
+					attempts: job.status === 'failed' && job.lastError === 'resource_sync_incomplete' ? 0 : Number(job.attempts) || 0,
+					nextAttemptAt: job.status === 'failed' && job.lastError === 'resource_sync_incomplete' ? 0 : Number(job.nextAttemptAt) || 0,
 				};
 			});
 	} catch { return []; }
@@ -234,7 +241,7 @@ export function stageLinkJobForRecovery(input: Omit<PendingLinkJob, 'id' | 'atte
 	let job = jobs.find(candidate => candidate.id === id
 		|| (candidate.steamAppId === input.steamAppId && sameLogicalShortcut(candidate, input)));
 	if (job) {
-		Object.assign(job, input, { attempts: 0, status: 'staged' as const, phase: undefined, createdAt: Date.now(), nextAttemptAt: 0, sessionId: SESSION_ID });
+		Object.assign(job, input, { attempts: 0, status: 'staged' as const, phase: undefined, linkCommitted: false, createdAt: Date.now(), nextAttemptAt: 0, sessionId: SESSION_ID });
 		delete job.lastError;
 	} else {
 		job = { ...input, id, attempts: 0, status: 'staged', createdAt: Date.now(), nextAttemptAt: 0, sessionId: SESSION_ID };
@@ -367,9 +374,10 @@ export async function processPendingLinkJobs(targetDoc?: Document | null): Promi
 			const isMapped = findMappingForShortcut(current.shortcutAppId, current.title, current.shortcutExecutable) === current.steamAppId;
 
 			const success = isMapped && resourcesComplete;
+			if (result?.ok && isMapped) current.linkCommitted = true;
 			if (isMapped && !resourcesComplete) current.repairResources = true;
 
-			if (success) {
+			if (success && result?.ok) {
 				jobs = jobs.filter(candidate => candidate.id !== job.id);
 				settleJob(current, true);
 				writeJobs(jobs);
@@ -379,8 +387,17 @@ export async function processPendingLinkJobs(targetDoc?: Document | null): Promi
 
 			current.attempts += 1;
 			current.lastError = String(result?.error || (isMapped && !resourcesComplete ? 'resource_sync_incomplete' : 'link_failed')).replace(/^Error:\s*/, '');
-			const isTerminalError = new Set(['invalid_appid', 'refusing_to_modify_native_steam_app', 'shortcut_not_found', 'shortcut_identity_ambiguous', 'shortcut_identity_changed', 'steam_appid_file_protection_failed']).has(current.lastError);
+			const isTerminalError = new Set(['invalid_appid', 'refusing_to_modify_native_steam_app', 'shortcut_not_found', 'shortcut_identity_ambiguous', 'shortcut_identity_changed', 'steam_appid_file_protection_failed', 'link_cancelled_by_unlink']).has(current.lastError);
 			const hardFailure = current.attempts >= 5 || isTerminalError;
+			// Missing CDN artwork is optional enrichment. Stop the bounded repair
+			// pass without turning a verified link into a failed association.
+			if (current.attempts >= 5 && result?.ok && isMapped && !isTerminalError) {
+				jobs = jobs.filter(candidate => candidate.id !== job.id);
+				settleJob(current, true, true);
+				writeJobs(jobs);
+				backendLog(`[NGL][Retry] Link verified for ${current.title}; optional resources remain unavailable.`);
+				continue;
+			}
 			if (hardFailure) {
 				current.status = 'failed';
 				current.nextAttemptAt = 0;

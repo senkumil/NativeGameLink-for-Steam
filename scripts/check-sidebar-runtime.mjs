@@ -141,6 +141,7 @@ const classModules = [
   { Container: '_3x1HklzyDs4TEjACrRO2tB', GameListHomeAndSearch: '_2TKEazUUS3TlniZfpc8OOe', CollectionsButton: '_2CEKFex6JMsAse2lqMMjUp' },
 ];
 const classModuleCache = loadModule('frontend/steam/class-module-cache.ts', {
+  './gamepad/components/pure-class-factory': loadModule('frontend/steam/gamepad/components/pure-class-factory.ts', {}),
   './modules/SteamWebpackRuntime': { steamWebpackRuntime: { getRuntimeIdentity: () => classModules, getAllModules: () => classModules.map((exports, id) => ({ exports, id })) } },
 });
 const css = loadModule('frontend/steam/css.ts', { './class-module-cache': classModuleCache });

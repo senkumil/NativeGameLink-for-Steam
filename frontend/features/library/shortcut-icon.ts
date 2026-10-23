@@ -4,7 +4,7 @@ import { steamLanguageSync } from '../../steam/localization';
 import { getCommunityArtwork } from './artwork-community';
 import { decodeArtworkImage, imageUrlToBase64 } from './artwork-image';
 import { writeAssetWithDeadline } from './asset-write';
-import { hasPendingNativeAssetWrites, writeNativeAsset } from './native-asset-write';
+import { nativeAssetWriteBlocked, writeNativeAsset } from './native-asset-write';
 import { getModernLibraryAssets, getResolvedLibraryAssets } from './library-assets';
 import { waitForSteamBridge } from './steam-bridge';
 
@@ -151,7 +151,7 @@ export function clearShortcutIconInFlight(shortcutAppId?: number): void {
 }
 
 export async function applyOfficialShortcutIconOnce(shortcutAppId: number, steamAppId: string, force = false): Promise<boolean> {
-	if (hasPendingNativeAssetWrites(shortcutAppId)) return false;
+	if (nativeAssetWriteBlocked(shortcutAppId, 'icon')) return false;
 	const sessionKey = `${shortcutAppId}:${steamAppId}`;
 	if (!force && (appliedShortcutIcons.has(sessionKey) || shortcutIconMarkerMatches(shortcutAppId, steamAppId))) {
 		appliedShortcutIcons.add(sessionKey);
@@ -159,7 +159,7 @@ export async function applyOfficialShortcutIconOnce(shortcutAppId: number, steam
 	}
 	const generation = shortcutIconGeneration(shortcutAppId);
 	const isCurrent = (): boolean => shortcutIconGenerationIsCurrent(shortcutAppId, generation);
-	const saveIcon = (request: Record<string, unknown>): Promise<string | null> => hasPendingNativeAssetWrites(shortcutAppId)
+	const saveIcon = (request: Record<string, unknown>): Promise<string | null> => nativeAssetWriteBlocked(shortcutAppId, 'icon')
 		? Promise.resolve(null) : writeAssetWithDeadline(guard =>
 			saveShortcutIconBackend({ request_json: JSON.stringify({ ...request, ...guard }) }), isCurrent);
 	try {
@@ -211,7 +211,7 @@ export async function applyOfficialShortcutIconOnce(shortcutAppId: number, steam
 			if (!shortcutIconGenerationIsCurrent(shortcutAppId, generation)) return false;
 			if (saved?.saved && saved?.path) {
 				if (await applyIconPath(String(saved.path))) return true;
-				if (hasPendingNativeAssetWrites(shortcutAppId)) return false;
+				if (nativeAssetWriteBlocked(shortcutAppId, 'icon')) return false;
 			}
 		}
 

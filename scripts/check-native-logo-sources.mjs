@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
 import luaparse from 'luaparse';
+import { nativeArtworkStoresRuntime } from './helpers/native-artwork-stores-runtime.mjs';
 
 const SID = 3300000001;
 const source = fs.readFileSync('frontend/features/library/native-logo-sources.ts', 'utf8');
@@ -26,9 +27,14 @@ function harness(ids = [SID]) {
     },
     '../../steam/modules/SteamWebpackRuntime': { steamWebpackRuntime: {
       captureRuntime() { runtimeProbes++; },
+      getRuntimeIdentity: doc => doc,
+      getModuleFactoryCount: () => 0,
+      getModuleFactories: () => [],
+      getAllModules: doc => [{ id: 'renumbered', exports: { changedExport: moduleStores.get(doc) } }],
       getRequire(doc) { return id => { assert.equal(id, 1776); return { tw: moduleStores.get(doc) }; }; },
     } },
   };
+  dependencies['./native-artwork-stores'] = nativeArtworkStoresRuntime(dependencies['../../steam/modules/SteamWebpackRuntime'].steamWebpackRuntime);
   const context = vm.createContext({ exports: {}, URL, require: name => {
     assert(name in dependencies, `Unexpected dependency ${name}`); return dependencies[name];
   } });
@@ -55,6 +61,7 @@ function harness(ids = [SID]) {
       removeEventListener(name, callback) { const callbacks = listeners.get(name); callbacks?.delete(callback); if (!callbacks?.size) listeners.delete(name); },
     };
     const doc = { defaultView: view };
+    view.document = doc;
     moduleStores.set(doc, apps);
     return { doc, apps, overviews, original, results, listeners, dispatch: name => { for (const callback of listeners.get(name) || []) callback(); } };
   }

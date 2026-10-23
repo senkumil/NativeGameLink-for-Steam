@@ -184,8 +184,10 @@ ${steamRareAchievementStyles()}
 			box-sizing: border-box !important;
 			padding: 16px 10px 10px 10px !important;
 			background: linear-gradient(180deg, rgba(24, 30, 39, .24) 0%, rgba(16, 22, 30, .16) 100%) !important;
-			backdrop-filter: blur(8px) saturate(112%) !important;
-			-webkit-backdrop-filter: blur(8px) saturate(112%) !important;
+			/* Steam's overview already owns the shared glass/blur layer. A local
+			   backdrop filter here would blur it a second time while scrolling. */
+			backdrop-filter: none !important;
+			-webkit-backdrop-filter: none !important;
 			min-width: 0 !important;
 			overflow: visible !important;
 			flex-shrink: 0 !important;

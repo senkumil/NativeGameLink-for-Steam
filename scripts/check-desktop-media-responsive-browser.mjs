@@ -19,6 +19,7 @@ for (const [name,id] of Object.entries({ card:38731, breaks:60712, main:80100, c
 }
 const sources = Object.fromEntries([
   ['trading-cards', 'frontend/features/library/trading-cards.ts'],
+  ['trading-card-help', 'frontend/features/library/trading-card-help.ts'],
   ['card-style', 'frontend/features/library/styles/trading-cards.ts'],
   ['activity-style', 'frontend/features/library/styles/activity.ts'],
   ['disposables', 'frontend/core/disposables.ts'],
@@ -34,19 +35,33 @@ async function browserChecks(sources, nativeModules) {
   const check = (condition, message) => { if (!condition) throw Error(message); checks++; };
   const settle = async () => { for (let n = 0; n < 4; n++) await new Promise(requestAnimationFrame); };
   const image = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="274" height="154"><rect width="274" height="154" fill="#568499"/></svg>');
+  const catalog = { cards:Array.from({ length:12 },(_,n) => ({ image, title:`Card ${n}`, full_image:image })) };
+  const foreignRealm=document.createElement('iframe');foreignRealm.style.display='none';document.body.append(foreignRealm);
   const modules = {}, dependencies = {
     '../../api/backend': { backendLog() {} },
     '../../core/text': { escapeHtml: value => String(value).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;') },
+    '../../core/community-item-options': {
+      // Geometry intentionally reuses one tiny fixture image for twelve cards.
+      communityCardId: card => `card:${card.foil ? 'foil' : 'normal'}:${card.title}`,
+      communityBadgeId: badge => `badge:${badge.foil ? 'foil' : 'normal'}:${badge.level || 0}:${badge.image}`,
+      getCachedCommunityItemOptions: () => null,
+      getCommunityItemOptions: async () => ({ enabled:false,card_border:'normal',card_ids:[],badge_id:null }),
+      subscribeCommunityItemOptions: () => () => {},
+    },
     '../../steam/localization': { gdlText: (_key, fallback) => fallback, loc: (_key, fallback) => fallback },
     './class-module-cache': { resolveSteamClassModule: (predicate, fallback) => ({ classes:Object.values(nativeModules).find(value => value && typeof value === 'object' && predicate(value)) || fallback }) },
-    './community-items': { getOfficialCommunityItems: async () => ({ cards:Array.from({ length:12 },(_,n) => ({ image, title:`Card ${n}`, full_image:image })) }), normalizeCommunityAssetUrl: value => value || '' },
+    './community-items': { getOfficialCommunityItems: async () => catalog,
+      getImmediateOfficialCommunityItems: () => catalog, subscribeOfficialCommunityItems: () => () => {},
+      normalizeCommunityAssetUrl: value => value || '' },
     './constants': { GDL_INJECTED:'gdl-library-injected' },
     './layout': { buildNativeSidebarSection: (_doc, _layout, options) => {
       const section = document.createElement('section'); section.id = options.sectionId;
       section.innerHTML = `<h2><div></div></h2><div class="${nativeModules.section.AppDetailsSectionContainer} ${nativeModules.section.RightColumnSection}"><div id="${options.innerId}">${options.innerHtml}</div></div>`; return section;
     } },
-    './sidebar-order': { getLinkedSidebarOrder: (_doc, layout) => ({ shortcutAppId:'3000000001', isCurrent:() => true,
-      publish: section => { layout.sidebarColumn.append(section); return true; } }) },
+    './sidebar-order': { getLinkedSidebarOrder: (_doc, layout, steamAppId, shortcutAppId) => ({
+      steamAppId,shortcutAppId,column:layout.sidebarColumn,isCurrent:() => true,
+      publish: section => { section.dataset.gdlSteamAppId=steamAppId; section.dataset.gdlShortcutAppId=shortcutAppId;
+        layout.sidebarColumn.append(section); return true; } }) },
     './trading-card-preload': { clearTradingCardPreloads() {}, getTradingCardPreload() {}, preloadTradingCardImage() {} },
     './native-card-preview': { disposeNativeCardPreview() {}, tryOpenNativeCardPreview:() => false },
   };
@@ -74,15 +89,28 @@ async function browserChecks(sources, nativeModules) {
     hookValues=[true,0,0,0,width,false,false];hookIndex=0;
     return nativeCards.dI({ data:{ nOwned:owned?1:0,strImgURL:image,strMarketHash:'oracle',strTitle:'Oracle' },animateHover:true });
   };
+  const nativeMotion = (width,owned,target,x,y) => {
+    hookValues=[false,0,0,0,width,false,false];hookIndex=0;
+    const props={data:{nOwned:owned?1:0,strImgURL:image,strMarketHash:'motion',strTitle:'Motion'},animateHover:true};
+    const initial=nativeCards.dI(props).props.children.props;
+    initial.onMouseEnter({currentTarget:target});
+    const event=new MouseEvent('mousemove');
+    Object.defineProperties(event,{offsetX:{value:x},offsetY:{value:y}});window.dispatchEvent(event);
+    hookIndex=0;const active=nativeCards.dI(props).props.children.props;
+    initial.onMouseLeave({currentTarget:target});
+    return {outer:active.style,motion:active.children.props.style,
+      image:active.children.props.children[0].props.style,
+      shine:active.children.props.children[2].props.children};
+  };
   const load = name => {
     if (modules[name]) return modules[name];
     const exports = {}; modules[name] = exports;
-    new Function('require','exports',sources[name] + (name === 'trading-cards' ? '\nexports.openPreviewForCheck = openTradingCardPreview;' : ''))(dependency => {
+    new Function('require','exports','Node','Element',sources[name] + (name === 'trading-cards' ? '\nexports.openPreviewForCheck = openTradingCardPreview;' : ''))(dependency => {
       if (dependencies[dependency]) return dependencies[dependency];
       const key = dependency.split('/').pop();
       if (sources[key]) return load(key);
       throw Error(`Unknown ${name} dependency ${dependency}`);
-    }, exports); return exports;
+    }, exports,name==='trading-cards'?foreignRealm.contentWindow.Node:Node,name==='trading-cards'?foreignRealm.contentWindow.Element:Element); return exports;
   };
   try {
     const native = document.getElementById('native-oracle'), nativeBefore = native.outerHTML;
@@ -127,10 +155,30 @@ async function browserChecks(sources, nativeModules) {
     const linkedPane=makePane(100), oraclePane=makePane(1400),host=linkedPane.column;
     linkedPane.update();oraclePane.update();
     await cards.renderOfficialTradingCards(document, { anchorRegion:host, sidebarColumn:host,twoColumnRow:linkedPane.row },
-      { steamAppId:123, shortcutAppId:3000000001, gameName:'Test', isCurrent:() => true });
+      { steamAppId:'123', shortcutAppId:'3000000001', gameName:'Test', isCurrent:() => true });
+    check(host.querySelectorAll('.gdl-trading-card').length===12,'Geometry fixture preserves all twelve distinct card identities');
     const card = host.querySelector('.gdl-trading-card'), surface = card.querySelector('.gdl-trading-card-surface');
     const originalImage = card.querySelector('img');
     await settle();
+    const recoveryCard=host.querySelectorAll('.gdl-trading-card')[1],recoveryBox=recoveryCard.getBoundingClientRect();
+    recoveryCard.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,clientX:recoveryBox.left+recoveryBox.width/2,clientY:recoveryBox.top+recoveryBox.height/2}));
+    await settle();check(recoveryCard.classList.contains('gdl-card-tilt-active'),'Pointer recovery uses the card owner document across CEF constructor realms');
+    window.dispatchEvent(new Event('resize'));await settle();
+    const effectOracle=document.createElement('div');effectOracle.className=nativeModules.card.Card;
+    effectOracle.style.cssText='position:absolute;left:-2000px;width:200px;height:240px';
+    effectOracle.innerHTML=`<div class="${nativeModules.card.CardContainer}"><div class="${nativeModules.card.CardShineContainer_W}"><div class="${nativeModules.card.CardShine}"></div></div></div>`;
+    document.body.append(effectOracle);stopMotion.disabled=true;
+    const ownMotion=card.querySelector('.gdl-trading-card-motion'),ownMask=card.querySelector('.gdl-card-paper-mask'),ownShine=card.querySelector('.gdl-card-paper-shine');
+    check(getComputedStyle(surface).perspective===getComputedStyle(effectOracle).perspective
+      &&getComputedStyle(surface).transitionDuration===getComputedStyle(effectOracle).transitionDuration,
+      'Perspective and expansion duration match the installed native CSS');
+    check(getComputedStyle(ownMotion).transitionDuration===getComputedStyle(effectOracle.firstElementChild).transitionDuration
+      &&getComputedStyle(ownMotion).transitionTimingFunction===getComputedStyle(effectOracle.firstElementChild).transitionTimingFunction,
+      'Tilt and shadow transitions match the installed native CSS');
+    check(getComputedStyle(ownMask).webkitMaskImage===getComputedStyle(effectOracle.querySelector(`.${nativeModules.card.CardShineContainer_W}`)).webkitMaskImage
+      &&getComputedStyle(ownShine).backgroundImage===getComputedStyle(effectOracle.querySelector(`.${nativeModules.card.CardShine}`)).backgroundImage,
+      'Paper texture and light gradient match the installed native CSS');
+    stopMotion.disabled=false;effectOracle.remove();
     const body = host.querySelector('.gdl-trading-cards-body'), grid = host.querySelector('.gdl-trading-card-grid');
     let gridWrites = 0;
     const gridObserver = new MutationObserver(records => { gridWrites += records.length; });
@@ -163,21 +211,55 @@ async function browserChecks(sources, nativeModules) {
       }
       linkedPane.owner.style.width=oraclePane.owner.style.width=`${innerWidth/zoom/2}px`;linkedPane.update();oraclePane.update();
       window.dispatchEvent(new Event('resize')); await settle();
-      const base = card.getBoundingClientRect();
-      card.dispatchEvent(new PointerEvent('pointerenter', { clientX:base.left+base.width/2, clientY:base.top+base.height/2 }));
-      await settle();
-      const expanded = surface.getBoundingClientRect(), logical = parseFloat(getComputedStyle(card).width);
-      const nativeHover=nativeCard(logical).props.children.props.style;
-      check(Math.abs(parseFloat(surface.style.width)-nativeHover.width)<.02
-        && Math.abs(expanded.width/base.width-nativeHover.width/logical)<.01, `cards ${zoom*100}%: expand once using installed unowned-card sizing`);
-      check(Math.abs(parseFloat(surface.style.height)-nativeHover.height)<.02
-        &&Math.abs(parseFloat(surface.style.left)-nativeHover.left)<.02&&Math.abs(parseFloat(surface.style.top)-nativeHover.top)<.02,
-        `cards ${zoom*100}%: expanded height and centering match the installed card hook`);
-      check(nativeCard(logical,true).props.children.props.style.width>nativeHover.width,
-        `cards ${zoom*100}%: asset catalogue does not claim the native owned/maxed expansion`);
-      check(Math.abs(expanded.left+expanded.width/2-base.left-base.width/2)<1.1, `cards ${zoom*100}%: expansion stays centered`);
-      window.dispatchEvent(new Event('resize')); await settle();
-      check(!card.classList.contains('gdl-card-tilt-active') && !surface.style.width, `cards ${zoom*100}%: resize clears obsolete hover geometry`);
+      const base = card.getBoundingClientRect(), logical = parseFloat(getComputedStyle(card).width);
+      const motion=card.querySelector('.gdl-trading-card-motion');
+      for(const owned of [false,true]) {
+        card.dataset.owned=String(owned);card.classList.toggle('gdl-trading-card-unowned',!owned);
+        card.dispatchEvent(new PointerEvent('pointerenter', { clientX:base.left+base.width/2, clientY:base.top+base.height/2 }));
+        await settle();
+        const expanded=surface.getBoundingClientRect(),nativeHover=nativeCard(logical,owned).props.children.props.style;
+        const nativeProjection=document.createElement('div');nativeProjection.className=nativeModules.card.Card;
+        for(const[key,value]of Object.entries(nativeHover))nativeProjection.style[key]=typeof value==='number'?`${value}px`:value;
+        nativeProjection.style.pointerEvents='none';nativeProjection.innerHTML=`<div class="${nativeModules.card.CardContainer}"></div>`;
+        card.append(nativeProjection);
+        check(Math.abs(parseFloat(surface.style.width)-nativeHover.width)<.02
+          &&Math.abs(expanded.width/base.width-nativeHover.width/logical)<.01,`cards ${zoom*100}% owned=${owned}: native 1.5/2.5 expansion`);
+        check(Math.abs(parseFloat(surface.style.height)-nativeHover.height)<.02
+          &&Math.abs(parseFloat(surface.style.left)-nativeHover.left)<.02&&Math.abs(parseFloat(surface.style.top)-nativeHover.top)<.02,
+          `cards ${zoom*100}% owned=${owned}: native dimensions and centered offset`);
+        check(Math.abs(expanded.left+expanded.width/2-base.left-base.width/2)<1.1,`cards ${zoom*100}% owned=${owned}: centered expansion`);
+        check(getComputedStyle(surface).perspective==='500px','Native perspective is applied by the expanded outer surface');
+        check(card.querySelectorAll('.gdl-card-paper-mask').length===3,'Three native directional paper masks replace artificial rainbow effects');
+        for(const [x,y]of [[.5,.5],[0,0],[1,1],[0,1],[1,0]]) {
+          const expected=nativeMotion(logical,owned,card,x*nativeHover.width,y*nativeHover.height);
+          const pointer=new PointerEvent('pointermove',{bubbles:true,clientX:expanded.left+expanded.width/2,clientY:expanded.top+expanded.height/2});
+          Object.defineProperties(pointer,{offsetX:{value:x*nativeHover.width},offsetY:{value:y*nativeHover.height}});
+          originalImage.dispatchEvent(pointer);await settle();
+          const a=new DOMMatrix(expected.motion.transform),b=new DOMMatrix(motion.style.transform);
+          check(['m11','m12','m13','m21','m22','m23','m31','m32','m33'].every(key=>Math.abs(a[key]-b[key])<.00001),
+            `cards ${zoom*100}% owned=${owned} pointer${x},${y}: installed logistic rotations`);
+          nativeProjection.firstElementChild.style.transform=expected.motion.transform;
+          const nativeBox=nativeProjection.firstElementChild.getBoundingClientRect(),cssBox=motion.getBoundingClientRect();
+          check(['left','top','width','height'].every(key=>Math.abs(nativeBox[key]-cssBox[key])<.05),
+            `cards ${zoom*100}% owned=${owned}: perspective projection matches the installed CSS/hook`);
+          const expectedFilter=expected.image.filter.match(/[\d.]+/g).map(Number),actualFilter=getComputedStyle(originalImage).filter.match(/[\d.]+/g).map(Number);
+          check(expectedFilter.length===actualFilter.length&&expectedFilter.every((value,index)=>Math.abs(value-actualFilter[index])<.00001)
+            &&Math.abs(Number(getComputedStyle(originalImage).opacity)-(owned?1:.3))<.00001,`cards owned=${owned}: native opacity, saturation and rotation brightness`);
+          const masks=[...card.querySelectorAll('.gdl-card-paper-mask')];
+          check(masks.every((mask,index)=>Math.abs(Number(getComputedStyle(mask).opacity)-Math.max(0,Math.min(1,expected.shine[index].props.style.opacity)))<.00001),
+            'Native directional light opacity follows the actual hook');
+          const shine=card.querySelector('.gdl-card-paper-shine'),nativeShine=expected.shine[0].props.children.props.style;
+          check(Math.abs(parseFloat(getComputedStyle(shine).left)-nativeShine.left)<.0001&&Math.abs(parseFloat(getComputedStyle(shine).top)-nativeShine.top)<.0001,
+            'Native paper highlight position follows the actual hook');
+        }
+        nativeProjection.remove();
+        window.dispatchEvent(new Event('resize'));await settle();
+        check(!card.classList.contains('gdl-card-tilt-active')&&!surface.style.width&&!motion.style.transform,`cards ${zoom*100}% owned=${owned}: resize resets motion`);
+      }
+      card.dataset.owned='false';card.classList.add('gdl-trading-card-unowned');
+      card.dataset.gdlPreviewAllowed='false';card.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));
+      check(!document.getElementById('gdl-trading-card-preview'),'A locked level-zero card retains native hover without an artwork action');
+      card.dataset.gdlPreviewAllowed='true';
       if(zoom===1) {
         card.style.left=`${innerWidth-card.getBoundingClientRect().right-10}px`;
         const edge=card.getBoundingClientRect();
@@ -189,14 +271,14 @@ async function browserChecks(sources, nativeModules) {
         const shift=new DOMMatrix(active.transform).m41;
         initial.props.children.props.onMouseLeave({currentTarget:card});
         card.dispatchEvent(new PointerEvent('pointerenter',{clientX:edge.left+edge.width/2,clientY:edge.top+edge.height/2}));await settle();
-        check(Math.abs(parseFloat(surface.style.left)-active.left-shift)<.02,
+        check(Math.abs(parseFloat(surface.style.left)+new DOMMatrix(surface.style.transform).m41-active.left-shift)<.02,
           'The native card enter handler and GDL apply the same 30px right-edge correction');
         window.dispatchEvent(new Event('resize'));card.style.removeProperty('left');await settle();
       }
       const help = host.querySelector('.gdl-trading-cards-help-btn');
       const helpStyle = help.getAttribute('style');
       help.style.cssText = 'position:fixed;right:4px;bottom:4px';
-      help.dispatchEvent(new Event('mouseenter')); await settle();
+      help.dispatchEvent(new Event('mouseenter'));await new Promise(resolve=>setTimeout(resolve,260));await settle();
       const popup = document.querySelector('.gdl-trading-cards-help-popup'), box = popup.getBoundingClientRect();
       check(box.left >= 0 && box.top >= 0 && box.right <= innerWidth+1.1 && box.bottom <= innerHeight+1.1,
         `cards ${zoom*100}%: near-bottom help tooltip fits both scaled viewport axes`);
@@ -226,9 +308,15 @@ async function browserChecks(sources, nativeModules) {
         cards.disposeTradingCardPreview(document);
       }
     }
+    const cardsBeforeFailure=host.querySelectorAll('.gdl-trading-card').length;
+    originalImage.dispatchEvent(new Event('error'));await settle();
+    check(card.isConnected&&host.querySelectorAll('.gdl-trading-card').length===cardsBeforeFailure,
+      'Failed card artwork preserves the card and section geometry');
+    check(getComputedStyle(card.querySelector('.gdl-trading-card-title')).display==='block'&&getComputedStyle(originalImage).opacity==='0',
+      'Failed card artwork uses the native-style background and title fallback');
     document.body.style.zoom = '1'; cards.disposeTradingCardUI(document);
     check(!card.querySelector('.gdl-trading-card-hitbox'), 'Card disposal removes its owned hover hitbox');
-    linkedPane.owner.remove();oraclePane.owner.remove();
+    linkedPane.owner.remove();oraclePane.owner.remove();stopMotion.remove();foreignRealm.remove();
     check(native.outerHTML === nativeBefore, 'Native controls remain untouched');
     return {ok:true,checks};
   } catch(error) { return {ok:false,checks,error:String(error.stack||error)}; }

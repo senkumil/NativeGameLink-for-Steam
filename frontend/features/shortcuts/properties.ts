@@ -6,21 +6,24 @@ import { getCachedGameData, getGameData } from '../../core/game-data';
 import { findActiveShortcutAppId, findShortcutAppIdByName } from '../../steam/shortcuts';
 import { shortcutRuntimeHost } from './host';
 import { findMappingForShortcut } from './registry';
-import { buildShortcutDetectionContext, detectShortcutCandidatesLocal, enrichShortcutCandidatesRemote, mergeCandidateLists, reliableReviewCandidate, displayReviewConfidence } from './detection';
+import { reliableReviewCandidate, displayReviewConfidence } from './detection';
+import { bindPropertySuggestionSearch } from './properties-detection';
 import { subscribeMappings } from '../../core/mappings';
 import { linkShortcutToSteam, shouldAutoApplyNoLauncher } from './linking';
 import { unlinkShortcutFromSteam } from './unlinking';
 import { undismissShortcut } from './dismissed';
 import { rememberedShortcutSteamAppId } from './link-history';
 import { bindShortcutAchievementSettings, shortcutAchievementSettingsHtml } from './achievement-properties';
+import { bindShortcutCommunityItemSettings, shortcutCommunityItemSettingsHtml } from './community-item-properties';
 import { bindShortcutPlaytimeProperties, shortcutPlaytimePropertiesHtml } from './playtime-properties';
 import { findNativePropertiesPage, tryInjectNativePropertiesField } from './native-properties';
 import { tryInjectCustomizationArtwork } from './customization-artwork';
 import { cancelPendingLinkJobs, enqueueLinkJob, hasPendingLinkJob, stageLinkJobForRecovery } from './link-job-queue';
 import { SHORTCUT_PROPERTIES_STYLE } from './properties-style';
+import { bindLinkedGameSummary } from './properties-summary';
 const GDL_PROP = 'gdl-properties-injected';
 function retryableLinkError(error: unknown): boolean {
-	return !['invalid_appid', 'refusing_to_modify_native_steam_app', 'shortcut_identity_changed', 'shortcut_identity_ambiguous', 'shortcut_not_found', 'steam_appid_file_protection_failed']
+	return !['invalid_appid', 'refusing_to_modify_native_steam_app', 'shortcut_identity_changed', 'shortcut_identity_ambiguous', 'shortcut_not_found', 'steam_appid_file_protection_failed', 'link_cancelled_by_unlink']
 		.includes(String(error || '').replace(/^Error:\s*/i, '').trim());
 }
 
@@ -211,37 +214,30 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 	let currentLinked = /^\d+$/.test(currentRaw) ? currentRaw : '';
 	const rememberedAppId = rememberedShortcutSteamAppId(managedShortcutId);
 	const initialAppId = currentLinked;
-
 	const cachedGame = initialAppId ? getCachedGameData(initialAppId, steamLanguageSync() || 'english')?.data : null;
 	const initialGameName = cachedGame?.name || gameTitle;
 	const initialHeaderUrl = cachedGame?.header_image || `https://cdn.cloudflare.steamstatic.com/steam/apps/${initialAppId}/header.jpg`;
-
 	const initialOptionHtml = initialAppId
 		? `<option value="${escapeHtml(initialAppId)}">${escapeHtml(currentLinked ? `${initialGameName} — AppID ${initialAppId}` : (cachedGame?.name ? `${initialGameName} — AppID ${initialAppId}` : `Steam AppID ${initialAppId}`))}</option>`
 		: `<option value="">${escapeHtml(gdlText('detecting_game', 'Detecting the game automatically...'))}</option>`;
 
-	// Build UI section
 	const section = doc.createElement('div');
 	section.className = GDL_PROP;
-	section.style.cssText = 'padding:0 24px 24px;margin-top:16px;font-family:inherit;';
+	section.style.cssText = 'padding:0 24px 24px;margin-top:24px;font-family:inherit;';
 
 	section.innerHTML = `
 		${SHORTCUT_PROPERTIES_STYLE}
-		<div class="gdl-native-section gdl-link-section">
-			<div class="gdl-native-section-heading">${escapeHtml(gdlText('linked_title', 'Linked game'))}</div>
-			<div class="gdl-native-section-description">${escapeHtml(gdlText('linked_description', 'Paste a Steam AppID or Steam store link to show game information on this library page.'))}</div>
-			<div class="gdl-auto-detect gdl-native-disclosure">
-				<div class="gdl-auto-detect-header">
-					<span>${escapeHtml(gdlText('shortcut_suggestions_title', 'Steam AppID suggestions:'))}</span>
-				</div>
-				<div class="gdl-native-disclosure-body">
-					<div class="gdl-auto-detect-title" style="display:none;"></div>
-					<select class="gdl-auto-candidates gdl-native-select">
-						${initialOptionHtml}
-					</select>
-					<div class="gdl-auto-candidate-preview" style="display:none;"></div>
-				</div>
-			</div>
+		<details class="gdl-native-section gdl-link-section gdl-properties-category" ${currentLinked ? '' : 'open'}>
+			<summary class="gdl-properties-category-summary">
+				<img class="gdl-linked-game-image" alt="" ${initialAppId ? `src="${escapeHtml(initialHeaderUrl)}"` : 'hidden'} />
+				<span class="gdl-properties-category-copy">
+					<span class="gdl-properties-category-title">${escapeHtml(gdlText('linked_title', 'Linked game'))}</span>
+					<span class="gdl-properties-category-description"><span class="gdl-linked-game-name">${escapeHtml(currentLinked ? initialGameName : gdlText('properties_link_hint', 'Choose the Steam game for this shortcut.'))}</span><span class="gdl-linked-game-id">${initialAppId ? ` · AppID ${escapeHtml(initialAppId)}` : ''}</span></span>
+				</span>
+				<span class="gdl-linked-game-state">${escapeHtml(currentLinked ? gdlText('game_linked_status', 'Linked') : gdlText('game_unlinked_status', 'Unlinked'))}</span>
+				<span class="gdl-properties-category-chevron" aria-hidden="true">›</span>
+			</summary>
+			<div class="gdl-properties-category-body">
 			<div class="gdl-native-setting-row gdl-link-actions">
 				<div class="gdl-native-setting-copy">
 					<div class="gdl-native-setting-title">Steam AppID</div>
@@ -254,13 +250,38 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 				</div>
 			</div>
 			<div class="gdl-status gdl-native-status" aria-live="polite"></div>
+			<div class="gdl-auto-detect gdl-native-disclosure">
+				<div class="gdl-auto-detect-header">
+					<label for="gdl-property-candidates">${escapeHtml(gdlText('shortcut_suggestions_title', 'Steam AppID suggestions:'))}</label>
+				</div>
+				<div class="gdl-native-disclosure-body">
+					<div class="gdl-auto-detect-title" style="display:none;"></div>
+					<select id="gdl-property-candidates" class="gdl-auto-candidates gdl-native-select">
+						${initialOptionHtml}
+					</select>
+					<div class="gdl-auto-candidate-preview" style="display:none;"></div>
+				</div>
+			</div>
+			</div>
+		</details>
+		<details class="gdl-native-section gdl-launch-settings gdl-properties-category">
+			<summary class="gdl-properties-category-summary">
+				<span class="gdl-properties-category-copy">
+					<span class="gdl-properties-category-title">${escapeHtml(gdlText('properties_launch_title', 'Launch and playtime'))}</span>
+					<span class="gdl-properties-category-description">${escapeHtml(gdlText('properties_launch_description', 'Playtime tracking and launcher options.'))}</span>
+				</span>
+				<span class="gdl-properties-category-chevron" aria-hidden="true">›</span>
+			</summary>
+			<div class="gdl-properties-category-body">
 			${shortcutPlaytimePropertiesHtml()}
 			<label class="gdl-skip-launcher gdl-native-option">
 				<input class="gdl-skip-launcher-input" type="checkbox" />
 				<span><strong>${escapeHtml(gdlText('skip_launcher', 'Try to skip the launcher'))}</strong><br />${escapeHtml(gdlText('skip_launcher_help', 'Adds -nolauncher while preserving your current launch options. Enable it only if this game supports that argument.'))}</span>
 			</label>
-		</div>
+			</div>
+		</details>
 		${shortcutAchievementSettingsHtml()}
+		${shortcutCommunityItemSettingsHtml()}
 	`;
 
 	container.appendChild(section);
@@ -274,7 +295,9 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 	const candidatePreview = section.querySelector('.gdl-auto-candidate-preview') as HTMLElement;
 	const skipLauncherLabel = section.querySelector('.gdl-skip-launcher') as HTMLElement;
 	const skipLauncherInput = section.querySelector('.gdl-skip-launcher-input') as HTMLInputElement;
+	const syncLinkedSummary = bindLinkedGameSummary(section);
 	let detectionContext: ShortcutDetectionContext | null = null;
+	let communityBinding: { sync: () => void; dispose: () => void } | null = null;
 	let achievementBinding: { sync: (appId?: string) => void } | null = null;
 	let playtimeBinding: { sync: (shortcutAppId?: string | number) => void } | null = null;
 	let currentCandidates: ShortcutDetectionCandidate[] = [];
@@ -282,6 +305,7 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 	let suggestionUserInteracted = false;
 	let targetInputUserEdited = false;
 	let propertyActionBusy: 'link' | 'unlink' | null = null;
+	let unlinkRestorePending = false;
 	let targetRevision = 0;
 	const clearTargetStatus = (): void => { targetRevision += 1; statusEl.textContent = ''; statusEl.style.color = '#8f98a0'; };
 
@@ -347,9 +371,10 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 			primary.src = selected.image || `https://cdn.cloudflare.steamstatic.com/steam/apps/${selected.appid}/header.jpg`;
 		}
 		const strip = candidatePreview.querySelector<HTMLElement>('.gdl-auto-candidate-strip');
-		const previewCandidates = [selected, ...candidates]
-			.filter((candidate, index, list) => list.findIndex(item => item.appid === candidate.appid) === index)
+		const previewCandidates = candidates
+			.filter((candidate, index, list) => candidate.appid !== selected.appid && list.findIndex(item => item.appid === candidate.appid) === index)
 			.slice(0, 6);
+		if (strip) strip.hidden = !previewCandidates.length;
 		for (const candidate of previewCandidates) {
 			const button = doc.createElement('button');
 			button.type = 'button';
@@ -379,6 +404,9 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 	};
 
 	const updateButtonStates = (): void => {
+		communityBinding?.sync();
+		syncLinkedSummary(currentLinked, gameTitle || '', currentCandidates.find(candidate => candidate.appid === currentLinked)
+			|| (linkedPreviewCandidate?.appid === currentLinked ? linkedPreviewCandidate : null));
 		const val = input.value.trim();
 		const isSameAppIdLinked = Boolean(currentLinked && val === currentLinked);
 		if (propertyActionBusy) {
@@ -417,9 +445,9 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 			saveBtn.style.cursor = saveBtn.disabled ? 'default' : 'pointer';
 			saveBtn.style.opacity = saveBtn.disabled ? '.65' : '1';
 
-			if (currentLinked) {
+			if (currentLinked || unlinkRestorePending) {
 				unlinkBtn.disabled = false;
-				unlinkBtn.textContent = gdlText('unlink', 'Unlink');
+				unlinkBtn.textContent = unlinkRestorePending ? gdlText('retry', 'Retry') : gdlText('unlink', 'Unlink');
 				unlinkBtn.style.background = '#3d4450';
 				unlinkBtn.style.color = '#dcdedf';
 				unlinkBtn.style.cursor = 'pointer';
@@ -546,8 +574,8 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 		if (currentLinked) {
 			const isPending = hasPendingLinkJob(shortcutId, gameTitle);
 			if (isPending) {
-				statusEl.textContent = gdlText('link_queued_background', 'Link queued. You can close this window; setup continues in the background.');
-				statusEl.style.color = '#e5ad37';
+				statusEl.textContent = gdlText('link_ready_resources_pending', '✓ Linked. Available artwork will continue loading in the background.');
+				statusEl.style.color = '#5ba32b';
 			} else {
 				statusEl.textContent = gdlText('manual_link_success', 'Shortcut linked to Steam successfully.');
 				statusEl.style.color = '#5ba32b';
@@ -580,6 +608,10 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 		shortcutAppId: () => managedShortcutId ? String(managedShortcutId) : '',
 		steamAppId: () => /^\d+$/.test(input.value.trim()) ? input.value.trim() : currentLinked,
 		gameTitle: () => gameTitle || '',
+	});
+	communityBinding = bindShortcutCommunityItemSettings({
+		section, shortcutAppId: () => managedShortcutId ? String(managedShortcutId) : '',
+		steamAppId: () => currentLinked,
 	});
 	playtimeBinding = bindShortcutPlaytimeProperties({
 		section,
@@ -697,27 +729,9 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 			achievementBinding?.sync(autoSelect.value);
 		});
 
-		void (async () => {
-			detectionContext = await buildShortcutDetectionContext(doc, gameTitle, managedShortcutId!);
-			if (!detectionContext) {
-				applySuggestionCandidates([], true);
-				return;
-			}
-
-			// Render zero-network evidence first. A slow Store/AppInfo request must
-			// never leave the properties dropdown blank for several seconds.
-			const localDetection = await detectShortcutCandidatesLocal(detectionContext);
-			const localCandidates = localDetection?.candidates || [];
-			applySuggestionCandidates(localCandidates, false);
-
-			const remoteDetection = await enrichShortcutCandidatesRemote(detectionContext, localCandidates);
-			if (!section.isConnected) return;
-			const merged = mergeCandidateLists(localCandidates, remoteDetection?.candidates || [], remoteDetection?.rejected_appids);
-			applySuggestionCandidates(merged, true, remoteDetection?.rejected_appids);
-		})().catch(e => {
-			backendLog('Properties automatic detection error: ' + e);
-			applySuggestionCandidates(currentCandidates, true);
-		});
+		bindPropertySuggestionSearch({ doc, section, title: gameTitle, shortcutAppId: managedShortcutId,
+			getCandidates: () => currentCandidates, onContext: context => { detectionContext = context; },
+			publish: applySuggestionCandidates });
 	}
 
 	if (unlinkBtn && input && statusEl) {
@@ -744,13 +758,17 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 				});
 				if (!section.isConnected) return;
 				if (result.ok) {
+					unlinkRestorePending = false;
 					if (result.shortcutAppId) managedShortcutId = result.shortcutAppId;
 					currentLinked = '';
 					statusEl.textContent = gdlText('unlink_success', 'Link removed. You can link this same shortcut again without deleting it from Steam.');
 					statusEl.style.color = '#5ba32b';
 				} else {
-					currentLinked = findMappingForShortcut(shortcutId, gameTitle) || unlinkedAppId;
-					statusEl.textContent = gdlText('unlink_failed', 'Could not unlink this shortcut.');
+					currentLinked = findMappingForShortcut(shortcutId, gameTitle) || '';
+					unlinkRestorePending = result.error === 'steam_appid_file_restore_failed';
+					statusEl.textContent = unlinkRestorePending
+						? gdlText('unlink_restore_pending', 'The link was removed, but steam_appid.txt could not be restored. Press Retry after checking access to the game folder.')
+						: gdlText('unlink_failed', 'Could not unlink this shortcut.');
 					statusEl.style.color = '#ff6b6b';
 				}
 			} catch (error) {
@@ -811,7 +829,9 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 
 				if (result.ok) {
 					if (result.shortcutAppId) managedShortcutId = result.shortcutAppId;
+					cancelPendingLinkJobs(shortcutId, gameTitle);
 					currentLinked = findMappingForShortcut(result.shortcutAppId || shortcutId, gameTitle) || val;
+					unlinkRestorePending = false;
 					linkedPreviewCandidate = currentCandidates.find(candidate => candidate.appid === currentLinked) || {
 						name: currentCandidates.find(candidate => candidate.appid === val)?.name || `Steam AppID ${currentLinked}`,
 						appid: currentLinked,
@@ -822,12 +842,11 @@ export function tryInjectPropertiesField(doc: Document, popupTitle: string): voi
 					const resourcesComplete = Boolean(result.setup?.artworkComplete && result.setup?.iconApplied);
 					if (!resourcesComplete) {
 						enqueueLinkJob({
-							title: gameTitle, shortcutAppId: result.shortcutAppId || shortcutId, steamAppId: val,
-							skipLauncher: !!skipLauncherInput?.checked, existingLaunchOptions: detectionContext?.launchOptions || '',
-							shortcutExecutable: detectionContext?.exePath || '', repairResources: true,
+							...linkInput, shortcutAppId: result.shortcutAppId || shortcutId,
+							repairResources: true, linkCommitted: true,
 						});
-						statusEl.textContent = gdlText('link_queued_background', 'Linked. Resource setup continues in the background.');
-						statusEl.style.color = '#e5ad37';
+						statusEl.textContent = gdlText('link_ready_resources_pending', '✓ Linked. Available artwork will continue loading in the background.');
+						statusEl.style.color = '#5ba32b';
 					} else {
 						cancelPendingLinkJobs(result.shortcutAppId || shortcutId, gameTitle);
 						statusEl.textContent = gdlText('manual_link_success', 'Shortcut linked to Steam successfully.');

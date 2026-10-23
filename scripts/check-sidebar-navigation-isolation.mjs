@@ -75,6 +75,7 @@ const storage = new Map();
 const localStorage = { getItem: key => storage.get(key) || null, setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) };
 const globals = { window: doc.defaultView, document: doc, localStorage };
 const classModuleCache = load('frontend/steam/class-module-cache.ts', {
+  './gamepad/components/pure-class-factory': load('frontend/steam/gamepad/components/pure-class-factory.ts', {}),
   './modules/SteamWebpackRuntime': { steamWebpackRuntime: { getRuntimeIdentity: () => null, getAllModules: () => [] } },
 });
 const css = load('frontend/steam/css.ts', { './class-module-cache': classModuleCache });

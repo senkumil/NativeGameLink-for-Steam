@@ -1,4 +1,5 @@
 import { steamWebpackRuntime } from './modules/SteamWebpackRuntime';
+import { readPureClassFactory } from './gamepad/components/pure-class-factory';
 
 type ClassMap = Record<string, string>;
 
@@ -13,6 +14,9 @@ interface ClassModuleContext {
 	nextProbeAt: number;
 	candidates: ClassMap[];
 	resolved: Map<ClassMap, ClassModuleResult>;
+	factoryIdentity?: object | null;
+	factoryCandidates?: ClassMap[];
+	factoryCount?: number;
 }
 
 const PROBE_INTERVAL_MS = 1000;
@@ -93,6 +97,22 @@ export function resolveSteamClassModule(
 		try {
 			if (predicate(candidate)) { classes = candidate; break; }
 		} catch {}
+	}
+	if (!classes && context.identity) {
+		// A non-Steam game can be the first page opened. Its native Info CSS
+		// factory exists even when Steam has never instantiated the renderer.
+		// Parse literal exports only; never execute arbitrary private modules.
+		const factoryCount = steamWebpackRuntime.getModuleFactoryCount?.(doc);
+		if (context.factoryIdentity !== context.identity || context.factoryCount !== factoryCount) {
+			context.factoryIdentity = context.identity;
+			context.factoryCount = factoryCount;
+			context.factoryCandidates = [];
+			for (const { factory } of steamWebpackRuntime.getModuleFactories?.(doc) || []) {
+				const candidate = readPureClassFactory(factory);
+				if (candidate) context.factoryCandidates.push(candidate as ClassMap);
+			}
+		}
+		classes = context.factoryCandidates?.find(candidate => { try { return Boolean(predicate(candidate)); } catch { return false; } });
 	}
 	const result = { classes: classes || fallback, native: !!classes };
 	context.resolved.set(fallback, result);

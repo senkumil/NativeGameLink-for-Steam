@@ -5,7 +5,7 @@ import process from 'node:process';
 const root = process.cwd();
 const version = String(process.argv[2] || '').trim().replace(/^v/, '');
 if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) {
-  console.error('Usage: npm run version:set -- 3.0.2');
+  console.error('Usage: npm run version:set -- 5.0.0');
   process.exit(1);
 }
 

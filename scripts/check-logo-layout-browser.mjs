@@ -51,7 +51,7 @@ for (const alias of [nativeSaveAliases.version, nativeSaveAliases.cacheVersion])
   assert(new RegExp(`\\b${alias}=1(?:[,;])`).test(storeFactory), 'The installed native logo/cache version is one');
 }
 assert(storeFactory.includes(`${nativeSaveAliases.key}="customimage"`), 'The installed native logo cache key is customimage');
-const sources = Object.fromEntries(['logo-layout', 'artwork-logo-position', 'native-logo-position', 'steam-bridge', 'asset-deadline', 'asset-write', 'native-asset-write'].map(name => [name,
+const sources = Object.fromEntries(['logo-layout', 'artwork-logo-position', 'native-logo-position', 'native-artwork-stores', 'steam-bridge', 'asset-deadline', 'asset-write', 'native-asset-write'].map(name => [name,
   ts.transpileModule(fs.readFileSync(path.join(root, `frontend/features/library/${name}.ts`), 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
   }).outputText,
@@ -80,14 +80,16 @@ async function browserChecks({ sources, anchorSource, anchorAlias, nativeDefault
       },
       async readLogoLayoutImagesBackend() { counters.layoutReads++; throw new Error('Automatic native sizing must not decode or analyze logo/hero contents'); },
     },
-    '../../steam/modules/SteamWebpackRuntime': { steamWebpackRuntime: { captureRuntime() {}, getRequire() { return null; } } },
+    '../../steam/modules/SteamWebpackRuntime': { steamWebpackRuntime: { captureRuntime() {}, getRequire() { return null; }, getRuntimeIdentity: () => null, getModuleFactoryCount: () => 0, getAllModules: () => [] } },
+    '../shortcuts/host': { shortcutRuntimeHost: () => ({ getMainWindowDoc: () => document }) },
   };
   window.SteamClient = { Apps: { async SetCustomLogoPositionForApp(id, json) {
     check(this === window.SteamClient.Apps && id >= 2147483648, 'The native bridge receives only the exact shortcut target');
     counters.bridgeWrites++; const body = JSON.parse(json); disk.set(id, body.logoPosition);
   } } };
-  window.appStore = { GetAppOverviewByAppID: id => overviews.get(id) };
+  window.appStore = { GetAppOverviewByAppID: id => overviews.get(id), GetCustomLogoImageURLs: () => ({}) };
   window.appDetailsStore = {
+    GetCustomLogoPosition: id => nativeCache.get(id)?.custom_logo_position,
     GetAppData(id) { check(id >= 2147483648, 'Native cache lookup never targets a public game');
       if (!nativeCache.has(id)) nativeCache.set(id, {}); return nativeCache.get(id); },
     SaveCustomLogoPosition: new Function('SteamClient', nativeSaveAliases.cache, nativeSaveAliases.key, nativeSaveAliases.version,

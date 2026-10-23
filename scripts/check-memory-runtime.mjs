@@ -78,6 +78,7 @@ function documentSurface() {
   doc.getElementById = id => id === 'gdl-library-injected' ? doc.body : null;
   doc.querySelectorAll = () => [];
   doc.defaultView = Object.assign(new FakeTarget(), {
+    document: doc, closed: false,
     innerWidth: 1920, innerHeight: 1080,
     getComputedStyle: element => ({ width: `${element.getBoundingClientRect().width}px` }),
     setTimeout: schedule, clearTimeout: id => timers.delete(id),
@@ -129,17 +130,33 @@ let sectionHtml;
 let nativePreviewEnabled = false;
 let nativePreviewDisposals = 0;
 const nativePreviewCalls = [];
+const communityOptions = {
+  communityCardId: card => `${card.foil ? 'foil' : 'normal'}:${card.title || ''}:${card.image || ''}`,
+  communityBadgeId: badge => `${badge.foil ? 'foil' : 'normal'}:${badge.level || 0}:${badge.image || ''}`,
+  getCachedCommunityItemOptions: () => null,
+  getCommunityItemOptions: async () => ({ enabled: false, card_border: 'normal', owned_card_ids: [], badge_id: '' }),
+  subscribeCommunityItemOptions: () => () => {},
+};
 const cards = loadModule('frontend/features/library/trading-cards.ts', {
   '../../api/backend': { backendLog() {} },
   '../../core/text': { escapeHtml: value => String(value) },
   '../../core/disposables': disposables,
+  '../../core/community-item-options': communityOptions,
   '../../steam/css': { ACH_CLASSES: () => ({ HighlightDiv: 'highlight' }), resolveClassModule: (_predicate, fallback) => ({ classes: fallback }) },
   '../../steam/localization': { gdlText: (_key, fallback) => fallback, loc: (_key, fallback) => fallback },
-  './community-items': { getOfficialCommunityItems: async () => catalog, normalizeCommunityAssetUrl: value => value || '' },
+  './community-items': { getImmediateOfficialCommunityItems: () => catalog,
+    getOfficialCommunityItems: async () => catalog, subscribeOfficialCommunityItems: () => () => {},
+    normalizeCommunityAssetUrl: value => value || '' },
   './constants': { GDL_INJECTED: 'gdl-library-injected' },
   './layout': { buildNativeSidebarSection: (_doc, _layout, options) => { sectionHtml = options.innerHtml; return section; } },
   './trading-card-preload': preload,
-  './linked-card-presentation': loadModule('frontend/features/library/linked-card-presentation.ts'),
+  './trading-card-help': loadModule('frontend/features/library/trading-card-help.ts', {
+    '../../core/text': { escapeHtml: value => String(value) },
+    '../../steam/localization': { gdlText: (_key, fallback) => fallback, loc: (_key, fallback) => fallback },
+  }),
+  './linked-card-presentation': loadModule('frontend/features/library/linked-card-presentation.ts', {
+    '../../core/community-item-options': communityOptions,
+  }),
   './sidebar-order': { getLinkedSidebarOrder: (_doc, layout) => ({
     shortcutAppId: '3000000001', isCurrent: () => true,
     publish: node => { layout.sidebarColumn.appendChild(node); return true; },

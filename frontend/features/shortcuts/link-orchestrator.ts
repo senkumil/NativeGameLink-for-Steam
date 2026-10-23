@@ -48,6 +48,15 @@ interface PendingShortcutRename {
 }
 const pendingShortcutRenames = new Map<string, PendingShortcutRename>();
 
+/** Unlink must wait for the real IPC, not its foreground timeout. A late
+ * rename may otherwise restore the linked title after unlink has finished. */
+export function getPendingShortcutIdentityWrites(shortcutAppId: number, executable = ''): Promise<unknown>[] {
+	const identity = shortcutExecutableIdentity(executable);
+	return Array.from(pendingShortcutRenames.entries())
+		.filter(([key, rename]) => rename.previousId === shortcutAppId || Boolean(identity && key === identity))
+		.map(([, rename]) => rename.promise);
+}
+
 function shortcutDisplayName(app: any): string {
 	return String(app?.display_name || app?.m_strDisplayName || app?.strDisplayName || '').trim();
 }
@@ -614,7 +623,8 @@ export class LinkOrchestrator {
 			tx.phase = 'failed';
 			tx.error = String(e);
 			backendLog('LinkOrchestrator error: ' + e);
-			const error = e instanceof Error ? e.message : String(e).replace(/^Error:\s*/, '');
+			const error = tx.abortReason === 'unlink' ? 'link_cancelled_by_unlink'
+				: e instanceof Error ? e.message : String(e).replace(/^Error:\s*/, '');
 			onStatus(error === 'steam_appid_file_protection_failed'
 				? gdlText('steam_appid_file_protection_failed', 'Could not disable steam_appid.txt. The link was not completed because Steam could open a second game session.')
 				: error === 'shortcut_rename_pending'

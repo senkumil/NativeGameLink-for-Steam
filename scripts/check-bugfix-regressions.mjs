@@ -112,8 +112,10 @@ console.log('Running user-reported bug regression checks...');
 // Wukong / tiny-token collision: maintained alias must remain visible while a
 // coincidentally exact 1-3 char Store title cannot promote itself to certainty.
 assert(aliases.includes('["b1"]') && aliases.includes('"2358720"'), 'b1 maintained alias still resolves Black Myth: Wukong');
-assert(detectionTs.includes("DETECTION_MODEL_VERSION = 'v12'"), 'detection model cache bumped to v12 after fixing discovery context and candidate relevance');
-assert(remoteDetection.includes('DETECTION_MODEL_VERSION = "v12"'), 'backend candidate cache is versioned with v12');
+const frontendDetectionVersion = Number(detectionTs.match(/DETECTION_MODEL_VERSION = 'v(\d+)'/)?.[1]);
+const backendDetectionVersion = Number(remoteDetection.match(/DETECTION_MODEL_VERSION = "v(\d+)"/)?.[1]);
+assert(frontendDetectionVersion >= 13, 'detection cache invalidates pre-canonical-query and incomplete-phase results');
+assert(backendDetectionVersion === frontendDetectionVersion, 'backend and frontend detection cache models agree');
 assert(remoteDetection.includes('maintained_alias_exact') && localDetection.includes('maintained_alias_exact'), 'local and remote engines preserve exact maintained-alias evidence');
 assert(remoteDetection.includes('short_title_unverified') && remoteDetection.includes('short_executable_unverified'), 'tiny exact titles/executables remain provisional without independent corroboration');
 assert(remoteDetection.includes('candidate.alias_primary == true'), 'primary maintained alias is tracked independently from Store title coincidence');
@@ -123,12 +125,14 @@ assert(remoteDetection.includes('candidate.alias_primary == true'), 'primary mai
 assert(properties.includes("propertyActionBusy: 'link' | 'unlink' | null"), 'Properties Link/Unlink share an explicit in-flight state');
 assert(properties.includes('await linkShortcutToSteam({') && properties.includes('await unlinkShortcutFromSteam({'), 'Properties waits for Link and Unlink operations');
 assert(!properties.includes('void updateMappingsChecked({ set:'), 'Properties no longer writes an optimistic mapping before linking');
-assert(properties.includes('detectShortcutCandidatesLocal') && properties.includes('enrichShortcutCandidatesRemote'), 'Properties renders local suggestions before remote enrichment');
+const propertySearch = read('frontend/features/shortcuts/properties-detection.ts');
+assert(properties.includes('bindPropertySuggestionSearch') && propertySearch.includes('detectShortcutCandidatesLocal')
+  && propertySearch.includes('enrichShortcutCandidatesRemote'), 'Properties renders local suggestions before remote enrichment');
 assert(propertiesStyle.includes('color-scheme: dark') && propertiesStyle.includes('.gdl-native-select option'), 'Properties suggestion dropdown keeps Steam-dark option colors');
 assert(properties.includes('candidateForPreview') && properties.includes('linkedPreviewCandidate'), 'Properties preview resolves the exact selected AppID, including the currently linked entry');
 assert(properties.includes('previousSelectionStillAvailable') && properties.includes('suggestionUserInteracted && previousSelectionStillAvailable'), 'async candidate enrichment preserves an explicit user dropdown selection');
 assert(manualLinkReview.includes('detectShortcutCandidatesLocal') && manualLinkReview.includes('enrichShortcutCandidatesRemote'), 'Manual review modal also uses progressive local + remote suggestions');
-assert(manualLinkReview.includes('buildImmediateShortcutDetectionContext') && manualLinkReview.includes('detectShortcutCandidatesLocal(immediateContext)'), 'manual detection starts with the available executable and folder before asynchronous hydration');
+assert(manualLinkReview.includes('buildImmediateShortcutDetectionContext') && manualLinkReview.includes('detectShortcutCandidatesLocal(immediateContext,'), 'manual detection starts with the available executable and folder before asynchronous hydration');
 assert(manualLink.includes('function displayConfidence') && manualLink.includes('return displayReviewConfidence(candidate)')
   && detectionTs.includes('export function displayReviewConfidence') && detectionTs.includes('candidate.score >= 90')
   && detectionTs.includes('candidate.negative_reasons?.length'), 'manual and Properties confidence badges share evidence and contradiction rules');
@@ -458,12 +462,12 @@ assert(!spatialNav.includes('.gdl-bp-info-feature') && !spatialNav.includes('.gd
 const tradingCatalog = bigPictureDetails.slice(bigPictureDetails.indexOf('function TradingCardsSection('), bigPictureDetails.indexOf('function communityItems('));
 const bpTradingCards = read('frontend/features/big-picture/NativeBigPictureTradingCards.tsx');
 assert(bpTradingCards.includes('gdl-bp-trading-card') && bpTradingCards.includes('focusable')
-  && bpTradingCards.includes('AppDetails_TradingCards_ViewBadgeProgress')
+  && bpTradingCards.includes('AppDetails_ViewBadgePage')
   && tradingCatalog.includes('https://steamcommunity.com/my/gamecards/${props.shortcut.steamAppId}')
-  && bpTradingCards.includes('NativeCards details={{ unAppID: Number(props.steamAppId) }}')
   && bpTradingCards.includes('css?.Unowned') && bpTradingCards.includes('css?.Owned')
-  && !bpTradingCards.includes('linkedCardPresentation(props.catalog)'),
-  'Known account cards use native presentation and ownership while an unknown public catalogue invents no personal badge state');
+  && bpTradingCards.includes('getCachedCommunityItemOptions')
+  && !bpTradingCards.includes('resolveNativeTradingCards') && !bpTradingCards.includes('<NativeCards'),
+  'Restored CSS cards keep controller targets and apply the exact shortcut local selection without mounting native card factories');
 assert(!bigPictureDetails.includes('gdl-bp-info-description') && !bigPictureDetails.includes('gdl-bp-info-feature'), 'NativeBigPictureDetails does not duplicate Steam Game Information focus targets');
 assert(bpDetails.includes('activateNativeGameInfoBridge(doc, state.shortcut, state.data.game)') && bpDetails.includes('deactivateNativeGameInfoBridge(doc)'), 'native Game Information bridge is scoped to the active linked detail page and restored on exit');
 assert(bpNativeInfoBridge.includes('new Proxy(base,') && !bpNativeInfoBridge.includes('if (linked?.details) return linked;'), 'native Game Information preserves the shortcut data and local artwork identity');

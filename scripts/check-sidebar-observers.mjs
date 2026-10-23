@@ -262,18 +262,20 @@ const controllerModule = load('frontend/features/library/controller.ts', {
   '../../steam/sidebar-interaction': { isLibrarySidebarInteractionActive: () => false },
   './sidebar-order': { getLinkedSidebarOrder: () => null, hasLinkedSidebarOrder: () => false },
   './controller-svgs': {}, '../../steam/library-sidebar': signals,
-}, controller.globals, '\nexports.installScrollBehavior = setupControllerScrollTranslucencyWatcher;');
+}, controller.globals, '\nexports.installSectionRecovery = setupControllerSectionRecoveryWatcher;');
 const controllerColumn = new Element();
-const disposeController = controllerModule.installScrollBehavior(controller.doc, { sidebarColumn: controllerColumn }, '10', '3000000000', () => true);
+const disposeController = controllerModule.installSectionRecovery(controller.doc, { sidebarColumn: controllerColumn }, '10', '3000000000', () => true);
 assert.equal(controller.observers[0].target, controllerColumn, 'controller recovery watches only its actual details column');
 assert.deepEqual({ ...controller.observers[0].options }, { childList: true }, 'controller recovery does not observe body or nested section updates');
 controller.drainFrames();
 for (let i = 0; i < 100; i++) {
   controller.win.fire('scroll', { target: controller.list });
+  controller.win.fire('scroll', { target: controller.details });
+  controller.win.fire('resize');
   controller.observers[0].callback(controller.sidebarRecords);
   controller.observers[0].callback(controller.mixedOwnedRecords);
 }
-assert.equal(controller.frames.size, 0, 'sidebar recycling never schedules controller scans or rendering');
+assert.equal(controller.frames.size, 0, 'scrolling either pane, resizing or sidebar recycling never schedules controller scans or rendering');
 controller.observers[0].callback(controller.mixedDetailsRecords);
 assert.equal(controller.frames.size, 0, 'unrelated details changes no longer scan or rebuild the controller');
 const removedController = new Element(); removedController.id = 'gdl-controller-section';

@@ -28,6 +28,7 @@ function load(file, dependencies) {
 }
 loaded.cache = load('frontend/steam/class-module-cache.ts', {
   './modules/SteamWebpackRuntime': { steamWebpackRuntime: runtime },
+  './gamepad/components/pure-class-factory': load('frontend/steam/gamepad/components/pure-class-factory.ts', {}),
 });
 loaded.css = load('frontend/steam/css.ts', { './class-module-cache': loaded.cache });
 loaded.rare = load('frontend/features/achievements/steam-rare.ts', { '../../steam/class-module-cache': loaded.cache });

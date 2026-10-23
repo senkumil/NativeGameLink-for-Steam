@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
+import { nativeArtworkStoresRuntime } from './helpers/native-artwork-stores-runtime.mjs';
 
 const SID = 3300000001;
 let verified = true, mappings = {}, now = 0, nextTimer = 1;
@@ -40,7 +41,7 @@ function fixture(ids = [SID]) {
   const calls = [], apps = new Map(), listeners = new Map();
   const classified = () => true;
   for (const id of ids) apps.set(id, { appid: id, rt_custom_image_mtime: 10, BHasCustomImages: () => true, BIsModOrShortcut: classified, icon_data: 'original-icon' });
-  const details = { GetAppData: () => ({}), GetAchievements() {}, GetCustomLogoPosition(overview) { calls.push(overview); return null; } };
+  const details = { GetAppData: () => ({}), SaveCustomLogoPosition() {}, GetAchievements() {}, GetCustomLogoPosition(overview) { calls.push(overview); return null; } };
   const appStore = {
     GetAppOverviewByAppID: id => apps.get(id < 0 ? id >>> 0 : id),
     GetCustomLogoImageURLs: overview => { imageUrlReads++; return ['jpg', 'png'].map(ext => `/customimages/${overview.appid}_logo.${ext}?v=${overview.rt_custom_image_mtime}`); },
@@ -65,8 +66,12 @@ const dependencies = {
   '../../steam/library-sidebar': { isLibrarySidebarNode(target) { for (let node = target; node; node = node.parentElement) if (node.sidebar) return true; return false; } },
   '../../steam/modules/SteamWebpackRuntime': { steamWebpackRuntime: {
     captureRuntime() { runtimeProbes++; },
+    getRuntimeIdentity: doc => doc,
+    getModuleFactoryCount: () => 0,
+    getModuleFactories: () => [],
+    getAllModules(doc) { runtimeRequires.push('loaded'); const stores = moduleStores.get(doc);
+      return stores ? [{ id: 'updated-details', exports: { renamed: stores.details } }, { id: 'updated-apps', exports: { another: stores.apps } }] : []; },
     getRequire(doc) { return id => { runtimeRequires.push(id); const stores = moduleStores.get(doc); return id === 78057 ? { H: stores?.details } : id === 1776 ? { tw: stores?.apps } : null; }; },
-    getAllModules() { return []; },
   } },
   './native-route': { routedSteamAppId: doc => doc.routeId },
   './native-logo-sources': {
@@ -82,6 +87,7 @@ const dependencies = {
     refreshNativeLogoInventoryReadiness: async doc => { inventoryReadinessCalls.push(doc); return inventoryRetryResults.shift() || false; },
   },
 };
+dependencies['./native-artwork-stores'] = nativeArtworkStoresRuntime(dependencies['../../steam/modules/SteamWebpackRuntime'].steamWebpackRuntime, { Date: { now: () => now } });
 const idleContext = vm.createContext({ exports: {}, Date: { now: () => now }, require: name => {
   assert.equal(name, './library-sidebar'); return dependencies['../../steam/library-sidebar'];
 } });
@@ -150,7 +156,7 @@ const reset = ids => { mappings = Object.fromEntries(ids.map(id => [`shortcut:${
   const originalAchievements = details.GetAchievements;
   delete doc.defaultView.appDetailsStore; delete doc.defaultView.appStore;
   warm(doc, SID);
-  assert.equal(calls.length, 1); assert.deepEqual(runtimeRequires.slice(-2), [78057, 1776], 'Fallback resolves only same-realm native stores');
+  assert.equal(calls.length, 1); assert.equal(runtimeRequires.at(-1), 'loaded', 'Fallback resolves current same-realm exports without private module IDs');
   const initialRequires = runtimeRequires.length;
   for (let index = 0; index < 100; index++) warm(doc, SID);
   assert.equal(runtimeRequires.length, initialRequires, 'Resolved native stores are cached between early sync callbacks');
@@ -188,7 +194,7 @@ const reset = ids => { mappings = Object.fromEntries(ids.map(id => [`shortcut:${
   doc.defaultView.appDetailsStore = savedStores.details; doc.defaultView.appStore = savedStores.apps;
   assert.equal(warm(doc, SID), true, 'Fresh native globals bypass a missing-runtime cooldown'); assert.equal(calls.length, 1);
   const replacementCalls = [];
-  doc.defaultView.appDetailsStore = { GetCustomLogoPosition: overview => replacementCalls.push(overview) };
+  doc.defaultView.appDetailsStore = { GetAppData: () => ({}), SaveCustomLogoPosition() {}, GetCustomLogoPosition: overview => replacementCalls.push(overview) };
   warm(doc, SID); assert.equal(replacementCalls.length, 1, 'A native store replacement refreshes the per-document cache');
 }
 {

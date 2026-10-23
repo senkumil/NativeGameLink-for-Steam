@@ -1,6 +1,7 @@
 export const SHORTCUT_PROPERTIES_STYLE = `<style class="gdl-properties-layout-style">
 	.gdl-properties-injected, .gdl-properties-injected * { box-sizing: border-box; }
 	.gdl-properties-injected {
+		container-type: inline-size;
 		--gdl-text: #dfe3e6;
 		--gdl-muted: #8f98a0;
 		--gdl-faint: #6f7882;
@@ -13,12 +14,63 @@ export const SHORTCUT_PROPERTIES_STYLE = `<style class="gdl-properties-layout-st
 		font-family: inherit;
 	}
 	.gdl-properties-injected .gdl-native-section {
-		padding-top: 24px;
 		border-top: 1px solid var(--gdl-border);
 	}
 	.gdl-properties-injected .gdl-native-section + .gdl-native-section {
-		margin-top: 24px;
+		margin-top: 0;
 	}
+	.gdl-properties-injected [hidden] { display: none !important; }
+	.gdl-properties-injected .gdl-properties-category-summary {
+		display: flex;
+		align-items: center;
+		gap: 12px;
+		min-height: 72px;
+		padding: 16px 0;
+		list-style: none;
+		cursor: pointer;
+		user-select: none;
+	}
+	.gdl-properties-injected summary::-webkit-details-marker { display: none; }
+	.gdl-properties-injected summary::marker { content: ''; }
+	.gdl-properties-injected .gdl-properties-category-summary:hover .gdl-properties-category-title { color: #fff; }
+	.gdl-properties-injected summary:focus-visible,
+	.gdl-properties-injected button:focus-visible,
+	.gdl-properties-injected input:focus-visible {
+		outline: 2px solid var(--gdl-blue-text);
+		outline-offset: 3px;
+	}
+	.gdl-properties-injected .gdl-properties-category-copy { display: block; flex: 1; min-width: 0; }
+	.gdl-properties-injected .gdl-properties-category-title {
+		display: block;
+		margin: 0;
+		font-size: 14px;
+		font-weight: 500;
+		line-height: 1.4;
+		letter-spacing: 0;
+		text-transform: none;
+	}
+	.gdl-properties-injected .gdl-properties-category-description {
+		display: block;
+		margin: 4px 0 0;
+		font-size: 12px;
+		line-height: 1.45;
+		color: var(--gdl-muted);
+	}
+	.gdl-properties-injected .gdl-properties-category-chevron {
+		flex: 0 0 16px;
+		color: var(--gdl-muted);
+		font-size: 24px;
+		line-height: 1;
+		text-align: center;
+		transition: transform .15s ease;
+	}
+	.gdl-properties-injected .gdl-properties-category[open] > summary .gdl-properties-category-chevron { transform: rotate(90deg); }
+	.gdl-properties-injected .gdl-properties-category-body { padding: 0 0 20px; }
+	.gdl-properties-injected .gdl-linked-game-image { width: 72px; height: 34px; object-fit: cover; flex: 0 0 72px; }
+	.gdl-properties-injected .gdl-linked-game-state { font-size: 12px; color: var(--gdl-muted); }
+	.gdl-properties-injected .gdl-link-section[data-linked="true"] .gdl-linked-game-state { color: var(--gdl-blue-text); }
+	.gdl-properties-injected .gdl-link-section > summary .gdl-properties-category-description { overflow-wrap: anywhere; }
+	.gdl-properties-injected .gdl-native-section:last-child { border-bottom: 1px solid var(--gdl-border); }
 	.gdl-properties-injected .gdl-native-section-heading {
 		font-family: inherit;
 		font-size: 13px;
@@ -36,16 +88,27 @@ export const SHORTCUT_PROPERTIES_STYLE = `<style class="gdl-properties-layout-st
 		line-height: 1.5;
 		color: var(--gdl-muted);
 	}
+	.gdl-properties-injected .gdl-properties-category-summary .gdl-properties-category-title {
+		margin: 0;
+		font-size: 14px;
+		font-weight: 500;
+		letter-spacing: 0;
+		text-transform: none;
+	}
+	.gdl-properties-injected .gdl-properties-category-summary .gdl-properties-category-description {
+		margin: 4px 0 0;
+		font-size: 12px;
+		line-height: 1.45;
+	}
 	.gdl-properties-injected .gdl-native-setting-row {
 		display: grid;
-		grid-template-columns: minmax(160px, .55fr) minmax(280px, 1fr);
+		grid-template-columns: minmax(140px, .7fr) minmax(0, 1fr);
 		gap: 16px;
 		align-items: center;
-		min-height: 56px;
-		padding: 12px 16px;
-		background: var(--gdl-row);
-		border: 1px solid rgba(255, 255, 255, .03);
-		border-radius: 4px;
+		min-height: 48px;
+		padding: 10px 0;
+		background: transparent;
+		border: 0;
 	}
 	.gdl-properties-injected .gdl-native-setting-copy {
 		min-width: 0;
@@ -71,7 +134,7 @@ export const SHORTCUT_PROPERTIES_STYLE = `<style class="gdl-properties-layout-st
 	}
 	.gdl-properties-injected .gdl-link-actions {
 		position: relative;
-		margin-top: 12px;
+		margin-top: 0;
 		grid-template-columns: minmax(0, 1fr);
 	}
 	.gdl-properties-injected .gdl-link-actions .gdl-native-controls {
@@ -82,11 +145,11 @@ export const SHORTCUT_PROPERTIES_STYLE = `<style class="gdl-properties-layout-st
 	}
 	.gdl-properties-injected .gdl-native-input, .gdl-properties-injected .gdl-native-select {
 		min-width: 0;
-		height: 38px;
+		height: 36px;
 		padding: 8px 12px;
 		background: var(--gdl-control);
 		border: 1px solid rgba(255, 255, 255, .1);
-		border-radius: 3px;
+		border-radius: 2px;
 		outline: none;
 		color: var(--gdl-text);
 		font: inherit;
@@ -114,18 +177,18 @@ export const SHORTCUT_PROPERTIES_STYLE = `<style class="gdl-properties-layout-st
 		box-shadow: 0 0 0 1px rgba(102, 192, 244, .4);
 	}
 	.gdl-properties-injected .gdl-native-button {
-		height: 38px;
-		min-height: 38px;
-		padding: 0 16px;
+		min-height: 32px;
+		padding: 7px 14px;
 		border: 0;
-		border-radius: 3px;
+		border-radius: 2px;
 		background: #3d4450;
 		color: var(--gdl-text);
 		font: inherit;
 		font-size: 13px;
 		font-weight: 500;
-		letter-spacing: .25px;
-		white-space: nowrap;
+		max-width: 100%;
+		white-space: normal;
+		line-height: 1.4;
 		cursor: pointer;
 		transition: background .15s ease, color .15s ease, filter .15s ease;
 	}
@@ -156,21 +219,20 @@ export const SHORTCUT_PROPERTIES_STYLE = `<style class="gdl-properties-layout-st
 	}
 	.gdl-properties-injected .gdl-native-disclosure {
 		margin-top: 12px;
-		background: var(--gdl-row);
-		border: 1px solid rgba(255, 255, 255, .03);
-		border-radius: 4px;
-		overflow: hidden;
+		background: transparent;
+		border: 0;
+		border-top: 1px solid var(--gdl-border);
 	}
 	.gdl-properties-injected .gdl-auto-detect-header {
 		display: flex;
 		align-items: center;
-		padding: 12px 16px 6px;
+		padding: 14px 0 6px;
 		color: var(--gdl-text);
 		font-size: 13px;
 		font-weight: 500;
 	}
 	.gdl-properties-injected .gdl-native-disclosure-body {
-		padding: 4px 16px 14px;
+		padding: 4px 0 0;
 	}
 	.gdl-properties-injected .gdl-auto-detect-title {
 		margin-bottom: 8px;
@@ -184,10 +246,8 @@ export const SHORTCUT_PROPERTIES_STYLE = `<style class="gdl-properties-layout-st
 		gap: 12px;
 		min-width: 0;
 		margin-top: 10px;
-		padding: 10px 12px;
-		background: rgba(0, 0, 0, .25);
-		border: 1px solid rgba(255, 255, 255, .05);
-		border-radius: 3px;
+		padding: 8px 0;
+		background: transparent;
 	}
 	.gdl-properties-injected .gdl-candidate-primary img {
 		width: 104px;
@@ -198,9 +258,7 @@ export const SHORTCUT_PROPERTIES_STYLE = `<style class="gdl-properties-layout-st
 		border-radius: 2px;
 	}
 	.gdl-properties-injected .gdl-candidate-name {
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
+		overflow-wrap: anywhere;
 		font-size: 13px;
 		font-weight: 500;
 		color: var(--gdl-text);
@@ -221,11 +279,10 @@ export const SHORTCUT_PROPERTIES_STYLE = `<style class="gdl-properties-layout-st
 		display: none;
 		align-items: flex-start;
 		gap: 10px;
-		margin-top: 10px;
-		padding: 12px 16px;
-		background: var(--gdl-row);
-		border: 1px solid rgba(255, 255, 255, .03);
-		border-radius: 4px;
+		margin-top: 0;
+		padding: 10px 0;
+		background: transparent;
+		border: 0;
 		color: #acb2b8;
 		font-size: 12px;
 		line-height: 1.45;
@@ -236,6 +293,8 @@ export const SHORTCUT_PROPERTIES_STYLE = `<style class="gdl-properties-layout-st
 	}
 	.gdl-properties-injected .gdl-native-option input {
 		margin-top: 2px;
+		flex-shrink: 0;
+		accent-color: var(--gdl-blue);
 	}
 	.gdl-properties-injected .gdl-native-option strong {
 		font-weight: 500;
@@ -346,7 +405,8 @@ export const SHORTCUT_PROPERTIES_STYLE = `<style class="gdl-properties-layout-st
 		display: flex;
 		justify-content: space-between;
 		align-items: center;
-		padding: 12px 16px;
+		gap: 12px;
+		padding: 14px 0;
 		font-size: 13px;
 		font-weight: 500;
 		color: var(--gdl-text);
@@ -360,9 +420,37 @@ export const SHORTCUT_PROPERTIES_STYLE = `<style class="gdl-properties-layout-st
 	.gdl-properties-injected .gdl-achievement-path-disclosure[open] .gdl-native-disclosure-chevron {
 		transform: rotate(180deg);
 	}
+
+	.gdl-properties-injected .gdl-community-item-options[hidden],
+	.gdl-properties-injected .gdl-community-item-options [hidden] { display: none !important; }
+	.gdl-properties-injected .gdl-community-card-summary { margin: 8px 0; }
+	.gdl-properties-injected .gdl-community-card-list { display: grid; grid-template-columns: repeat(auto-fill,minmax(100px,1fr)); gap: 10px; }
+	.gdl-properties-injected .gdl-community-card-choice { display: flex; flex-direction: column; align-items: center; gap: 6px; position: relative; min-width: 0; padding: 8px; background: transparent; border: 1px solid var(--gdl-border); cursor: pointer; }
+	.gdl-properties-injected .gdl-community-card-choice:has(input:checked) { border-color: rgba(102,192,244,.5); background: rgba(102,192,244,.04); }
+	.gdl-properties-injected .gdl-community-card-choice input { align-self: flex-start; accent-color: var(--gdl-blue); }
+	.gdl-properties-injected .gdl-community-card-choice img { display: block; width: 72px; height: 84px; object-fit: contain; }
+	.gdl-properties-injected .gdl-community-card-choice span { width: 100%; overflow-wrap: anywhere; text-align: center; font-size: 12px; line-height: 1.4; }
+	.gdl-properties-injected .gdl-community-actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 12px 0; }
+	.gdl-properties-injected .gdl-community-badge-controls { display: flex; align-items: center; gap: 10px; min-width: 0; }
+	.gdl-properties-injected .gdl-community-badge-preview { width: 48px; height: 48px; object-fit: contain; flex: 0 0 48px; }
+	.gdl-properties-injected .gdl-community-options-status[data-error="true"] { color: #ff6b6b; }
+	.gdl-properties-injected .gdl-auto-detect-retry { margin-top: 8px; }
+	@container (max-width: 520px) {
+		.gdl-properties-injected .gdl-native-setting-row { grid-template-columns: 1fr; gap: 10px; }
+		.gdl-properties-injected .gdl-native-controls { justify-content: stretch; flex-wrap: wrap; }
+		.gdl-properties-injected .gdl-native-input { flex-basis: 100%; }
+		.gdl-properties-injected .gdl-achievement-path-controls { flex-wrap: wrap; }
+		.gdl-properties-injected .gdl-achievement-path-controls .gdl-native-input { flex-basis: 100%; }
+		.gdl-properties-injected .gdl-game-achievement-online-row { flex-direction: column; }
+		.gdl-properties-injected .gdl-game-achievement-online-row > .gdl-native-setting-copy,
+		.gdl-properties-injected .gdl-game-achievement-online-row > .gdl-achievement-control { flex: 0 0 auto; width: 100%; }
+		.gdl-properties-injected .gdl-linked-game-state { display: none; }
+	}
 	@media (max-width: 720px) {
 		.gdl-properties-injected .gdl-native-setting-row { grid-template-columns: 1fr; gap: 10px; }
 		.gdl-properties-injected .gdl-game-achievement-online-row { flex-direction: column; }
+		.gdl-properties-injected .gdl-game-achievement-online-row > .gdl-native-setting-copy,
+		.gdl-properties-injected .gdl-game-achievement-online-row > .gdl-achievement-control { flex: 0 0 auto; width: 100%; }
 		.gdl-properties-injected .gdl-native-controls { justify-content: stretch; flex-wrap: wrap; }
 		.gdl-properties-injected .gdl-native-input { flex-basis: 100%; }
 		.gdl-properties-injected .gdl-achievement-path-controls { flex-wrap: wrap; }

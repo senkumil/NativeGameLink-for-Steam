@@ -12,7 +12,7 @@ import {
 } from './layout';
 import { refreshHistoricalSidebarSections, renderLinkedSidebarCore } from './sidebar-sections';
 import { disposeControllerSidebarWatcher, getOwnedControllerSidebar, setupControllerSidebarWatcher } from './controller';
-import { renderOptionalStoreSections } from './optional-sections';
+import { linkedStoreCapabilities, renderOptionalStoreSections } from './optional-sections';
 import { createActivityView, parkSharedActivityComposer, wireActivityView } from './activity-view';
 import { createPrimaryLinksBar, insertPrimaryLinksBar } from './primary-links';
 import {
@@ -133,13 +133,7 @@ export function renderLinkedGamePage(
 
 	setupControllerSidebarWatcher(doc, layout, steamAppId, context.shortcutAppId, context.isCurrent);
 
-	const capabilities = renderOptionalStoreSections(doc, layout, {
-		steamAppId,
-		gameName: data.name,
-		data,
-		shortcutAppId: context.shortcutAppId,
-		isCurrent: context.isCurrent,
-	});
+	const capabilities = linkedStoreCapabilities(data);
 
 	const activityOptions = {
 		steamAppId,
@@ -148,9 +142,8 @@ export function renderLinkedGamePage(
 		headerImage: data.header_image || '',
 	};
 	const activity = adoptLinkedLoadingActivity(doc, steamAppId, context.shortcutAppId) || createActivityView(doc, layout, activityOptions);
-	// Keep the injected main sections in one owned child of the native column.
-	// Activity uses the narrow stack width; Community publishes its full width
-	// and clearance below the live sidebar without moving either section.
+	// Activity owns the narrow stack. Community follows it as a native-column
+	// sibling so its rows can flow beside, then below, the right sidebar.
 	const mainContentStack = doc.createElement('div');
 	mainContentStack.id = 'gdl-main-content-stack';
 	mainContentStack.style.cssText = 'display:flex !important;flex-direction:column !important;align-items:stretch !important;justify-content:flex-start !important;min-width:0 !important;max-width:100% !important;height:auto !important;min-height:0 !important;flex:0 0 auto !important;box-sizing:border-box !important;overflow:visible !important;';
@@ -175,6 +168,13 @@ export function renderLinkedGamePage(
 		cleanupPreviousRender(doc);
 		return false;
 	}
+	// Optional sections require the committed activity owner. Before this
+	// point a cold route still has only its loading skeleton, and a metadata
+	// refresh may have removed the previous activity while preserving its cards.
+	renderOptionalStoreSections(doc, layout, {
+		steamAppId, gameName: data.name, data,
+		shortcutAppId: context.shortcutAppId, isCurrent: context.isCurrent,
+	});
 	hideLinkedShortcutNotice(noticeElement, layout);
 	wireActivityView(doc, activity, activityOptions);
 

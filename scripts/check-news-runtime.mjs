@@ -59,6 +59,9 @@ const feedModules={
   '../../../steam/social':{},'./personas':{},'./host':{},
   '../activity-summary':{installNativeActivitySummaryClamps:()=>()=>{}},
 };
+const footerContext=vm.createContext({exports:{},require:name=>name.endsWith('/css')?feedModules['../../../steam/css']:name.endsWith('/text')?{escapeHtml}:localization});
+vm.runInContext(ts.transpileModule(fs.readFileSync('frontend/features/library/activity-footer.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText,footerContext);
+feedModules['../activity-footer']=footerContext.exports;
 const feedContext=vm.createContext({exports:{},window:{},localStorage:{getItem:()=>null},require:name=>{
   if(!(name in feedModules)) throw Error(name);return feedModules[name];
 }});

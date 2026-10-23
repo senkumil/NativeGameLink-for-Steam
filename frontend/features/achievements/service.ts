@@ -28,6 +28,8 @@ interface AchievementRequestCacheEntry {
 
 const requestCache = new Map<string, AchievementRequestCacheEntry>();
 const updateListeners = new Set<(update: LocalAchievementUpdate) => void>();
+const optimisticUpdates = new Map<string, { data: LocalAchievementData; expiresAt: number }>();
+const optimisticKey = (steamAppId: string, stateAppId: string): string => `${steamAppId}:${stateAppId}`;
 const DEFAULT_MAX_AGE_MS = 1250;
 const MAX_REQUEST_CACHE_ENTRIES = 32;
 let requestGeneration = 0;
@@ -49,6 +51,24 @@ export function publishAchievementUpdate(update: LocalAchievementUpdate): void {
 	for (const listener of Array.from(updateListeners)) {
 		try { listener(update); } catch {}
 	}
+}
+
+/** A slider preview owns this pair until its settings write is acknowledged.
+ * Polls started before that write must not replace it with the old disk state. */
+export function publishOptimisticAchievementUpdate(update: LocalAchievementUpdate): void {
+	if (!update.data?.found || !Array.isArray(update.data.achievements)
+		|| String(update.data.metadata_appid || update.data.appid) !== update.steamAppId) return;
+	invalidateLocalAchievementRequests(update.stateAppId ? [] : [update.steamAppId], update.stateAppId ? [update.stateAppId] : []);
+	const key = optimisticKey(update.steamAppId, update.stateAppId);
+	optimisticUpdates.delete(key);
+	optimisticUpdates.set(key, { data: update.data, expiresAt: Date.now() + 15000 });
+	while (optimisticUpdates.size > MAX_REQUEST_CACHE_ENTRIES) optimisticUpdates.delete(optimisticUpdates.keys().next().value!);
+	publishAchievementUpdate(update);
+}
+
+export function releaseOptimisticAchievementUpdate(steamAppId?: string, stateAppId = ''): void {
+	if (!steamAppId) optimisticUpdates.clear();
+	else optimisticUpdates.delete(optimisticKey(steamAppId, stateAppId));
 }
 
 export function subscribeLocalAchievementData(listener: (update: LocalAchievementUpdate) => void): () => void {
@@ -101,6 +121,13 @@ export async function fetchLocalAchievementData(
 	steamAppId: string | number,
 	options: LocalAchievementRequestOptions = {},
 ): Promise<LocalAchievementData | null> {
+	const previewKey = optimisticKey(String(steamAppId), options.stateAppId == null ? '' : String(options.stateAppId));
+	const preview = optimisticUpdates.get(previewKey);
+	if (preview && preview.expiresAt > Date.now()) {
+		await Promise.resolve();
+		return optimisticUpdates.get(previewKey) === preview ? preview.data : null;
+	}
+	if (preview) optimisticUpdates.delete(previewKey);
 	const requestJson = localAchievementRequestJson(steamAppId, options);
 	const now = Date.now();
 	const maxAgeMs = Math.max(0, options.maxAgeMs ?? DEFAULT_MAX_AGE_MS);

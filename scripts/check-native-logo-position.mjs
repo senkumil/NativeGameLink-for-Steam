@@ -11,13 +11,13 @@ const compile = file => ts.transpileModule(fs.readFileSync(file, 'utf8'), {
 }).outputText;
 const source = compile('frontend/features/library/native-logo-position.ts');
 const bridgeSource = compile('frontend/features/library/steam-bridge.ts');
-const nativeBundle = 'C:/Program Files (x86)/Steam/steamui/chunk~2dcc5aaf7.js';
+const nativeBundle = 'C:/Program Files (x86)/Steam/steamui/sp.js';
 let nativeSaveSource = null;
 let nativeCacheContract = null;
 if (fs.existsSync(nativeBundle)) {
   const installed = fs.readFileSync(nativeBundle, 'utf8');
-  const start = installed.indexOf('async SaveCustomLogoPosition(e,t){');
-  const end = installed.indexOf('ClearCustomLogoPosition(e)', start);
+  const start = installed.search(/async SaveCustomLogoPosition\([^)]*\)\{/);
+  const end = start + installed.slice(start).search(/ClearCustomLogoPosition\([^)]*\)/);
   assert(start >= 0 && end > start, 'Find the installed native logo save contract');
   nativeSaveSource = installed.slice(start, end);
   assert(nativeSaveSource.includes('customImageInfoRtime') && nativeSaveSource.includes('SetCachedDataForApp'),
@@ -37,7 +37,9 @@ if (fs.existsSync(nativeBundle)) {
   assert(ts.isIdentifier(owner), 'The native cache owner has an explicit module binding');
   const key = call.arguments[1];
   assert(ts.isIdentifier(key) || ts.isStringLiteral(key), 'The native cache namespace is an explicit binding or literal');
-  nativeCacheContract = { owner: owner.text, path, namespace: ts.isIdentifier(key) ? key.text : null };
+  nativeCacheContract = { owner: owner.text, path, namespace: ts.isIdentifier(key) ? key.text : null,
+    cacheVersion: ts.isIdentifier(call.arguments[2]) ? call.arguments[2].text : null,
+    payloadVersion: nativeSaveSource.match(/nVersion:([$\w]+)/)?.[1] };
 }
 
 let checks = 0;
@@ -57,10 +59,13 @@ function harness({ runtime = false, missingDetails = false, missingApps = false,
     for (const key of nativeCacheContract.path) cache = cache[key] = {};
     cache.SetCachedDataForApp = (...args) => { cacheWrites.push(args); };
     if (nativeCacheContract.namespace) nativeBindings[nativeCacheContract.namespace] = 'customimage';
+    if (nativeCacheContract.cacheVersion) nativeBindings[nativeCacheContract.cacheVersion] = 1;
+    if (nativeCacheContract.payloadVersion && !/^\d+$/.test(nativeCacheContract.payloadVersion)) nativeBindings[nativeCacheContract.payloadVersion] = 1;
   }
   const installedNativeSave = nativeSaveSource && new Function(...Object.keys(nativeBindings),
     `return ({${nativeSaveSource}}).SaveCustomLogoPosition;`)(...Object.values(nativeBindings));
-  const details = { GetAppData(id) { check(id, ID, 'Native cache belongs only to the shortcut'); return data; },
+  const details = { GetCustomLogoPosition() { return data.customImageInfo?.logoPosition; },
+    GetAppData(id) { check(id, wrongId ?? ID, 'Native cache belongs only to the exact native shortcut representation'); return data; },
     SaveCustomLogoPosition(currentOverview, selectedPosition) {
       check(this, details, 'Native store keeps its receiver');
       nativeCalls.push({ overview: currentOverview, position: selectedPosition });
@@ -72,7 +77,7 @@ function harness({ runtime = false, missingDetails = false, missingApps = false,
         cacheWrites.push([currentOverview.appid, 'customimage', 1, data.customImageInfo]);
       });
     } };
-  const apps = { GetAppOverviewByAppID(id) { check(this, apps, 'App store keeps its receiver'); check(id, ID, 'Look up only the exact unsigned shortcut'); return overview; } };
+  const apps = { GetCustomLogoImageURLs() { return []; }, GetAppOverviewByAppID(id) { check(this, apps, 'App store keeps its receiver'); check(id, ID, 'Look up only the exact unsigned shortcut'); return overview; } };
   const window = { closed: false, SteamClient };
   const document = { defaultView: window }; window.document = document;
   if (!runtime && !missingDetails) window.appDetailsStore = details;
@@ -80,10 +85,16 @@ function harness({ runtime = false, missingDetails = false, missingApps = false,
   const bridgeContext = vm.createContext({ exports: {}, setTimeout: forceTimeout ? fn => setTimeout(fn, 0) : setTimeout, clearTimeout });
   vm.runInContext(bridgeSource, bridgeContext);
   const dependencies = {
+    '../shortcuts/host': { shortcutRuntimeHost: () => ({ getMainWindowDoc: () => document }) },
     './native-asset-write': assetDeadlineRuntime({ setTimeout: forceTimeout ? fn => setTimeout(fn, 0) : setTimeout }),
     './steam-bridge': bridgeContext.exports,
     '../../steam/modules/SteamWebpackRuntime': { steamWebpackRuntime: {
       captureRuntime(doc) { check(doc, document, 'Resolve only the calling document'); probes.push('capture'); },
+      getRuntimeIdentity: () => window,
+      getModuleFactoryCount: () => 0,
+      getModuleFactories: () => [],
+      getAllModules() { probes.push('loaded'); return [{ id: 99101, exports: { renamed: missingDetails ? null : details } },
+        { id: 99102, exports: { renamedAgain: missingApps ? null : apps } }]; },
       getRequire(doc) {
         check(doc, document, 'Require belongs to the calling document');
         return id => {
@@ -98,6 +109,9 @@ function harness({ runtime = false, missingDetails = false, missingApps = false,
   const context = vm.createContext({ exports: {}, window, require: name => {
     assert(name in dependencies, `Unexpected dependency ${name}`); return dependencies[name];
   } });
+  const storesContext = vm.createContext({ exports: {}, window, require: name => dependencies[name] });
+  vm.runInContext(compile('frontend/features/library/native-artwork-stores.ts'), storesContext);
+  dependencies['./native-artwork-stores'] = storesContext.exports;
   vm.runInContext(source, context);
   return { save: context.exports.saveNativeShortcutLogoPosition, nativeCalls, rawCalls, cacheWrites, data, overview, window, probes, details };
 }
@@ -115,7 +129,7 @@ function harness({ runtime = false, missingDetails = false, missingApps = false,
 {
   const h = harness({ runtime: true });
   check(await h.save(ID, position, () => true), true, 'Resolve the native modules for the calling realm');
-  assert.deepEqual(h.probes, ['capture', 78057, 1776]); checks++;
+  assert.deepEqual(h.probes, ['capture', 'loaded']); checks++;
 }
 for (const missing of [{ missingDetails: true }, { missingApps: true }, { missingDetails: true, missingApps: true }]) {
   const h = harness(missing);
@@ -130,10 +144,15 @@ for (const id of [0, 123, 2147483647, -994967295, 4294967296, NaN, ID + 0.5]) {
   check(await h.save(id, position, () => true), false, 'Reject public, signed or invalid IDs');
   check(h.nativeCalls.length + h.rawCalls.length + h.probes.length, 0, 'Invalid targets never resolve stores or save');
 }
-for (const wrongId of [123, ID + 1, ID - 4294967296]) {
+for (const wrongId of [123, ID + 1]) {
   const h = harness({ wrongId });
   check(await h.save(ID, position, () => true), false, 'Reject mismatched overviews');
   check(h.nativeCalls.length + h.rawCalls.length, 0, 'Do not fall through to raw save for a mismatched overview');
+}
+{
+  const h = harness({ wrongId: ID - 4294967296 });
+  check(await h.save(ID, position, () => true), true, 'The signed native representation still identifies the exact same shortcut');
+  check(h.nativeCalls.length, 1, 'A signed native overview uses the same native save path');
 }
 {
   const h = harness();

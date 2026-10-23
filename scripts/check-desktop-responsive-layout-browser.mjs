@@ -88,7 +88,7 @@ const oracle = html(jsx(nativeExports.b, { overview: { appid: 1790600, display_n
   details: {}, expand: true, collapsible: false, suppressTransition: true }));
 assert(oracle.includes(classes.info.AssociationList) && oracle.includes(classes.asset.PortraitImage), 'Oracle uses the installed native association and portrait renderers');
 const sources = Object.fromEntries(Object.entries({
-  'info-panel': 'frontend/features/library/info-panel.ts', info: 'frontend/features/library/styles/info.ts',
+  'info-panel': process.env.INFO_PANEL_SOURCE || 'frontend/features/library/info-panel.ts', info: 'frontend/features/library/styles/info.ts',
   inject: 'frontend/features/library/styles/inject.ts', layout: 'frontend/features/library/layout.ts',
   'native-dom': 'frontend/steam/native-dom.ts', text: 'frontend/core/text.ts', dom: 'frontend/core/dom.ts',
 }).map(([name, file]) => [name, ts.transpileModule(fs.readFileSync(file, 'utf8'), {
@@ -244,6 +244,20 @@ try {
           `Unresolved-class fallback follows its ${paneWidth}px pane at an unchanged window size`);
         check(grid.scrollWidth <= grid.clientWidth + 1, `Fallback columns do not overflow the ${paneWidth}px pane`);
       }
+      const coldGrid = fallback.querySelector('.gdl-game-info-grid'), coldImage = fallback.querySelector('img');
+      nativeLayout = true; host.style.width = '1400px';
+      host.classList.remove('NarrowWindow', 'NarrowRightPanel', 'UltraNarrowRightPanel');
+      check(info.ensureNativeInfoPanel(document, model) === fallback,
+        'Late native classes upgrade the cold panel without replacing its section');
+      await frames(); await frames();
+      check(fallback.dataset.gdlNativeLayout === '1' && fallback.dataset.expanded === '1',
+        'Unchanged metadata still adopts newly ready native classes and preserves the open state');
+      check(fallback.querySelector('.gdl-game-info-grid') === coldGrid && fallback.querySelector('img') === coldImage,
+        'Class promotion preserves the live grid and decoded portrait');
+      compare('late native Info module recovery', [classes.info.InnerContainer, classes.info.Portrait,
+        classes.info.Description, classes.info.Stats, classes.info.FeaturesList]);
+      near(fallback.offsetHeight, fallback.firstElementChild.scrollHeight,
+        'Late class promotion recomputes the expanded height in logical pixels');
       info.removeNativeInfoPanel(document);
       return { assertions: results.length, cases: states.length * 3, dpr };
     }, { sources, classes, model, oracle, dpr });

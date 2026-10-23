@@ -24,6 +24,15 @@ function M.stem(value)
     return M.basename(value):gsub("%.[^%.]+$", "")
 end
 
+-- Executable identifiers often concatenate words and installment tokens. Keep
+-- this separate from paths/raw names: identity checks must see the same words
+-- as discovery queries without changing which executable Steam launches.
+function M.split_identifier(value)
+    return tostring(value or ""):gsub("(%u)(%u%l)", "%1 %2")
+        :gsub("(%l)(%u)", "%1 %2")
+        :gsub("(%a)(%d)", "%1 %2"):gsub("(%d)(%a)", "%1 %2")
+end
+
 function M.game_exe_hint(value)
     local stem = M.basename(value)
     local lower = stem:lower()
@@ -109,7 +118,7 @@ local ROMAN_NUMERALS = {
 }
 
 function M.extract_sequel_number(value)
-    local norm = " " .. M.normalize(value) .. " "
+    local norm = " " .. M.normalize(M.split_identifier(value)) .. " "
     -- Look for explicit indicators like part/chapter/episode or roman/arabic numerals
     local part_num = norm:match("%s+part%s+(%d+)%s+")
         or norm:match("%s+chapter%s+(%d+)%s+")
@@ -142,7 +151,7 @@ local QUALIFIER_PATTERNS = {
 }
 
 function M.extract_qualifiers(value)
-    local norm = " " .. M.normalize(value) .. " "
+    local norm = " " .. M.normalize(M.split_identifier(value)) .. " "
     local res = { is_remake = false, is_remaster = false, edition = nil }
     for token, props in pairs(QUALIFIER_PATTERNS) do
         if norm:match("%s+" .. token .. "%s+") then
@@ -163,7 +172,7 @@ function M.parse_title_identity(value)
     local sequel = M.extract_sequel_number(raw)
     local quals = M.extract_qualifiers(raw)
     local words = {}
-    for token in M.normalize(cleaned):gmatch("%S+") do
+    for token in M.normalize(M.split_identifier(cleaned)):gmatch("%S+") do
         local number = tonumber(token)
         if not ROMAN_NUMERALS[token] and not QUALIFIER_PATTERNS[token]
             and not (number and (number == year or (number >= 1 and number <= 25))) then

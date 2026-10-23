@@ -10,6 +10,12 @@ Once linked, an external game no longer feels like an empty shortcut: it receive
 
 > NativeGameLink changes the local presentation of linked shortcuts. It does not grant Steam ownership, licenses, inventory items, Steam Cloud storage, or official profile achievements.
 
+## v5.0.0
+
+This release improves linking and recovery, brings the desktop layout closer to Steam's native behavior, organizes per-game Properties, and shares local card and badge settings with Big Picture.
+
+Read the [release notes](RELEASE_NOTES.md), [notas de lanzamiento en español](RELEASE_NOTES_ES.md), and [weekly fixes inventory](WEEKLY_FIXES.md) for the complete changes.
+
 ---
 
 ## 🎮 A Native-Style Steam Library Experience
@@ -22,9 +28,9 @@ NativeGameLink reconstructs the useful surfaces normally missing from a non-Stea
 - **Activity and news feed** combining Steam partner events, announcements, major updates, patch notes, hotfixes, offers, events, DLC releases, and community posts in chronological order.
 - **Status composer** with emoticons and a shortcut-specific activity history.
 - **Friends who play** with Steam personas, avatars, recent playtime, reviews, screenshots, videos, and related activity when Steam exposes the information.
-- **Community Content** with screenshots, artwork, and guides loaded progressively for faster initial rendering.
+- **Community Content** with screenshots, artwork, videos, and guides loaded progressively for faster initial rendering.
 - **Achievement sidebar and modal** with unlocked/locked groups, progress, descriptions, dates, global percentages, and native-style artwork.
-- **Trading-card presentation** using official Steam Community/Market artwork, badge information, card collection layout, centered 3D interaction, cursor lighting, and subtle foil reflection when foil metadata is available.
+- **Trading-card presentation** using official Steam Community/Market artwork, badge information, normal/foil collections, centered card enlargement, bounded 3D tilt, and directional lighting.
 - **Optional DLC and Workshop sections** validated against the linked Steam AppID.
 - **Steam Notes and media areas remain available** alongside the injected content.
 
@@ -116,6 +122,17 @@ After confirmation, NativeGameLink:
 4. Preserves the original launch target.
 5. Finishes the identity and artwork work safely in the background even if the Properties window is closed.
 
+### Per-game Properties
+
+The shortcut's **Properties** window groups NativeGameLink settings into four expandable sections:
+
+- **Linked game:** the current association, Steam AppID, suggestions, linking, and unlinking.
+- **Launch and playtime:** local playtime tracking and the option to skip a supported launcher.
+- **Achievements:** simulated progress, individual selection, and the local progress file.
+- **Trading cards and badges:** the local normal/foil collection, selected cards, and game badge.
+
+The card and badge section is hidden when the complete catalog confirms that the game has neither. A temporary loading failure offers a retry. Card and badge choices apply locally to that linked shortcut and are shared with the desktop Library and Big Picture; they do not add items or XP to your Steam account.
+
 ---
 
 ## 🖼️ Automatic Artwork and Correct Native Placement
@@ -166,7 +183,7 @@ You can configure the achievement source in three ways:
 
 1. **Automatic discovery by AppID (Default):** Automatically searches `%APPDATA%\SteamAchievements\<AppID>\` and configured local folders.
 2. **Global folder:** Open NativeGameLink settings and select your root achievements folder.
-3. **Per-game custom path:** Right-click the shortcut → **Properties** → **Linked Game** and select a specific `achievements.json` file or its parent directory.
+3. **Per-game custom path:** Right-click the shortcut → **Properties** → **Achievements** → **Achievement progress file** and enter a specific `achievements.json` file or its parent directory.
 
 ## 🎖️ Official Steam Achievement Management Tools
 
@@ -215,7 +232,7 @@ When the Steam release exposes the corresponding data, NativeGameLink adds optio
 
 - Official trading-card artwork sourced from Steam Community and the Community Market.
 - Badge artwork, experience presentation, collected/remaining counts, and a responsive card grid.
-- Interactive card enlargement with bounded 3D tilt, directional brightness, cursor glow, and foil-only holographic reflection.
+- Interactive card enlargement with bounded 3D tilt, directional brightness, and a paper-texture lighting effect that follows the cursor.
 - Validated DLC covers and Store links.
 - Workshop preview and navigation when the title supports Steam Workshop.
 
@@ -234,7 +251,7 @@ Plugin-specific windows, detection messages, settings, and linking results use N
 ## 📥 Installation
 
 1. Install [Millennium](https://steambrew.app/) for Steam.
-2. Download the latest `NativeGameLink-for-Steam.zip` release.
+2. Download `NativeGameLinkForSteam-v5.0.0-CLEAN-INSTALL.zip` from the [v5.0.0 release](https://github.com/senkumil/NativeGameLink-for-Steam/releases/tag/v5.0.0). Use this package to install the plugin; `NativeGameLinkForSteam-v5.0.0-SOURCE.zip` is for development.
 3. Extract the archive. Copy the included `NativeGameLinkForSteam` folder into the `millennium\plugins` directory of **the Steam installation you actually use**. Do not assume Steam is installed on `C:`.
 
    - The destination is always relative to your real Steam folder:
@@ -251,26 +268,25 @@ Plugin-specific windows, detection messages, settings, and linking results use N
 
 1. In Steam, choose **Games → Add a Non-Steam Game to My Library...** and add the **main game executable** (avoid selecting launchers or intermediary executables to ensure accurate playtime tracking).
 2. Open the new shortcut in your Library.
-3. Review the automatic detection modal and choose **Link game**.
-4. Wait for the success report confirming the title, icon, and artwork that were applied.
+3. Review the suggested Steam releases and full game path, select the correct candidate, and choose **Link game**. If the match is uncertain, review the alternatives or enter the AppID manually.
+4. Wait for the link confirmation. Available artwork may continue loading in the background.
 5. The linked Library page will populate with the available Steam information and optional sections.
 
 If automatic detection is uncertain or unavailable:
 
 1. Right-click the shortcut and open **Properties**.
-2. Under **Linked Game**, review the visual candidates or paste a Steam AppID/Store URL.
+2. Expand **Linked game**, review the suggested candidates, or paste a Steam AppID/Store URL. Choose **Retry search** if the search could not finish.
 3. Choose the correct release and press **Save**.
 
 ---
 
 ## Big Picture development
 
-The [Big Picture implementation and acceptance matrix (Spanish)](docs/BIG_PICTURE_BASES.md)
-documents identity, isolation, navigation, capabilities and tests. Run
-`npm run check:big-picture` to verify the integration. All four tabs and their
-flows are implemented; visual 1:1 comparison and physical controller validation
-inside Steam remain pending. See the
-[integration and resource verification report (Spanish)](docs/VERIFICACION_2026-10-18.md).
+Use the source package and run `npm install`, then `npm run check:big-picture`.
+The automated checks cover document and shortcut isolation, lifecycle cleanup,
+navigation and focus ownership, modals, achievements, and trading-card flows.
+Browser and runtime fixtures verify these contracts; they do not establish
+pixel-perfect visual parity or physical controller/Steam Deck validation inside Steam.
 
 ---
 

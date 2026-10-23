@@ -28,7 +28,8 @@ function harness() {
   normalizedShortcutAppId: value => Number(value) >= 2147483648 ? Number(value) : null,
   findMappingForShortcut: () => '12345', cancelPendingLinkJobs() {}, dismissShortcut() {}, undismissShortcut() {},
   removeShortcutMappingsChecked: async () => { state.removed++; return true; },
-  clearShortcutManifest() {}, clearShortcutEdition() {}, supersedeArtworkApplications: async () => {},
+  clearShortcutManifest() {}, clearActiveTransaction() {}, clearShortcutEdition() {}, supersedeArtworkApplications: async () => {},
+  getPendingShortcutIdentityWrites: () => [], getPendingNativeAssetWrites: () => [],
   purgeShortcutStorage() {}, getOriginalShortcutTitle: () => '', forgetOriginalShortcutTitle() {}, forgetShortcutSteamAppId() {},
   clearArtworkExceptIconBackend: async () => {}, clearArtworkBackend: async () => {}, shortcutRuntimeHost: () => ({}),
   runShortcutMutations: (_keys, work) => work(), shortcutMutationKeys: value => value,
@@ -86,7 +87,7 @@ function harness() {
  h.state.restore = () => new Promise(resolve => { restoreAck = resolve; });
  let finished = false;
  const operation = h.unlink({ doc: h.doc, shortcutAppId: id, title: 'Synthetic game' }).then(result => { finished = true; return result; });
- for (let count = 0; !restoreAck && count < 10; count++) await Promise.resolve();
+ for (let count = 0; !restoreAck && count < 40; count++) await Promise.resolve();
  check(h.state.removed === 1 && restoreAck && !finished, 'Unlink waits for file restoration after removing the logical mapping');
  check(h.state.requests[0].operation === 'restore' && h.state.requests[0].exe_path === executable && h.state.requests[0].start_dir === directory,
   'Unlink restores using the same owner-document details even when the overview has no launch fields');

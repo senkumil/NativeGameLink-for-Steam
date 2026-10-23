@@ -1,0 +1,280 @@
+{
+  "captured_at": "2026-10-21T00:43:08.950Z",
+  "title": "Dead Space",
+  "pe_product": "Dead Space ™",
+  "language": "latam",
+  "search": {
+    "spaced_trademark": {
+      "source": "https://store.steampowered.com/api/storesearch/?term=Dead%20Space%20%E2%84%A2&l=latam&cc=US",
+      "payload": {
+        "total": 0,
+        "items": []
+      }
+    },
+    "canonical": {
+      "source": "https://store.steampowered.com/api/storesearch/?term=Dead%20Space&l=latam&cc=US",
+      "payload": {
+        "total": 10,
+        "items": [
+          {
+            "type": "app",
+            "name": "Dead Space",
+            "id": 1693980,
+            "price": {
+              "currency": "USD",
+              "initial": 5999,
+              "final": 5999
+            },
+            "tiny_image": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1693980/capsule_231x87.jpg?t=1777396576",
+            "metascore": "87",
+            "platforms": {
+              "windows": true,
+              "mac": false,
+              "linux": false
+            },
+            "streamingvideo": false,
+            "controller_support": "full"
+          },
+          {
+            "type": "app",
+            "name": "Dead Space™ 3",
+            "id": 1238060,
+            "price": {
+              "currency": "USD",
+              "initial": 1999,
+              "final": 1999
+            },
+            "tiny_image": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1238060/capsule_231x87.jpg?t=1779987583",
+            "metascore": "78",
+            "platforms": {
+              "windows": true,
+              "mac": false,
+              "linux": false
+            },
+            "streamingvideo": false
+          },
+          {
+            "type": "app",
+            "name": "Dead Space™ 2",
+            "id": 47780,
+            "price": {
+              "currency": "USD",
+              "initial": 1999,
+              "final": 1999
+            },
+            "tiny_image": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/47780/capsule_231x87.jpg?t=1782255426",
+            "metascore": "87",
+            "platforms": {
+              "windows": true,
+              "mac": false,
+              "linux": false
+            },
+            "streamingvideo": false
+          },
+          {
+            "type": "app",
+            "name": "Dead Space (2008)",
+            "id": 17470,
+            "price": {
+              "currency": "USD",
+              "initial": 1999,
+              "final": 1999
+            },
+            "tiny_image": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/17470/capsule_231x87.jpg?t=1777495169",
+            "metascore": "87",
+            "platforms": {
+              "windows": true,
+              "mac": false,
+              "linux": false
+            },
+            "streamingvideo": false,
+            "controller_support": "full"
+          },
+          {
+            "type": "app",
+            "name": "Dead Space™ 3 Awakened",
+            "id": 1238070,
+            "price": {
+              "currency": "USD",
+              "initial": 999,
+              "final": 999
+            },
+            "tiny_image": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1238070/capsule_231x87.jpg?t=1593440016",
+            "metascore": "",
+            "platforms": {
+              "windows": true,
+              "mac": false,
+              "linux": false
+            },
+            "streamingvideo": false
+          },
+          {
+            "type": "app",
+            "name": "Dead Space™ 3 Pack de Supervivencia de Tau Volantis",
+            "id": 1303193,
+            "price": {
+              "currency": "USD",
+              "initial": 1499,
+              "final": 1499
+            },
+            "tiny_image": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1303193/capsule_231x87.jpg?t=1593018986",
+            "metascore": "",
+            "platforms": {
+              "windows": true,
+              "mac": false,
+              "linux": false
+            },
+            "streamingvideo": false
+          },
+          {
+            "type": "app",
+            "name": "Dead Space™ 3 Pack de Testigo de la verdad",
+            "id": 1303191,
+            "price": {
+              "currency": "USD",
+              "initial": 499,
+              "final": 499
+            },
+            "tiny_image": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1303191/capsule_231x87.jpg?t=1593055990",
+            "metascore": "",
+            "platforms": {
+              "windows": true,
+              "mac": false,
+              "linux": false
+            },
+            "streamingvideo": false
+          },
+          {
+            "type": "app",
+            "name": "Dead Space™ 3 Enervador",
+            "id": 1303197,
+            "price": {
+              "currency": "USD",
+              "initial": 199,
+              "final": 199
+            },
+            "tiny_image": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1303197/capsule_231x87.jpg?t=1593019274",
+            "metascore": "",
+            "platforms": {
+              "windows": true,
+              "mac": false,
+              "linux": false
+            },
+            "streamingvideo": false
+          },
+          {
+            "type": "app",
+            "name": "Dead Space™ 3 Acelerador de robot",
+            "id": 1303201,
+            "price": {
+              "currency": "USD",
+              "initial": 499,
+              "final": 499
+            },
+            "tiny_image": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1303201/capsule_231x87.jpg?t=1593019366",
+            "metascore": "",
+            "platforms": {
+              "windows": true,
+              "mac": false,
+              "linux": false
+            },
+            "streamingvideo": false
+          },
+          {
+            "type": "app",
+            "name": "Dead Space™ 3 Pack de Merodeador",
+            "id": 1303195,
+            "price": {
+              "currency": "USD",
+              "initial": 499,
+              "final": 499
+            },
+            "tiny_image": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1303195/capsule_231x87.jpg?t=1593019006",
+            "metascore": "",
+            "platforms": {
+              "windows": true,
+              "mac": false,
+              "linux": false
+            },
+            "streamingvideo": false
+          }
+        ]
+      }
+    }
+  },
+  "details": {
+    "17470": {
+      "source": "https://store.steampowered.com/api/appdetails?appids=17470&l=latam",
+      "success": true,
+      "data": {
+        "steam_appid": 17470,
+        "name": "Dead Space (2008)",
+        "type": "game",
+        "header_image": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/17470/header.jpg?t=1777495169"
+      }
+    },
+    "1303197": {
+      "source": "https://store.steampowered.com/api/appdetails?appids=1303197&l=latam",
+      "success": true,
+      "data": {
+        "steam_appid": 1303197,
+        "name": "Dead Space™ 3 Enervador",
+        "type": "dlc",
+        "header_image": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1303197/header.jpg?t=1593019274"
+      }
+    },
+    "1693980": {
+      "source": "https://store.steampowered.com/api/appdetails?appids=1693980&l=latam",
+      "success": true,
+      "data": {
+        "steam_appid": 1693980,
+        "name": "Dead Space",
+        "type": "game",
+        "header_image": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1693980/header.jpg?t=1777396576"
+      }
+    }
+  },
+  "appinfo": {
+    "17470": {
+      "source": "https://api.steamcmd.net/v1/info/17470",
+      "common": {
+        "name": "Dead Space (2008)",
+        "type": "game"
+      },
+      "config": {
+        "launch": {
+          "0": {
+            "executable": "Dead Space.exe"
+          },
+          "1": {
+            "description": "View Support Information",
+            "executable": "Support\\EA Help\\Electronic_Arts_Technical_Support.htm"
+          }
+        }
+      }
+    },
+    "1303197": {
+      "source": "https://api.steamcmd.net/v1/info/1303197",
+      "common": {
+        "name": "Dead Space™ 3 Enervator",
+        "type": "DLC"
+      },
+      "config": {}
+    },
+    "1693980": {
+      "source": "https://api.steamcmd.net/v1/info/1693980",
+      "common": {
+        "name": "Dead Space",
+        "type": "Game"
+      },
+      "config": {
+        "launch": {
+          "0": {
+            "executable": "Dead Space.exe",
+            "type": "default"
+          }
+        }
+      }
+    }
+  }
+}

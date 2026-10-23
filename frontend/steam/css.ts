@@ -18,6 +18,9 @@ const LIBRARY_SIDEBAR_CLASSES_FALLBACK: CssClasses = {
 export const FEED_CLASSES_FALLBACK: CssClasses = {
 	ActivityFeedContainer: '_3yTl3RiWfo-Itg-xp967wP',
 	FetchMoreContainer: '_39ZurKJQex6v69aXzvc_nj',
+	EndofFeed: '_3LIdsWmyIgctv5PqN0YTfM',
+	EndText: '_3jmKNZy10zi_ZKGqluFltQ',
+	EndRule: '_1AZdyRAiMfrbi_khz7C9rB',
 	ViewLastNews: '_1EC1xjjUGqI7fqX6PVzJA3',
 	AddToFeed: '_2bqRppbRWGNAZV5lfubW7-',
 	PostTextEntry: 'YFAtL5H6txGXk5T_IhpUF',

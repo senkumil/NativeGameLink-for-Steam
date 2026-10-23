@@ -16,7 +16,9 @@ export const fetchCommunityActivityBackend = callable<[{ steam_app_id: string; s
 
 export const fetchCommunityContentBackend = callable<[{ steam_app_id: string; language: string }], string>('fetch_community_content');
 
-export const fetchCommunityItemsCatalogBackend = callable<[{ steam_app_id: string; language: string }], string>('fetch_community_items_catalog');
+export const fetchCommunityItemsCatalogBackend = callable<[{ steam_app_id: string; language: string; catalog_part?: 'cards' | 'badges' | 'all'; catalog_start?: number }], string>('fetch_community_items_catalog');
+export const getGameCommunityItemOptionsBackend = callable<[{ request_json: string }], string>('get_game_community_item_options');
+export const setGameCommunityItemOptionsBackend = callable<[{ request_json: string }], string>('set_game_community_item_options');
 
 export const feLogBackend         = callable<[{ msg: string }], string>('fe_log');
 

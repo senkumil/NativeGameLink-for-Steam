@@ -29,7 +29,7 @@ const transpile = source => ts.transpileModule(source, { compilerOptions: {
   module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, jsx: ts.JsxEmit.React,
 } }).outputText;
 const sources = Object.fromEntries([
-  ['class-module-cache', 'frontend/steam/class-module-cache.ts'],
+  ['pure-class-factory', 'frontend/steam/gamepad/components/pure-class-factory.ts'], ['class-module-cache', 'frontend/steam/class-module-cache.ts'],
   ['css', 'frontend/steam/css.ts'],
   ['SteamWebpackRuntime', 'frontend/steam/modules/SteamWebpackRuntime.ts'],
   ['achievement-cache-repair', 'frontend/steam/achievement-cache-repair.ts'],

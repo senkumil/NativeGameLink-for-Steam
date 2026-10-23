@@ -212,11 +212,11 @@ function AchievementsSection(props: NativeDetailsProps & { classes: NativeAppDet
 }
 
 function TradingCardsSection(props: NativeDetailsProps & { classes: NativeAppDetailsClasses }): React.ReactElement | null {
-	return <NativeBigPictureTradingCards document={props.document} steamAppId={props.shortcut.steamAppId}
+	return <NativeBigPictureTradingCards document={props.document} steamAppId={props.shortcut.steamAppId} shortcutAppId={String(props.shortcut.id >>> 0)}
 		catalog={props.data.cards} hydrating={props.hydrating} classes={props.classes} Section={Section} Strip={NativeStrip}
 		isCurrent={() => isBigPictureActionCurrent(props)}
 		onOpenCard={card => showNativeImageModal(props, card.title, card.artwork || card.image, props.classes, true)}
-		onOpenBadge={() => openSteamNavigationUrl(props.document, `https://steamcommunity.com/my/gamecards/${props.shortcut.steamAppId}`)} />;
+		onOpenBadge={foil => openSteamNavigationUrl(props.document, `https://steamcommunity.com/my/gamecards/${props.shortcut.steamAppId}${foil ? '?border=1' : ''}`)} />;
 }
 
 function communityItems(data: BigPictureDetailData): CommunityContentItem[] {

@@ -1,7 +1,8 @@
 import type { NewsItem } from '../../../domain/types';
 import { backendLog } from '../../../api/backend';
 import { escapeHtml } from '../../../core/text';
-import { EVENT_CLASSES, FEED_CLASSES, HEADING_RESET_CLASSES } from '../../../steam/css';
+import { EVENT_CLASSES, HEADING_RESET_CLASSES } from '../../../steam/css';
+import { renderActivityFooter } from '../activity-footer';
 import { gdlText, loc, steamIntlLocale } from '../../../steam/localization';
 import { eventTypeLabel, formatNewsDate, isPatchNoteItem, newsExcerpt } from '../news';
 import {
@@ -628,11 +629,7 @@ export function renderUnifiedActivityFeed(
 	if (endReached && visibleNews < sortedNews.length) {
 		activityEndReached.delete(steamAppId);
 	}
-	if (activityEndReached.get(steamAppId) === true) {
-		feedHtml += `<div class="gdl-activity-end"><span>${escapeHtml(gdlText('activity_end', 'End of activity'))}</span></div>`;
-	} else {
-		feedHtml += `<div class="gdl-load-more-row"><button type="button" class="DialogButton _DialogLayout Secondary ${FEED_CLASSES().FetchMoreContainer} gdl-load-more-activity">${escapeHtml(gdlText('fetch_more', loc('AppActivity_FetchMore', 'Load more activity')))}</button></div>`;
-	}
+	feedHtml += renderActivityFooter(activityEndReached.get(steamAppId) !== true);
 	return feedHtml;
 }
 

@@ -18,6 +18,7 @@ import { disposeActivityFeedInteractions } from './social/feed';
 import { disposeStatusPostBox } from './social/status';
 import { disposeCommunitySection } from './community-view';
 import { disposeTradingCardUI } from './trading-cards';
+import { renewMountedLinkedSidebar } from './mounted-sidebar';
 import { renderLinkedGamePage } from './renderer';
 import { disposeControllerSidebarWatcher } from './controller';
 import { disposeLinkedSidebarOrder } from './sidebar-order';
@@ -89,14 +90,10 @@ function renderLinkedPage(
 	communityItems: CommunityContentItem[] | undefined, generation: number,
 ): boolean {
 	const rendered = renderLinkedGamePage(doc, notice, data, steamAppId, newsItems, friendResult, communityItems, {
-		shortcutAppId: currentInjectedShortcutAppId,
-		generation,
+		shortcutAppId: currentInjectedShortcutAppId, generation,
 		isCurrent: () => isCurrentRender(doc, steamAppId, generation),
 	});
-	if (rendered) {
-		completeLinkedShortcutLoading(doc);
-		linkedRenderRetryState.delete(doc);
-	}
+	if (rendered) { completeLinkedShortcutLoading(doc); linkedRenderRetryState.delete(doc); }
 	return rendered;
 }
 /** Remove GDL desktop-Library UI and restore Steam's original shortcut notice. */
@@ -372,8 +369,11 @@ async function injectLibraryDataAfterNativePaint(doc: Document): Promise<void> {
 		if (numId >= 2147483648) void injectPlaytimeFallbackStats(doc, numId, gameTitle, steamAppId, () => isCurrentRender(doc, steamAppId, generation));
 		const language = String(steamLanguageSync() || 'english').toLowerCase();
 		const cachedData = getCachedGameData(steamAppId, language)?.data || null;
-		if (cachedData) hydrateLinkedRouteResources(doc, steamAppId, resolvedShortcutAppId, language, () => isCurrentRender(doc, steamAppId, generation), cachedData);
-		return;
+		const isCurrent = () => isCurrentRender(doc, steamAppId, generation);
+		if (renewMountedLinkedSidebar(doc, notice, cachedData, steamAppId, { shortcutAppId: resolvedShortcutAppId, isCurrent, generation })) {
+			if (cachedData) hydrateLinkedRouteResources(doc, steamAppId, resolvedShortcutAppId, language, isCurrent, cachedData);
+			return;
+		}
 	}
 
 	if (existing || (currentInjectedDocument === doc && ((currentInjectedAppId && currentInjectedAppId !== steamAppId) || shortcutIdentityChanged))) {

@@ -1,27 +1,49 @@
 import { backendLog } from '../../api/backend';
 import { escapeHtml } from '../../core/text';
 import { DisposableRegistry } from '../../core/disposables';
-import { ACH_CLASSES, resolveClassModule } from '../../steam/css';
-import { gdlText, loc } from '../../steam/localization';
-import { getOfficialCommunityItems, normalizeCommunityAssetUrl } from './community-items';
+import { communityCardId, getCachedCommunityItemOptions, getCommunityItemOptions,
+	subscribeCommunityItemOptions, type CommunityItemOptions } from '../../core/community-item-options';
+import { resolveClassModule } from '../../steam/css';
+import { gdlText, loc, steamLanguageSync } from '../../steam/localization';
+import { getImmediateOfficialCommunityItems, getOfficialCommunityItems, normalizeCommunityAssetUrl,
+	subscribeOfficialCommunityItems } from './community-items';
 import { GDL_INJECTED } from './constants';
+import { disposeTradingCardHelp, setupTradingCardsHelpTooltip } from './trading-card-help';
 import type { NativeLibraryLayout } from './layout';
 import { buildNativeSidebarSection } from './layout';
 import { clearTradingCardPreloads, getTradingCardPreload, preloadTradingCardImage } from './trading-card-preload';
 import { disposeNativeCardPreview, tryOpenNativeCardPreview } from './native-card-preview';
-import { getLinkedSidebarOrder } from './sidebar-order';
+import { ensureLinkedSidebarOrder, getLinkedSidebarOrder, type LinkedSidebarOrder, type LinkedSidebarOwner } from './sidebar-order';
 import { linkedCardPresentation } from './linked-card-presentation';
+import type { SteamCommunityItemsCatalog } from '../../domain/types';
 
 const tradingCardPreviewCleanup = new WeakMap<Document, () => void>();
 const responsiveGridCleanups = new Map<HTMLElement, () => void>();
 const tiltLifecycles = new WeakMap<Document, Map<HTMLElement, DisposableRegistry>>();
 const catalogSignatures = new WeakMap<HTMLElement, string>();
-const helpCleanups = new WeakMap<Document, Map<HTMLElement, () => void>>();
+interface TradingCardBinding {
+	doc: Document;
+	layout: NativeLibraryLayout;
+	options: TradingCardRenderOptions;
+	order: LinkedSidebarOrder;
+	catalog: SteamCommunityItemsCatalog | null;
+	selection: CommunityItemOptions | null;
+	selectionLoading: boolean;
+	selectionFailed: boolean;
+	language: string;
+	section: HTMLElement | null;
+	cleanup: () => void;
+}
+const bindings = new WeakMap<Document, TradingCardBinding>();
 
-function disposeTradingCardHelp(doc: Document, section?: HTMLElement): void {
-	for (const [button, cleanup] of Array.from(helpCleanups.get(doc) || [])) {
-		if (!section || section.contains(button)) cleanup();
-	}
+function cardLanguage(): string {
+	return String(typeof steamLanguageSync === 'function' && steamLanguageSync() || 'english').toLowerCase();
+}
+
+function currentCardBinding(binding: TradingCardBinding): boolean {
+	const { doc } = binding, view = doc.defaultView;
+	return bindings.get(doc) === binding && binding.options.isCurrent() && binding.order.isCurrent()
+		&& Boolean(view && !view.closed && view.document === doc);
 }
 
 function removeTradingCardSection(section: HTMLElement): void {
@@ -33,6 +55,10 @@ function removeTradingCardSection(section: HTMLElement): void {
 }
 
 export function disposeTradingCardUI(doc: Document): void {
+	const binding = bindings.get(doc);
+	bindings.delete(doc);
+	binding?.cleanup();
+	if (binding?.section) removeTradingCardSection(binding.section);
 	disposeTradingCardPreview(doc);
 	disposeResponsiveTradingCardGrids(doc);
 	for (const lifecycle of Array.from(tiltLifecycles.get(doc)?.values() || [])) lifecycle.dispose();
@@ -48,6 +74,8 @@ export function disposeTradingCardPreview(doc: Document): void {
 
 export function resetTradingCardTilts(doc: Document): void {
 	for (const card of Array.from(doc.querySelectorAll<HTMLElement>('.gdl-trading-card.gdl-card-tilt-active'))) {
+		const reset = (card as HTMLElement & { __gdlResetTradingCardTilt?: () => void }).__gdlResetTradingCardTilt;
+		if (reset) { reset(); continue; }
 		card.classList.remove('gdl-card-tilt-active');
 		const surface = card.querySelector<HTMLElement>('.gdl-trading-card-surface');
 		const hitbox = card.querySelector<HTMLElement>('.gdl-trading-card-hitbox');
@@ -271,9 +299,9 @@ export function setupTradingCardTilt(root: HTMLElement): void {
 		lastClientX = event.clientX;
 		lastClientY = event.clientY;
 		if (activeReset) return;
-		const target = event.target instanceof Element
-			? event.target.closest<HTMLElement>('.gdl-trading-card')
-			: null;
+		const element = event.target as HTMLElement | null;
+		const target = element?.ownerDocument === doc && typeof element.closest === 'function'
+			? element.closest<HTMLElement>('.gdl-trading-card') : null;
 		if (target && root.contains(target)) activators.get(target)?.(event.clientX, event.clientY);
 	}, { passive: true });
 
@@ -281,6 +309,15 @@ export function setupTradingCardTilt(root: HTMLElement): void {
 		if (card.dataset.gdlTiltReady === '1') continue;
 		const surface = card.querySelector<HTMLElement>('.gdl-trading-card-surface');
 		if (!surface) continue;
+		const motion = doc.createElement('div');
+		motion.className = 'gdl-trading-card-motion';
+		for (const child of Array.from(surface.children)) motion.appendChild(child);
+		surface.appendChild(motion);
+		const masks = ['w', 'e', 's'].map(edge => {
+			const mask = doc.createElement('div'); mask.className = 'gdl-card-paper-mask'; mask.dataset.edge = edge;
+			const shine = doc.createElement('div'); shine.className = 'gdl-card-paper-shine'; mask.appendChild(shine);
+			motion.appendChild(mask); return mask;
+		});
 		const hitbox = card.ownerDocument.createElement('div');
 		hitbox.className = 'gdl-trading-card-hitbox';
 		hitbox.setAttribute('aria-hidden', 'true');
@@ -290,36 +327,24 @@ export function setupTradingCardTilt(root: HTMLElement): void {
 		let recoveryFrame = 0;
 		let pointerX = .5;
 		let pointerY = .5;
+		let expandedWidth = 1, expandedHeight = 1;
 		let baseRect: DOMRect | null = null;
 		let leaveTimer = 0;
-		let tiltEnabledAt = 0;
 		const view = card.ownerDocument.defaultView;
 
 		const render = (): void => {
 			frame = 0;
 			if (!card.classList.contains('gdl-card-tilt-active')) return;
-			const dx = pointerX - 0.5;
-			const dy = pointerY - 0.5;
-			// Refined physical tilt: natural 22-26 deg max with smooth perspective
-			const rotateY = dx * 26;
-			const rotateX = -dy * 22;
-			const translateX = dx * 8;
-			const translateY = dy * 6;
-			const lightAngle = Math.round(125 + dx * 50 + dy * 35);
-			// Linear specular sheen position shifts smoothly across the card surface
-			const sheenPos = Math.round(50 + (dx * 60 - dy * 40));
-			const sheenAlpha = Math.max(0.10, Math.min(0.35, 0.22 - dy * 0.22)).toFixed(3);
-			const sheenBrightness = Math.max(0.94, Math.min(1.08, 1.0 - dy * 0.14)).toFixed(2);
-			const holoX = Math.round(50 + dx * 70);
-			const holoY = Math.round(50 + dy * 70);
-
-			card.style.setProperty('--gdl-card-angle', `${lightAngle}deg`);
-			card.style.setProperty('--gdl-sheen-pos', `${sheenPos}%`);
-			card.style.setProperty('--gdl-sheen-alpha', sheenAlpha);
-			card.style.setProperty('--gdl-sheen-brightness', sheenBrightness);
-			card.style.setProperty('--gdl-holo-x', `${holoX}%`);
-			card.style.setProperty('--gdl-holo-y', `${holoY}%`);
-			surface.style.transform = `perspective(650px) translate3d(${translateX.toFixed(2)}px,${translateY.toFixed(2)}px,0) rotateX(${rotateX.toFixed(2)}deg) rotateY(${rotateY.toFixed(2)}deg)`;
+			// Steam's Q hook maps offsets through this logistic curve, then maps
+			// rotation into brightness and its three paper-mask light sources.
+			const angle = (value: number) => 90 / (1 + Math.exp(-value)) - 45;
+			const rotateY = angle(pointerX * 2 - 1), rotateX = angle(1 - pointerY * 2);
+			motion.style.transform = `rotateX(${rotateX}deg) rotateY(${rotateY}deg)`;
+			card.style.setProperty('--gdl-native-brightness', String(1 + rotateX / 45));
+			card.style.setProperty('--gdl-paper-left', `${-rotateY * 2}px`);
+			card.style.setProperty('--gdl-paper-top', `${rotateX * 2}px`);
+			[rotateY / 45, -rotateY / 45, rotateX / 45].forEach((opacity, index) =>
+				masks[index].style.setProperty('--gdl-paper-opacity', String(opacity)));
 		};
 
 		const queueRender = (): void => {
@@ -336,9 +361,11 @@ export function setupTradingCardTilt(root: HTMLElement): void {
 			pointerX = .5;
 			pointerY = .5;
 			baseRect = null;
-			tiltEnabledAt = 0;
 			card.classList.remove('gdl-card-tilt-active');
 			for (const property of ['left', 'top', 'width', 'height', 'transform']) surface.style.removeProperty(property);
+			motion.style.removeProperty('transform');
+			for (const property of ['--gdl-native-brightness', '--gdl-paper-left', '--gdl-paper-top']) card.style.removeProperty(property);
+			for (const mask of masks) mask.style.removeProperty('--gdl-paper-opacity');
 			for (const property of ['left', 'top', 'width', 'height']) hitbox.style.removeProperty(property);
 			card.style.removeProperty('--gdl-card-angle');
 			card.style.removeProperty('--gdl-sheen-pos');
@@ -354,10 +381,15 @@ export function setupTradingCardTilt(root: HTMLElement): void {
 				activeContainsPoint = null;
 			}
 		};
+		(card as HTMLElement & { __gdlResetTradingCardTilt?: () => void }).__gdlResetTradingCardTilt = reset;
 		lifecycle.add(() => {
 			reset();
 			if (recoveryFrame) view?.cancelAnimationFrame(recoveryFrame);
 			hitbox.remove();
+			for (const mask of masks) mask.remove();
+			for (const child of Array.from(motion.children)) surface.insertBefore(child, motion);
+			motion.remove();
+			delete (card as HTMLElement & { __gdlResetTradingCardTilt?: () => void }).__gdlResetTradingCardTilt;
 			delete card.dataset.gdlTiltReady;
 		});
 
@@ -367,17 +399,12 @@ export function setupTradingCardTilt(root: HTMLElement): void {
 			if (leaveTimer) view?.clearTimeout(leaveTimer);
 			leaveTimer = 0;
 			if (!card.classList.contains('gdl-card-tilt-active')) return;
-			const now = view?.performance?.now() ?? Date.now();
-			if (now < tiltEnabledAt) {
-				pointerX = .5;
-				pointerY = .5;
-				queueRender();
-				return;
-			}
 			const rect = surface.getBoundingClientRect();
 			if (rect.width <= 0 || rect.height <= 0) return;
-			pointerX = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
-			pointerY = Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height));
+			const target = event.target as Node | null;
+			const imageTarget = target?.ownerDocument === doc && motion.contains(target);
+			pointerX = imageTarget ? event.offsetX / expandedWidth : (event.clientX - rect.left) / rect.width;
+			pointerY = imageTarget ? event.offsetY / expandedHeight : (event.clientY - rect.top) / rect.height;
 			queueRender();
 		};
 
@@ -398,41 +425,35 @@ export function setupTradingCardTilt(root: HTMLElement): void {
 			const logicalWidth = Number.parseFloat(view?.getComputedStyle(card).width || '') || card.offsetWidth || baseRect.width;
 			const scale = logicalWidth > 0 ? baseRect.width / logicalWidth : 1;
 			const logicalHeight = baseRect.height / scale;
-			// The catalogue contains artwork, not account inventory. Steam's
-			// unowned card expands 1.5x; only confirmed owned/maxed cards use 2.5x.
-			const width = logicalWidth * 1.5;
+			const enlargement = card.dataset.owned === 'true' ? 2.5 : 1.5;
+			const width = logicalWidth * enlargement;
 			const height = width * 261 / 224;
-			let left = -(width - logicalWidth) / 2;
-			let top = -(height - logicalHeight) / 2;
+			const left = -(width - logicalWidth) / 2;
+			const top = -(height - logicalHeight) / 2;
+			expandedWidth = width; expandedHeight = height;
 
 			// Native cards stay centered and only shift left when the expanded
 			// right edge would cross the viewport's 30px clearance.
-			const viewportWidth = (view?.innerWidth || card.ownerDocument.documentElement.clientWidth) / scale;
-			const absoluteRight = baseRect.left / scale + logicalWidth / 2 + width / 2;
-			if (absoluteRight > viewportWidth - 30) left -= absoluteRight - (viewportWidth - 30);
+			const viewportWidth = view?.innerWidth || card.ownerDocument.documentElement.clientWidth;
+			const absoluteRight = baseRect.left + baseRect.width / 2 + baseRect.width * enlargement / 2;
+			const shift = absoluteRight > viewportWidth - 30 ? viewportWidth - absoluteRight - 30 : 0;
 
 			surface.style.left = `${left.toFixed(2)}px`;
 			surface.style.top = `${top.toFixed(2)}px`;
 			surface.style.width = `${width.toFixed(2)}px`;
 			surface.style.height = `${height.toFixed(2)}px`;
-			// Perspective plus the upward translation consumes part of the nominal
-			// top margin when the pointer raises the card. Compensate that visual
-			// displacement so the usable clearance feels equal on every edge.
-			const hitboxPadding = 18;
-			const hitboxTopPadding = 28;
-			hitbox.style.left = `${(left - hitboxPadding).toFixed(2)}px`;
-			hitbox.style.top = `${(top - hitboxTopPadding).toFixed(2)}px`;
-			hitbox.style.width = `${(width + hitboxPadding * 2).toFixed(2)}px`;
-			hitbox.style.height = `${(height + hitboxTopPadding + hitboxPadding).toFixed(2)}px`;
+			surface.style.transform = `${shift ? `translateX(${shift}px) ` : ''}scale(1)`;
+			hitbox.style.left = `${(left + shift).toFixed(2)}px`;
+			hitbox.style.top = `${top.toFixed(2)}px`;
+			hitbox.style.width = `${width.toFixed(2)}px`;
+			hitbox.style.height = `${height.toFixed(2)}px`;
 			card.classList.add('gdl-card-tilt-active');
-			tiltEnabledAt = (view?.performance?.now() ?? Date.now()) + 180;
 			activeContainsPoint = (x: number, y: number): boolean => {
 				const rect = hitbox.getBoundingClientRect();
 				return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
 			};
 
-			// Begin the lift upright. Pointer movement after the short lift-in
-			// period enables the 3D tilt, matching Steam's centered expansion.
+			// Steam enters upright and enables tilt on the next pointer movement.
 			pointerX = .5;
 			pointerY = .5;
 
@@ -449,35 +470,21 @@ export function setupTradingCardTilt(root: HTMLElement): void {
 			lastClientY = event.clientY;
 			activate(event.clientX, event.clientY);
 			const fullArtworkUrl = card.dataset.gdlFullImage;
-			if (fullArtworkUrl) preloadTradingCardImage(doc, fullArtworkUrl);
+			if (fullArtworkUrl && card.dataset.gdlPreviewAllowed !== 'false') preloadTradingCardImage(doc, fullArtworkUrl);
 		});
 
-		// The local hitbox follows the expanded card with equal space on all sides.
-		// Leaving either the visible surface or its margin must reset the card.
-		// Otherwise a surface can remain above a neighboring card and prevent that
-		// card from receiving its next pointer-enter event.
+		// Match the native expanded card's bounds and immediate mouse-leave.
 		const resetWhenLeavingCard = (event: PointerEvent): void => {
-			const next = event.relatedTarget;
-			if (next instanceof Node && card.contains(next)) return;
-			if (leaveTimer) view?.clearTimeout(leaveTimer);
-			leaveTimer = view?.setTimeout(() => {
-				leaveTimer = 0;
-				const marginRect = hitbox.getBoundingClientRect();
-				const stillInside = lastClientX >= marginRect.left && lastClientX <= marginRect.right
-					&& lastClientY >= marginRect.top && lastClientY <= marginRect.bottom;
-				if (stillInside) return;
-				reset();
-
-				// Re-evaluate after the expanded surface disappears. This repairs the
-				// missing pointerenter event when another card is now under the cursor.
-				if (recoveryFrame) view?.cancelAnimationFrame(recoveryFrame);
-				recoveryFrame = view?.requestAnimationFrame(() => {
-					recoveryFrame = 0;
-					const element = card.ownerDocument.elementFromPoint(lastClientX, lastClientY);
-					const hovered = element?.closest<HTMLElement>('.gdl-trading-card') || null;
-					if (hovered && root.contains(hovered)) activators.get(hovered)?.(lastClientX, lastClientY);
-				}) || 0;
-			}, 110) || 0;
+			const next = event.relatedTarget as Node | null;
+			if (next?.ownerDocument === doc && card.contains(next)) return;
+			reset();
+			if (recoveryFrame) view?.cancelAnimationFrame(recoveryFrame);
+			recoveryFrame = view?.requestAnimationFrame(() => {
+				recoveryFrame = 0;
+				const element = card.ownerDocument.elementFromPoint(lastClientX, lastClientY);
+				const hovered = element?.closest<HTMLElement>('.gdl-trading-card') || null;
+				if (hovered && root.contains(hovered)) activators.get(hovered)?.(lastClientX, lastClientY);
+			}) || 0;
 		};
 		lifecycle.listen(surface, 'pointermove', onSurfacePointerMove, { passive: true });
 		lifecycle.listen(hitbox, 'pointermove', onSurfacePointerMove, { passive: true });
@@ -486,6 +493,7 @@ export function setupTradingCardTilt(root: HTMLElement): void {
 
 		lifecycle.listen(card, 'pointercancel', reset);
 		const openPreview = (): void => {
+			if (card.dataset.gdlPreviewAllowed === 'false') return;
 			const now = Date.now();
 			if (now - lastPreviewOpenedTime < 350) return;
 			lastPreviewOpenedTime = now;
@@ -505,7 +513,7 @@ export function setupTradingCardTilt(root: HTMLElement): void {
 			pointerDownY = event.clientY;
 			pointerDownTime = Date.now();
 			const fullArtworkUrl = card.dataset.gdlFullImage;
-			if (fullArtworkUrl) preloadTradingCardImage(doc, fullArtworkUrl);
+			if (fullArtworkUrl && card.dataset.gdlPreviewAllowed !== 'false') preloadTradingCardImage(doc, fullArtworkUrl);
 		};
 
 		const onCardPointerUp = (event: PointerEvent): void => {
@@ -547,71 +555,6 @@ export interface TradingCardRenderOptions {
 	shortcutAppId: string | null;
 	gameName: string;
 	isCurrent: () => boolean;
-}
-
-function setupTradingCardsHelpTooltip(doc: Document, button: HTMLElement): void {
-	let popup: HTMLElement | null = null;
-
-	const show = (): void => {
-		if (popup || !button.isConnected) return;
-		popup = doc.createElement('div');
-		popup.className = 'gdl-trading-cards-help-popup';
-		popup.innerHTML = `
-			<div style="margin-bottom:10px;">${escapeHtml(gdlText('trading_cards_help_p1', "Find cards while playing. You can trade them with friends (or on the Steam Community Market) for cards you haven't been able to find."))}</div>
-			<div>${escapeHtml(gdlText('trading_cards_help_p2', 'Complete the full set and turn it into a badge. Badges increase your Steam level and unlock benefits for your account and profile.'))}</div>
-		`;
-		doc.body.appendChild(popup);
-
-		const rect = button.getBoundingClientRect();
-		popup.style.position = 'fixed';
-		popup.style.width = '310px';
-		const scale = popup.getBoundingClientRect().width / 310 || 1;
-		const popupWidth = Math.max(1, Math.min(310, (doc.defaultView?.innerWidth || doc.documentElement.clientWidth || 400) / scale - 24));
-
-		// Position to the left of the ? button matching native Steam UI
-		let left = rect.left / scale - popupWidth - 6;
-		if (left < 12) {
-			left = Math.max(12, rect.right / scale - popupWidth);
-		}
-		const viewportWidth = (doc.defaultView?.innerWidth || doc.documentElement.clientWidth || 400) / scale;
-		left = Math.max(12, Math.min(left, viewportWidth - popupWidth - 12));
-		let top = rect.top / scale - 12;
-		popup.style.width = `${popupWidth}px`;
-		const viewportHeight = (doc.defaultView?.innerHeight || doc.documentElement.clientHeight || 720) / scale;
-		top = Math.max(12, Math.min(top, viewportHeight - popup.offsetHeight - 12));
-
-		popup.style.position = 'fixed';
-		popup.style.left = `${Math.round(left)}px`;
-		popup.style.top = `${Math.round(top)}px`;
-		popup.style.zIndex = '2147483600';
-	};
-
-	const hide = (): void => {
-		if (popup) {
-			popup.remove();
-			popup = null;
-		}
-	};
-
-	button.addEventListener('mouseenter', show);
-	button.addEventListener('mouseleave', hide);
-	button.addEventListener('focus', show);
-	button.addEventListener('blur', hide);
-	doc.defaultView?.addEventListener('resize', hide, { passive: true });
-	doc.defaultView?.addEventListener('scroll', hide, { passive: true, capture: true });
-	let cleanups = helpCleanups.get(doc);
-	if (!cleanups) { cleanups = new Map(); helpCleanups.set(doc, cleanups); }
-	const ownedCleanups = cleanups;
-	ownedCleanups.set(button, () => {
-		hide();
-		button.removeEventListener('mouseenter', show);
-		button.removeEventListener('mouseleave', hide);
-		button.removeEventListener('focus', show);
-		button.removeEventListener('blur', hide);
-		doc.defaultView?.removeEventListener('resize', hide);
-		doc.defaultView?.removeEventListener('scroll', hide, true);
-		ownedCleanups.delete(button);
-	});
 }
 
 /** Steam chooses percentages from the full details pane, then flex-wraps its
@@ -665,41 +608,227 @@ export async function renderOfficialTradingCards(
 	layout: NativeLibraryLayout,
 	options: TradingCardRenderOptions,
 ): Promise<void> {
-	const { steamAppId, gameName } = options;
+	const { steamAppId } = options;
 	if (!options.shortcutAppId) return;
-	const { anchorRegion, sidebarColumn } = layout;
 	const order = getLinkedSidebarOrder(doc, layout, steamAppId, options.shortcutAppId);
 	if (!order || !options.isCurrent()) return;
-	const catalog = await getOfficialCommunityItems(doc, steamAppId);
-	if (!catalog || !options.isCurrent() || !order.isCurrent()
+	const language = cardLanguage();
+	const previous = bindings.get(doc);
+	if (previous && previous.options.steamAppId === steamAppId && previous.options.shortcutAppId === options.shortcutAppId
+		&& previous.layout.sidebarColumn === layout.sidebarColumn && previous.language === language) {
+		previous.options = options; previous.layout = layout; previous.order = order;
+		paintTradingCards(previous); refreshTradingCardSelection(previous);
+		await getOfficialCommunityItems(doc, steamAppId, language).then(catalog => {
+			if (!catalog || !currentCardBinding(previous) || previous.language !== cardLanguage()) return;
+			previous.catalog = getImmediateOfficialCommunityItems(doc, steamAppId, language) || catalog;
+			paintTradingCards(previous);
+		}).catch(error => backendLog(`Steam card foreground recovery failed for ${steamAppId}: ${String(error)}`));
+		return;
+	}
+	disposeTradingCardUI(doc);
+	doc.getElementById('gdl-trading-cards-section')?.remove();
+	const binding: TradingCardBinding = { doc, layout, options, order, language, section: null, selectionLoading: false,
+		selectionFailed: false, cleanup: () => {}, catalog: getImmediateOfficialCommunityItems(doc, steamAppId, language),
+		selection: getCachedCommunityItemOptions(doc, options.shortcutAppId, steamAppId) };
+	bindings.set(doc, binding);
+	const current = () => currentCardBinding(binding) && binding.language === cardLanguage();
+	const applyCatalog = (catalog: SteamCommunityItemsCatalog | null) => {
+		if (!catalog || !current()) return;
+		binding.catalog = getImmediateOfficialCommunityItems(doc, steamAppId, language) || catalog;
+		paintTradingCards(binding); refreshTradingCardSelection(binding);
+	};
+	const applySelection = (selection: CommunityItemOptions) => {
+		if (!current()) return;
+		binding.selection = selection; binding.selectionFailed = false; paintTradingCards(binding);
+	};
+	const stopCatalog = subscribeOfficialCommunityItems(doc, steamAppId, applyCatalog, language);
+	const stopSelection = subscribeCommunityItemOptions(doc, options.shortcutAppId, steamAppId, applySelection);
+	const close = () => { if (bindings.get(doc) === binding) disposeTradingCardUI(doc); };
+	const view = doc.defaultView;
+	let frame = 0;
+	// Steam can replace direct sidebar children while keeping the detail owner.
+	// Restore only this binding's node; retired routes and unlinked games fail closed.
+	const observer = view?.MutationObserver && layout.sidebarColumn ? new view.MutationObserver(() => {
+		if (frame || !currentCardBinding(binding)) return;
+		const section = binding.section;
+		if (language === cardLanguage() && (!section || section.parentElement === binding.layout.sidebarColumn
+			&& section.querySelector('.gdl-trading-card-grid, .gdl-trading-cards-status'))) return;
+		frame = view.requestAnimationFrame(() => {
+			frame = 0;
+			if (!currentCardBinding(binding)) return;
+			if (binding.language !== cardLanguage()) {
+				void renderOfficialTradingCards(doc, binding.layout, binding.options);
+			} else paintTradingCards(binding);
+		});
+	}) : null;
+	observer?.observe(layout.sidebarColumn!, { childList: true, subtree: true });
+	view?.addEventListener('pagehide', close);
+	binding.cleanup = () => {
+		stopCatalog(); stopSelection(); observer?.disconnect();
+		if (frame) view?.cancelAnimationFrame(frame);
+		frame = 0; view?.removeEventListener('pagehide', close);
+	};
+	paintTradingCards(binding);
+	refreshTradingCardSelection(binding, true);
+	await getOfficialCommunityItems(doc, steamAppId, language).then(applyCatalog)
+		.catch(error => backendLog(`Steam card enrichment failed for ${steamAppId}: ${String(error)}`));
+}
+
+/** Renew a mounted sidebar without rebuilding its activity feed. A replaced
+ * native column or retired lease requires the caller to rediscover the layout. */
+export function refreshTradingCardUI(doc: Document, owner?: LinkedSidebarOwner): boolean {
+	const binding = bindings.get(doc);
+	if (!binding) return false;
+	let options = binding.options;
+	if (owner) {
+		if (owner.steamAppId !== options.steamAppId || owner.shortcutAppId !== options.shortcutAppId
+			|| !binding.layout.sidebarColumn?.isConnected || !binding.layout.anchorRegion?.isConnected
+			|| !owner.isCurrent() || !ensureLinkedSidebarOrder(doc, binding.layout, owner)) return false;
+		options = { ...options, isCurrent: owner.isCurrent };
+	} else if (!currentCardBinding(binding)) return false;
+	void renderOfficialTradingCards(doc, binding.layout, options)
+		.catch(error => backendLog(`Steam card refresh failed: ${String(error)}`));
+	return true;
+}
+
+function refreshTradingCardSelection(binding: TradingCardBinding, revalidate = false): void {
+	if (binding.selectionLoading || binding.selection && !revalidate || bindings.get(binding.doc) !== binding) return;
+	binding.selectionLoading = true; binding.selectionFailed = false;
+	paintTradingCards(binding);
+	const { doc, options } = binding;
+	void getCommunityItemOptions(doc, options.shortcutAppId!, options.steamAppId).then(selection => {
+		if (bindings.get(doc) !== binding || !binding.options.isCurrent() || !binding.order.isCurrent()
+			|| !doc.defaultView || doc.defaultView.closed || doc.defaultView.document !== doc) return;
+		binding.selection = selection; binding.selectionFailed = false; paintTradingCards(binding);
+	}).catch(error => {
+		if (currentCardBinding(binding)) binding.selectionFailed = true;
+		backendLog(`Steam card selection load failed for ${options.steamAppId}: ${String(error)}`);
+	}).finally(() => { binding.selectionLoading = false; if (currentCardBinding(binding)) paintTradingCards(binding); });
+}
+
+function paintTradingCardStatus(binding: TradingCardBinding, existing: HTMLElement | null, message: string, retry = false): void {
+	const { doc, layout, order } = binding;
+	const candidate = buildNativeSidebarSection(doc, layout, {
+		sectionId: 'gdl-trading-cards-section',
+		headerText: loc('AppDetails_SectionTitle_TradingCards', gdlText('trading_cards', 'Trading Cards')),
+		innerId: 'gdl-trading-cards-content', cloneInnerClass: false,
+		innerHtml: `<div class="gdl-native-sidebar-panel gdl-trading-cards-body gdl-trading-cards-status" role="status"><div>${escapeHtml(message)}</div>${retry
+			? `<button type="button" class="DialogButton gdl-trading-cards-retry">${escapeHtml(gdlText('community_retry', 'Retry'))}</button>` : ''}</div>`,
+	});
+	if (!candidate || !currentCardBinding(binding)) return;
+	const signature = JSON.stringify(['status', binding.language, message, retry]);
+	if (existing && catalogSignatures.get(existing) === signature && existing.querySelector('.gdl-trading-cards-status')) {
+		if (existing.parentElement !== order.column) order.publish(existing, 'cards');
+		binding.section = existing; return;
+	}
+	const section = existing || candidate;
+	if (existing) {
+		disposeTradingCardHelp(doc, existing); responsiveGridCleanups.get(existing)?.();
+		tiltLifecycles.get(doc)?.get(existing)?.dispose(); section.innerHTML = candidate.innerHTML;
+	}
+	catalogSignatures.set(section, signature);
+	section.querySelector('.gdl-trading-cards-retry')?.addEventListener('click', () => {
+		if (!currentCardBinding(binding)) return;
+		if (!binding.selection) refreshTradingCardSelection(binding, true);
+		void getOfficialCommunityItems(doc, binding.options.steamAppId, binding.language, { refresh: true }).then(catalog => {
+			if (!currentCardBinding(binding) || !catalog) return;
+			binding.catalog = catalog; paintTradingCards(binding);
+		}).catch(error => backendLog(`Steam card retry failed: ${String(error)}`));
+	});
+	if (order.publish(section, 'cards')) binding.section = section;
+}
+
+function paintTradingCards(binding: TradingCardBinding): void {
+	const { doc, layout, options, order, catalog, selection } = binding;
+	const { steamAppId, gameName } = options;
+	const { anchorRegion, sidebarColumn } = layout;
+	if (!currentCardBinding(binding) || binding.language !== cardLanguage()
 		|| !doc.getElementById(GDL_INJECTED) || !anchorRegion || !sidebarColumn) return;
 	const previous = doc.getElementById('gdl-trading-cards-section');
-	const existing = previous?.parentElement === sidebarColumn && previous.dataset.gdlSteamAppId === steamAppId
-		&& previous.dataset.gdlShortcutAppId === order.shortcutAppId ? previous : null;
-	if (catalog.cards.length === 0) { if (existing) removeTradingCardSection(existing); return; }
-	const signature = JSON.stringify([gameName, catalog.cards, catalog.foil_badge, catalog.badges]);
-	if (existing && catalogSignatures.get(existing) === signature) return;
+	const owned = (section: HTMLElement | null): section is HTMLElement => Boolean(section && section.ownerDocument === doc
+		&& (!section.parentElement || section.parentElement === sidebarColumn) && section.dataset.gdlSteamAppId === steamAppId
+		&& section.dataset.gdlShortcutAppId === order.shortcutAppId);
+	const existing = owned(previous) ? previous : owned(binding.section) ? binding.section : null;
+	if (!selection) {
+		paintTradingCardStatus(binding, existing, binding.selectionFailed
+			? gdlText('community_settings_load_failed', 'Could not load the saved selection. Retry before changing cards or badges.')
+			: gdlText('community_settings_loading', 'Loading saved card and badge settings...'), binding.selectionFailed);
+		return;
+	}
+	if (!catalog) {
+		paintTradingCardStatus(binding, existing, gdlText('community_options_loading', 'Loading cards and badges...')); return;
+	}
+	const presentation = linkedCardPresentation(catalog, selection);
+	if (presentation.cards.length === 0 && !presentation.badge) {
+		const complete = catalog.cards_complete === true && catalog.badges_complete === true && !catalog.error && !catalog.transient_error;
+		if (!complete) {
+			if (existing?.querySelector('.gdl-trading-card-grid') && existing.dataset.gdlCardBorder === (presentation.foil ? 'foil' : 'normal')) {
+				if (existing.parentElement !== sidebarColumn) order.publish(existing, 'cards');
+				return;
+			}
+			paintTradingCardStatus(binding, existing, gdlText(catalog.loading ? 'community_cards_set_loading' : 'community_cards_set_unavailable',
+				catalog.loading ? 'The selected card set is still loading. Your saved selection is kept.'
+					: 'The selected card set has not loaded. Retry to complete it. Your saved selection is kept.'), !catalog.loading);
+			return;
+		}
+		if (existing) removeTradingCardSection(existing);
+		binding.section = null; return;
+	}
+	const signature = JSON.stringify([gameName, presentation.cards, presentation.badge, presentation.nextBadge,
+		presentation.nextLevelXP, presentation.level, presentation.maxed, presentation.foil, presentation.xp, presentation.remaining]);
+	if (existing && catalogSignatures.get(existing) === signature && existing.querySelector('.gdl-trading-card-grid')) {
+		if (existing.parentElement !== sidebarColumn) order.publish(existing, 'cards');
+		binding.section = existing; return;
+	}
 
-	const cards = catalog.cards.map((card, index) => {
+	const cards = presentation.cards.map((card, index) => {
 		const image = normalizeCommunityAssetUrl(card.image);
 		if (!image) return '';
 		const artwork = normalizeCommunityAssetUrl(card.artwork) || image;
 		const title = card.title || gameName;
 		const foilClass = card.foil ? ' gdl-foil-card' : '';
-		return `<div class="gdl-trading-card gdl-official-card${foilClass}" data-gdl-card-index="${index}" data-gdl-full-image="${escapeHtml(artwork)}" role="button" tabindex="0" aria-label="${escapeHtml(title)}"><div class="gdl-trading-card-surface"><img src="${escapeHtml(image)}" alt="" /><span class="gdl-card-hologram" aria-hidden="true"></span></div></div>`;
+		const ownershipClass = card.owned ? '' : ' gdl-trading-card-unowned';
+		return `<div class="gdl-trading-card gdl-official-card${foilClass}${ownershipClass}" data-owned="${card.owned}" data-gdl-preview-allowed="${card.owned || presentation.level > 0}" data-gdl-community-card-id="${escapeHtml(communityCardId(card))}" data-gdl-card-index="${index}" data-gdl-full-image="${escapeHtml(artwork)}" role="button" tabindex="0" aria-label="${escapeHtml(title)}"><div class="gdl-trading-card-surface"><img src="${escapeHtml(image)}" alt="" /><div class="gdl-trading-card-title">${escapeHtml(title)}</div><span class="gdl-card-hologram" aria-hidden="true"></span></div></div>`;
 	}).filter(Boolean).join('');
-	if (!cards) return;
+	if (!cards && !presentation.badge) return;
 
-	const officialPortrait = `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${steamAppId}/library_600x900.jpg`;
-	const badgeAsset = linkedCardPresentation(catalog).badge;
-	const cardFallback = catalog.cards?.[0]?.image || '';
-	const badgeSource = normalizeCommunityAssetUrl(badgeAsset?.image) || cardFallback || officialPortrait;
-	const badgeTitle = badgeAsset?.title || catalog.badges?.[0]?.title || gdlText('cards_found', 'Cards found');
+	const badgeAsset = presentation.badge;
+	const badgeSource = normalizeCommunityAssetUrl(badgeAsset?.image);
+	const badgeTitle = badgeAsset?.title || presentation.nextBadge?.title || gdlText('community_badge_none', 'No local badge');
+	const xpLabel = badgeAsset ? loc('AppDetails_BadgeLevel', 'Level %1$s, %2$s XP')
+		.replace('%1$s', String(presentation.level)).replace('%2$s', String(presentation.xp))
+		: loc('AppDetails_UnearnedBadgeXP', '%1$s XP').replace('%1$s', String(presentation.nextLevelXP));
+	const url = `https://steamcommunity.com/my/gamecards/${steamAppId}/${presentation.foil ? '?border=1' : ''}`;
+	const sectionCss = resolveClassModule(module => Boolean(module.AppDetailsSectionContainer && module.RightColumnSection
+		&& module.Highlight && module.Body), {}, doc).classes;
+	const cardCss = resolveClassModule(module => Boolean(module.BadgeSection && module.BadgeInfo && module.CardsSection), {}, doc).classes;
+	const actionCss = resolveClassModule(module => Boolean(module.AppDetailsButton && module.BottomRight), {}, doc).classes;
+	const badgeImage = badgeSource
+		? `<a class="gdl-trading-badge ${cardCss.Badge || ''}" href="${url}" data-gdl-open-url="${url}" title="${escapeHtml(loc('AppDetails_ViewBadgePage', 'View badge page'))}"><img class="gdl-trading-badge-image" src="${escapeHtml(badgeSource)}" alt="${escapeHtml(badgeTitle)}" /></a>`
+		: `<div class="gdl-trading-badge gdl-trading-badge-empty ${cardCss.Badge || ''} ${cardCss.EmptyCircle || ''}" aria-hidden="true"></div>`;
+	const remainingLabel = presentation.remaining > 0 ? loc(presentation.remaining === 1 ? 'AppDetails_TradingCardsLeft' : 'AppDetails_TradingCardsLeft_Plural',
+		gdlText('cards_remaining', '{count} cards remaining', { count: presentation.remaining })).replace('%1$s', String(presentation.remaining))
+		: presentation.maxed ? loc('AppDetails_TradingCardsMaxed', 'Congratulations! You have reached the maximum badge level!')
+			: loc('AppDetails_TradingCardsLevelUp', 'You have enough cards to level up!');
+	const remainingState = presentation.maxed ? ' gdl-trading-card-maxed' : presentation.remaining === 0 ? ' gdl-trading-card-ready' : '';
+	const remaining = presentation.cards.length ? presentation.remaining === 0 && !presentation.maxed
+		? `<a class="gdl-trading-card-remaining${remainingState}" href="${url}" data-gdl-open-url="${url}">${escapeHtml(remainingLabel)}</a>`
+		: `<div class="gdl-trading-card-remaining${remainingState}">${escapeHtml(remainingLabel)}</div>` : '';
 	const candidate = buildNativeSidebarSection(doc, layout, {
 		sectionId: 'gdl-trading-cards-section',
 		headerText: loc('AppDetails_SectionTitle_TradingCards', gdlText('trading_cards', 'Trading Cards')),
 		innerId: 'gdl-trading-cards-content',
-		innerHtml: `<div class="${ACH_CLASSES().HighlightDiv} gdl-native-sidebar-panel" style="padding:0 !important;box-sizing:border-box;overflow:visible;"><div class="gdl-trading-cards-badge-header"><div class="gdl-trading-badge" title="${escapeHtml(badgeTitle)}"><img class="gdl-trading-badge-image" src="${escapeHtml(badgeSource)}" alt="${escapeHtml(badgeTitle)}" /></div><div style="min-width:0;"><div class="gdl-trading-badge-title" style="font-size:16px;line-height:1.25;color:#fff;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(badgeTitle)}</div><div class="gdl-trading-badge-xp" style="font-size:13px;color:#8f98a0;margin-top:2px;">${escapeHtml(gdlText('experience_points', '100 XP'))}</div></div></div><div class="gdl-trading-cards-body" style="padding:12px 10px 14px;"><div class="gdl-trading-card-remaining" style="font-size:13px;color:#9da4ab;margin-bottom:10px;">${escapeHtml(gdlText('cards_remaining', '{count} cards remaining', { count: 0 }))}</div><div class="gdl-trading-card-grid">${cards}</div><a class="gdl-trading-cards-view-link" href="https://steamcommunity.com/my/gamecards/${steamAppId}/" data-gdl-open-url="https://steamcommunity.com/my/gamecards/${steamAppId}/" style="display:block;text-align:right;margin-top:14px;color:#9da4ab;text-decoration:none;font-size:13px;">${escapeHtml(gdlText('view_my_cards', 'View my cards'))}</a></div></div>`,
+		innerHtml: `<div class="gdl-native-sidebar-panel">
+			<div class="gdl-trading-cards-badge-header ${sectionCss.Highlight || 'gdl-card-highlight-fallback'} ${cardCss.BadgeSection || ''}">
+				${badgeImage}<div class="gdl-trading-badge-info ${cardCss.BadgeInfo || ''}">
+					<div class="gdl-trading-badge-title ${cardCss.BadgeName || ''}">${escapeHtml(badgeTitle)}</div>
+					<div class="gdl-trading-badge-xp ${cardCss.BadgeLevel || ''}">${escapeHtml(xpLabel)}</div>
+				</div>
+			</div>
+			<div class="gdl-trading-cards-body">${remaining}<div class="gdl-trading-card-grid" role="list">${cards}</div>
+				<button type="button" class="gdl-trading-cards-view-link DialogButton ${actionCss.AppDetailsButton || ''} ${actionCss.BottomRight || ''}" data-gdl-open-url="${url}">${escapeHtml(loc('AppDetails_ViewTradingCards', gdlText('view_my_cards', 'View my cards')))}</button>
+			</div>
+		</div>`,
 		cloneInnerClass: false,
 	});
 	if (!candidate || !options.isCurrent() || !order.isCurrent()) return;
@@ -711,6 +840,7 @@ export async function renderOfficialTradingCards(
 		section.innerHTML = candidate.innerHTML;
 	}
 	catalogSignatures.set(section, signature);
+	section.dataset.gdlCardBorder = presentation.foil ? 'foil' : 'normal';
 
 	const badgeImg = section.querySelector<HTMLImageElement>('.gdl-trading-badge-image');
 	badgeImg?.addEventListener('error', () => { badgeImg.style.visibility = 'hidden'; });
@@ -722,28 +852,32 @@ export async function renderOfficialTradingCards(
 		const help = doc.createElement('button');
 		help.type = 'button';
 		help.className = 'gdl-trading-cards-help-btn';
-		help.textContent = '?';
+		help.innerHTML = '<span aria-hidden="true">?</span>';
 		help.setAttribute('aria-label', gdlText('trading_cards', 'Trading Cards'));
-		text.appendChild(help);
-		setupTradingCardsHelpTooltip(doc, help);
-
 		const headingChildren = Array.from(heading.children) as HTMLElement[];
 		const textRoot = headingChildren.find(child => child === text || child.contains(text)) || null;
+		if (textRoot && textRoot !== text) {
+			for (const child of Array.from(textRoot.children)) {
+				if (child !== text && !child.contains(text)) child.remove();
+			}
+		}
+		(textRoot || heading).appendChild(help);
+		setupTradingCardsHelpTooltip(doc, help);
 		for (const child of headingChildren) {
 			if (child === textRoot) continue;
 			child.style.display = 'none';
 		}
 	}
 
-	if (!order.publish(section, 'cards')) return;
+	if (!order.publish(section, 'cards')) { removeTradingCardSection(section); return; }
+	binding.section = section;
 
 	setupTradingCardTilt(section);
 	installResponsiveTradingCardGrid(section, layout);
 	for (const image of Array.from(section.querySelectorAll<HTMLImageElement>('.gdl-trading-card img'))) {
-		image.addEventListener('error', () => {
-			image.closest('.gdl-trading-card')?.remove();
-			if (!section.querySelector('.gdl-trading-card')) removeTradingCardSection(section);
-		});
+		const failed = () => image.closest('.gdl-trading-card')?.classList.add('gdl-card-image-failed');
+		image.addEventListener('error', failed, { once: true });
+		if (image.complete && !image.naturalWidth) failed();
 	}
 	backendLog(`Official Steam cards applied for ${steamAppId}: ${catalog.cards.length} card(s), foil=${String(!!catalog.foil_badge)}`);
 }

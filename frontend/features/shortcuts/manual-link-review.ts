@@ -3,7 +3,7 @@ import { backendLog } from '../../api/backend';
 import { getGameData } from '../../core/game-data';
 import { shortcutRuntimeHost } from './host';
 import { findMappingForShortcut, shortcutAlreadyLinked } from './registry';
-import { buildImmediateShortcutDetectionContext, buildShortcutDetectionContext, detectShortcutCandidatesLocal, enrichShortcutCandidatesRemote, mergeCandidateLists, withDetectionBudget } from './detection';
+import { buildImmediateShortcutDetectionContext, buildShortcutDetectionContext, detectShortcutCandidatesLocal, enrichShortcutCandidatesRemote, mergeCandidateLists, sameShortcutDetectionContext, withDetectionBudget } from './detection';
 import { isShortcutDismissed } from './dismissed';
 import { cleanShortcutPath, shortcutPathDirectory } from '../../steam/shortcuts';
 export type ShortcutLinkReviewSource = 'manual' | 'native-add-auto';
@@ -54,18 +54,38 @@ export async function inspectShortcutReview(
 	if (ownedModal) ownedModal._retrySearch = () => {
 		void inspectShortcutReview(record, source, immediateDoc, host, launchContext);
 	};
-	let titleOnlyCandidates: ShortcutDetectionCandidate[] = [];
+	const previous = ownedModal?._getDetectionSnapshot?.();
+	let titleOnlyCandidates: ShortcutDetectionCandidate[] = previous?.context && sameShortcutDetectionContext(previous.context, immediateContext)
+		? previous.candidates.slice() : [];
 	let firstLocalDetection: ShortcutDetectionResult | null = null;
+	let reviewContext = immediateContext, localSnapshot = titleOnlyCandidates.slice(), localComplete = false, enrichmentFinished = false;
+	let latestRemote: ShortcutDetectionResult | null = null;
+	const unavailable = (): boolean => !latestRemote || Boolean(latestRemote.error || latestRemote.transient_error)
+		|| (!localComplete && !latestRemote.candidates.length);
+	const remoteRejections = (): string[] | undefined => latestRemote && !latestRemote.error ? latestRemote.rejected_appids : undefined;
+	const localObserver = (requestedContext: ShortcutDetectionContext) => ({
+		isCurrent: () => ownsReview() && sameShortcutDetectionContext(requestedContext, reviewContext)
+			&& sameShortcutDetectionContext(requestedContext, ownedModal._getDetectionSnapshot?.().context || reviewContext),
+		onLateResult: (result: ShortcutDetectionResult): void => {
+			localComplete ||= !result.error && !result.transient_error;
+			localSnapshot = mergeCandidateLists(localSnapshot, result.candidates, remoteRejections());
+			titleOnlyCandidates = localSnapshot.slice();
+			ownedModal._updateCandidates?.(mergeCandidateLists(localSnapshot, latestRemote && !latestRemote.error ? latestRemote.candidates : [], remoteRejections()), enrichmentFinished, remoteRejections());
+			if (enrichmentFinished) ownedModal._markEnrichmentComplete?.(unavailable());
+		},
+	});
 	const contextPromise = buildShortcutDetectionContext(immediateDoc, record.title, record.id).then(context => {
 		const modal = immediateDoc?.getElementById('gdl-manual-link-modal') as any;
 		if (context && ownsReview() && modal?._shortcutAppId === record.id) modal._updateContext?.(context);
 		return context;
 	}).catch((): null => null);
 	try {
-		const titleOnlyDetection = await detectShortcutCandidatesLocal(immediateContext);
+		const titleOnlyDetection = await detectShortcutCandidatesLocal(immediateContext, localObserver(immediateContext));
 		firstLocalDetection = titleOnlyDetection;
 		if (!ownsReview()) return;
-		titleOnlyCandidates = (titleOnlyDetection?.candidates || []).slice();
+		localComplete ||= Boolean(titleOnlyDetection && !titleOnlyDetection.error && !titleOnlyDetection.transient_error);
+		titleOnlyCandidates = mergeCandidateLists(titleOnlyCandidates, titleOnlyDetection?.candidates || []);
+		localSnapshot = titleOnlyCandidates.slice();
 		if (titleOnlyCandidates.length > 0) {
 			const fastModal = immediateDoc?.getElementById('gdl-manual-link-modal');
 			if (fastModal && (fastModal as any)._shortcutAppId === record.id && (fastModal as any)._updateCandidates) {
@@ -98,6 +118,10 @@ export async function inspectShortcutReview(
 		}
 		context = { ...immediateContext, ...context, exePath: context?.exePath || immediateContext.exePath,
 			startDir: context?.startDir || immediateContext.startDir, launchOptions: context?.launchOptions ?? immediateContext.launchOptions };
+		if (!sameShortcutDetectionContext(context, immediateContext)) {
+			titleOnlyCandidates = (firstLocalDetection?.candidates || []).slice(); localComplete = false;
+		}
+		reviewContext = context;
 		if (!context.title && !context.exePath) {
 			backendLog(`Manual link review has no title or executable for shortcut ${record.title} (${record.id})`);
 			if (source === 'manual') {
@@ -119,8 +143,9 @@ export async function inspectShortcutReview(
 		const sameLaunchDefinition = context.exePath === immediateContext.exePath && context.startDir === immediateContext.startDir
 			&& context.launchOptions === immediateContext.launchOptions;
 		const localDetection = sameLaunchDefinition && firstLocalDetection && !firstLocalDetection.transient_error && !firstLocalDetection.error
-			? firstLocalDetection : await detectShortcutCandidatesLocal(context);
+			? firstLocalDetection : await detectShortcutCandidatesLocal(context, localObserver(context));
 		if (!ownsReview()) return;
+		localComplete ||= Boolean(localDetection && !localDetection.error && !localDetection.transient_error);
 		let activeCandidates = mergeCandidateLists(titleOnlyCandidates, localDetection?.candidates || []);
 		const existingMappedId = findMappingForShortcut(record.id, record.title, context.exePath);
 		if (existingMappedId && /^\d+$/.test(existingMappedId)) {
@@ -158,9 +183,10 @@ export async function inspectShortcutReview(
 			modalRendered = true;
 		}
 		const enrichmentContext = context;
-		const localSnapshot = activeCandidates.slice();
+		localSnapshot = activeCandidates.slice();
 		void enrichShortcutCandidatesRemote(enrichmentContext, localSnapshot).then(remoteDetection => {
-			if (!ownsReview()) return;
+			if (!ownsReview() || !sameShortcutDetectionContext(enrichmentContext, ownedModal._getDetectionSnapshot?.().context || reviewContext)) return;
+			latestRemote = remoteDetection; enrichmentFinished = true;
 			const liveDoc = (immediateDoc && immediateDoc.body)
 				? immediateDoc
 				: (shortcutRuntimeHost().getMainWindowDoc() || (typeof document !== 'undefined' ? document : null));
@@ -177,9 +203,9 @@ export async function inspectShortcutReview(
 					}
 				}
 				(liveModal as any)._updateCandidates(merged, true, remoteDetection.rejected_appids);
-				if (remoteDetection.transient_error) (liveModal as any)._markEnrichmentComplete?.(true);
+				(liveModal as any)._markEnrichmentComplete?.(unavailable());
 			} else {
-				(liveModal as any)._markEnrichmentComplete?.(!remoteDetection || Boolean(remoteDetection.error) || remoteDetection.transient_error === true);
+				(liveModal as any)._markEnrichmentComplete?.(unavailable());
 			}
 		}).catch(err => {
 			backendLog(`Remote candidate enrichment error for ${record.title}: ${err}`);

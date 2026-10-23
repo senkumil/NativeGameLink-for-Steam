@@ -27,7 +27,7 @@ import { getShortcutEdition } from '../shortcuts/editions';
 import { layoutFingerprint } from './logo-layout';
 import { writeAssetWithDeadline } from './asset-write';
 import { readAssetWithDeadline } from './asset-deadline';
-import { getPendingNativeAssetWrites, hasPendingNativeAssetWrites, writeNativeAsset } from './native-asset-write';
+import { getPendingNativeAssetWrites, hasPendingNativeAssetWrites, nativeAssetWriteBlocked, writeNativeAsset } from './native-asset-write';
 export { getCachedLibraryAssets, getModernLibraryAssets, getResolvedLibraryAssets, refreshModernLibraryAssets, warmupAllMappedLibraryAssets } from './library-assets';
 export type { SteamLibraryAssets } from './library-assets';
 export { imageUrlToBase64, normalizeCommunityArtworkDataUrl, normalizeCommunityLogoDataUrl } from './artwork-image';
@@ -413,7 +413,7 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, _game
 	// not turn four missing images into minutes of sequential timeouts.
 	const deadlineMs = Date.now() + 28_000;
 	const isCurrent = captureArtworkApplicationCurrent(shortcutAppId, steamAppId);
-	if (hasPendingNativeAssetWrites(shortcutAppId)) return { complete: false, slots: [], missing: ['native_write_pending'], communitySlots: [] };
+	if (nativeAssetWriteBlocked(shortcutAppId)) return { complete: false, slots: [], missing: ['native_write_pending'], communitySlots: [] };
 	const existingMarker = !force ? readArtworkMarker(shortcutAppId, steamAppId) : null;
 	const userCommunity = getSavedCommunityArtworkSelection(shortcutAppId, steamAppId);
 	if (!force && nativeArtworkCustomizationActive(shortcutAppId, steamAppId)) {
@@ -678,7 +678,7 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, _game
 		const appliedSlots: number[] = [];
 		const allDownloads: ArtworkDownloadCandidate[] = [];
 		const applyResolvedDownload = async (download: ArtworkDownloadCandidate): Promise<void> => {
-			if (!isCurrent() || Date.now() >= deadlineMs || hasPendingNativeAssetWrites(shortcutAppId)) return;
+			if (!isCurrent() || Date.now() >= deadlineMs || nativeAssetWriteBlocked(shortcutAppId, `artwork-${download.imageType}`)) return;
 			const { dataUrl, imageType, label } = download;
 			let { community, url } = download;
 			let slotApplied = false;
@@ -687,7 +687,7 @@ async function spoofArtworkOnce(shortcutAppId: number, steamAppId: string, _game
 				try { preparedDataUrl = await normalizeCommunityArtworkDataUrl(dataUrl, imageType) || dataUrl; }
 				catch (e) { preparedDataUrl = dataUrl; backendLog('Artwork normalization fallback (' + label + '): ' + e); }
 			}
-			if (!isCurrent() || Date.now() >= deadlineMs || hasPendingNativeAssetWrites(shortcutAppId)) return;
+			if (!isCurrent() || Date.now() >= deadlineMs || nativeAssetWriteBlocked(shortcutAppId, `artwork-${download.imageType}`)) return;
 
 			// Write the grid file first. Unlike four sequential Steam bridge calls,
 			// these local atomic writes do not make the visible Hero/Logo component

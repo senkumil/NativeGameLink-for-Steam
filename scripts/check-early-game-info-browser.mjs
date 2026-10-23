@@ -15,7 +15,7 @@ const steamCss = process.env.STEAM_PLAYBAR_CSS || [
 ].find(filename => fs.existsSync(filename));
 assert.ok(fs.existsSync(edge) && (steamCss && fs.existsSync(steamCss)), 'This browser check requires installed Edge and Steam CSS');
 const sources = Object.fromEntries([
-  ['class-module-cache', 'frontend/steam/class-module-cache.ts'],
+  ['pure-class-factory', 'frontend/steam/gamepad/components/pure-class-factory.ts'], ['class-module-cache', 'frontend/steam/class-module-cache.ts'],
   ['css', 'frontend/steam/css.ts'], ['native-dom', 'frontend/steam/native-dom.ts'],
   ['library-details', 'frontend/steam/library-details.ts'], ['dom', 'frontend/core/dom.ts'],
   ['achievement-playbar-space', 'frontend/steam/achievement-playbar-space.ts'],

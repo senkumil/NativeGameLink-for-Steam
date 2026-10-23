@@ -1,6 +1,6 @@
 import { readShortcutLogoInventoryBackend } from '../../api/backend';
 import { isMappingSnapshotVerified, mappings, shortcutMappingKey, subscribeMappings } from '../../core/mappings';
-import { steamWebpackRuntime } from '../../steam/modules/SteamWebpackRuntime';
+import { resolveNativeArtworkStores } from './native-artwork-stores';
 
 const MAX_ENTRIES = 128;
 type InventoryRequest = { shortcut_app_id: string; steam_app_id: string; native_mtime: number };
@@ -153,11 +153,8 @@ function createBridge(apps: any): Bridge | null {
 
 function resolveApps(doc: Document): any {
 	const global = (doc.defaultView as any)?.appStore;
-	if (typeof global?.GetCustomLogoImageURLs === 'function') return global;
-	try {
-		steamWebpackRuntime.captureRuntime(doc);
-		return steamWebpackRuntime.getRequire(doc)?.(1776)?.tw || null;
-	} catch { return null; }
+	if (typeof global?.GetCustomLogoImageURLs === 'function' && typeof global?.GetAppOverviewByAppID === 'function') return global;
+	try { return resolveNativeArtworkStores(doc)?.apps || null; } catch { return null; }
 }
 
 /** Install a pure native source-order adapter before warming any logo. */

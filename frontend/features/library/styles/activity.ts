@@ -7,13 +7,15 @@ export function ensureActivityStyles(doc: Document): void {
 		/* Steam's desktop details layout keeps RightColumn as a 33% right float.
 		   A 100%-wide injected child cannot flow beside it and is moved below the
 		   entire sidebar. Mirror Steam's own SpotlightLeftColumn breakpoints so
-		   Activity uses that width. Community supplies its own full width and
-		   clearance after the taller column, within the same owned stack. */
+		   Activity uses that width. Its native section/body classes own the inner
+		   gutters; Community handles its own available width independently. */
 		#gdl-main-content-stack, #gdl-skeleton { width:calc(67% - 32px) !important; }
 		div.NarrowWindow #gdl-main-content-stack, div.NarrowWindow #gdl-skeleton { width:calc(67% - 22px) !important; }
 		div.UltraNarrowRightPanel #gdl-main-content-stack, div.UltraNarrowRightPanel #gdl-skeleton { width:100% !important; }
 		/* The owned main stack already supplies the native left-column width. */
-		#gdl-activity-feed { max-width:100%; }
+		/* The outer section owns Steam's margin. Keeping the native feed's own
+		   margin here as well doubles the space before Community. */
+		#gdl-activity-feed { max-width:100%;margin-bottom:0 !important; }
 		/* Native event classes own dates, title typography, copy limits and the
 		   major-update layout. The injected media keeps only its asset surface. */
 		#gdl-activity-feed .gdl-news-layout { display:flex;align-items:stretch;column-gap:0;height:auto;min-height:0;padding:12px;box-sizing:border-box;overflow:hidden; }
@@ -24,10 +26,7 @@ export function ensureActivityStyles(doc: Document): void {
 		#gdl-activity-feed .${event.PartnerEventMediumImage_TextColumn}.gdl-news-copy { min-width:0; }
 		#gdl-activity-feed .gdl-news-summary { overflow:hidden; }
 		#gdl-activity-feed .gdl-load-more-row { display:flex;justify-content:center; }
-		#gdl-activity-feed .gdl-activity-end { display:flex;align-items:center;gap:22px;margin:26px 0 8px;color:#8f98a0;font-size:13px;line-height:1;white-space:nowrap; }
-		#gdl-activity-feed .gdl-activity-end::before,#gdl-activity-feed .gdl-activity-end::after { content:"";height:1px;flex:1 1 auto;background:rgba(255,255,255,.08); }
-		#gdl-activity-feed .gdl-activity-end span { flex:0 0 auto; }
-		.gdl-activity-container { display:flex;flex-direction:column;justify-content:flex-start;align-items:stretch;flex:none;height:auto;min-height:0;overflow:visible; }
+		.gdl-activity-container { display:block;flex:none;height:auto;min-height:0;overflow:visible; }
 		/* Steam stacks medium news at the detail pane's own breakpoint. Window
 		   media queries miss a resized library list and the client's UI scale. */
 		div.NarrowRightPanel #gdl-activity-feed .gdl-news-layout,

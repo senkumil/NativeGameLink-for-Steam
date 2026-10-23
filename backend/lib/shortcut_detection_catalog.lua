@@ -19,6 +19,17 @@ local normalize = shortcut_detection_text.normalize
 local generic_words = shortcut_detection_text.generic_words or {}
 local generic_exes = shortcut_detection_text.generic_exes or {}
 
+-- A separate legal-mark token in PE metadata can make Store Search return a
+-- successful empty response. Clean the provider spelling before deduplicating
+-- hints, so the PE priority cannot suppress a usable title/folder query.
+-- Preserve Unicode names, years and edition qualifiers used to disambiguate.
+function M.search_query(value)
+    local query = tostring(value or ""):gsub("™", ""):gsub("®", "")
+        :gsub("©", ""):gsub("℠", ""):gsub(" ", " ")
+    query = shortcut_detection_text.split_identifier(query):gsub("%s+", " ")
+    return query:match("^%s*(.-)%s*$") or ""
+end
+
 -- One portable wall-clock budget covers every provider and fallback in a
 -- detection request. os.time is intentionally used instead of os.clock (CPU
 -- time excludes blocked HTTP). Reserve a second for its coarse resolution.
@@ -30,13 +41,19 @@ function M.new_request_budget(expires_at_ms)
 end
 
 function M.remaining_timeout(budget, requested_timeout)
-    if not budget then return requested_timeout or 3 end
-    local remaining = (budget.deadline_ms - os.time() * 1000 - 1000) / 1000
-    if remaining <= 0 then
-        budget.incomplete, budget.exhausted = true, true
+    -- Millennium's HTTP host reads this field with lua_tointeger. A fractional
+    -- timeout can become zero (libcurl's unlimited timeout), so every actual
+    -- request must receive a positive whole number of seconds.
+    local allowed = math.floor(requested_timeout or 3)
+    if budget then
+        local remaining = math.floor((budget.deadline_ms - os.time() * 1000 - 1000) / 1000)
+        allowed = math.min(allowed, remaining)
+    end
+    if allowed < 1 then
+        if budget then budget.incomplete, budget.exhausted = true, true end
         return nil
     end
-    return math.min(requested_timeout or 3, remaining)
+    return allowed
 end
 
 -- Discovery hints have different information content. A three-character
@@ -44,8 +61,7 @@ end
 function M.discovery_queries(context, aliases)
     local queries, seen, priorities, order, alias_candidates = {}, {}, {}, {}, {}
     local function add_query(value, priority)
-        local searchable = tostring(value or ""):gsub("(%l)(%u)", "%1 %2")
-            :gsub("(%a)(%d)", "%1 %2"):gsub("(%d)(%a)", "%1 %2")
+        local searchable = M.search_query(value)
         local key = normalize(searchable)
         if #key < 2 or generic_words[key] or generic_exes[key] then return end
         priorities[key] = math.max(priorities[key] or 0, priority or 50)
@@ -185,12 +201,8 @@ end
 M.http_json = http_json
 
 local function clean_query_term(value)
-    local text = tostring(value or ""):match("^%s*(.-)%s*$") or ""
+    local text = M.search_query(value)
     if text == "" then return "" end
-    -- Split CamelCase / PascalCase tokens (e.g. RocketLeague -> Rocket League)
-    text = text:gsub("(%l)(%u)", "%1 %2")
-        :gsub("(%a)(%d)", "%1 %2")
-        :gsub("(%d)(%a)", "%1 %2")
     if shortcut_detection_text.clean_game_title then
         text = shortcut_detection_text.clean_game_title(text)
     end

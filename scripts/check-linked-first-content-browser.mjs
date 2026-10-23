@@ -14,9 +14,11 @@ assert.ok(fs.existsSync(edge), 'Installed Edge is required');
 const sources = Object.fromEntries([
   ['app', 'frontend/runtime/app.tsx'],
   ['runtime', 'frontend/features/library/runtime.ts'], ['renderer', 'frontend/features/library/renderer.ts'],
+  ['mounted-sidebar', 'frontend/features/library/mounted-sidebar.ts'],
   ['layout', 'frontend/features/library/layout.ts'], ['loading-stage', 'frontend/features/library/loading-stage.ts'],
   ['first-content', 'frontend/features/library/first-content.ts'],
   ['activity-view', 'frontend/features/library/activity-view.ts'], ['feed', 'frontend/features/library/social/feed.ts'],
+  ['activity-footer', 'frontend/features/library/activity-footer.ts'],
   ['activity-summary', 'frontend/features/library/activity-summary.ts'],
   ['status', 'frontend/features/library/social/status.ts'], ['disposables', 'frontend/core/disposables.ts'],
   ['after-native-paint', 'frontend/core/after-native-paint.ts'], ['navigation-controller', 'frontend/features/library/navigation-controller.ts'],
@@ -26,7 +28,7 @@ const sources = Object.fromEntries([
   ['native-artwork-ready', 'frontend/features/library/native-artwork-ready.ts'],
   ['activity-styles', 'frontend/features/library/styles/activity.ts'],
   ['status-styles', 'frontend/features/library/styles/status.ts'],
-  ['class-module-cache', 'frontend/steam/class-module-cache.ts'],
+  ['pure-class-factory', 'frontend/steam/gamepad/components/pure-class-factory.ts'], ['class-module-cache', 'frontend/steam/class-module-cache.ts'],
   ['css', 'frontend/steam/css.ts'], ['text', 'frontend/core/text.ts'],
 ].map(([name, file]) => [name, ts.transpileModule(fs.readFileSync(path.join(root, file), 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, jsx: ts.JsxEmit.React },
@@ -132,7 +134,7 @@ async function browserChecks(sources, prepaintOnly = false) {
       removeNativeGameChrome: noop, steamNativeGameInfo: () => ({}) },
     './community-view': { disposeCommunitySection: noop, insertCommunitySection: () => null,
       communityItemsSignature: () => '', renderCommunityContentHtml: () => '' },
-    './trading-cards': { disposeTradingCardUI: noop },
+    './trading-cards': { disposeTradingCardUI: noop, refreshTradingCardUI: () => true },
     './achievement-chrome': { finalizeLinkedAchievements: asyncNoop, warmLocalAchievements: asyncNoop },
     './early-achievement-sidebar': { syncEarlyAchievementSidebar: noop, getOwnedAchievementSidebar: () => null, adoptEarlyAchievementSidebar: noop },
     './sidebar-order': { disposeLinkedSidebarOrder: noop, ensureLinkedSidebarOrder: noop },
@@ -173,7 +175,7 @@ async function browserChecks(sources, prepaintOnly = false) {
     './sidebar-sections': { renderLinkedSidebarCore: noop, refreshHistoricalSidebarSections: noop },
     './controller': { setupControllerSidebarWatcher: () => noop, getOwnedControllerSidebar: () => null,
 		disposeControllerSidebarWatcher: (doc, preserve) => controllerStops.push({ doc, preserve }) },
-    './optional-sections': { renderOptionalStoreSections: () => ({ hasWorkshop: false, dlcIds: [] }) },
+    './optional-sections': { linkedStoreCapabilities: () => ({ hasWorkshop: false, dlcIds: [] }), renderOptionalStoreSections: () => ({ hasWorkshop: false, dlcIds: [] }) },
     './primary-links': {
       createPrimaryLinksBar: doc => { let node = doc.getElementById('gdl-link-bar'); if (!node) { node = doc.createElement('div'); node.id = 'gdl-link-bar'; } return node; },
       insertPrimaryLinksBar: node => document.getElementById('tabs').appendChild(node),
@@ -376,7 +378,7 @@ async function browserChecks(sources, prepaintOnly = false) {
     const sidebarRect = document.getElementById('native-sidebar').getBoundingClientRect();
     check(getComputedStyle(document.getElementById('native-sidebar')).float === 'right'
       && Math.abs(previewRect.top - sidebarRect.top) < 0.1 && previewRect.right <= sidebarRect.left,
-      'The real first-content stylesheet places the preview beside the native 33% right float instead of below its tall sidebar');
+      `The real first-content stylesheet places the preview beside the native 33% right float instead of below its tall sidebar: ${JSON.stringify({previewRect,sidebarRect})}`);
     await capturePhase('first-preview');
     resolveA(); await Promise.all([pendingA, concurrentA]);
     const activity = document.getElementById('gdl-library-injected'), feed = document.getElementById('gdl-activity-feed');
@@ -534,8 +536,8 @@ const scratchRoot = path.join(root, 'scratch'); fs.mkdirSync(scratchRoot, { recu
 const scratch = fs.mkdtempSync(path.join(scratchRoot, 'linked-first-content-'));
 const htmlPath = path.join(scratch, 'fixture.html');
 const serialize = value => JSON.stringify(value).replace(/</g, '\\u003c');
-fs.writeFileSync(htmlPath, `<!doctype html><html><head><meta charset="utf-8"><style>
-body{margin:20px;background:#20252c;color:#dcdedf;font:14px Arial}#shell{width:1100px}#native-header{height:220px;position:relative}#native-hero{width:1100px;height:220px;display:block}#native-logo{position:absolute;left:30px;bottom:25px;width:160px;height:40px}#native-playbar{height:56px;display:block}#tabs{height:36px}.row{display:flow-root}.main{width:100%}.sidebar{float:right;width:33%;height:650px}textarea{box-sizing:border-box;width:100%;height:35px}#result{white-space:pre-wrap;font-size:10px}
+fs.writeFileSync(htmlPath, `<!doctype html><html><head><meta charset="utf-8"><style>${fs.readFileSync(path.join(process.env.STEAM_UI_PATH || 'C:/Program Files (x86)/Steam/steamui', 'css/sp.css'), 'utf8')}</style><style>
+body{margin:20px;background:#20252c;color:#dcdedf;font:14px Arial}#shell{width:1100px}#native-header{height:220px;position:relative}#native-hero{width:1100px;height:220px;display:block}#native-logo{position:absolute;left:30px;bottom:25px;width:160px;height:40px}#native-playbar{height:56px;display:block}#tabs{height:36px}.row{display:flow-root}.main{width:100%}.sidebar{float:right;width:33%;height:650px}#result{white-space:pre-wrap;font-size:10px}
 </style></head><body><div id="shell"><header id="native-header" class="_2gZXhRmKUk68pA28-5ZmGQ tXlLvuTxOVL1w3aVPX4bm"><div class="_1IX7FPSY9Jb82KhBVBSkZa"><div class="QlR9EFwTdUNm_J5vx54_Z"><img id="native-hero" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1100' height='220'%3E%3Crect width='1100' height='220' fill='%231b5a86'/%3E%3C/svg%3E"></div></div><img id="native-logo" class="_3NBxSLAZLbbbnul8KfDFjw" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='40'%3E%3Crect width='160' height='40' fill='%234b6a86'/%3E%3C/svg%3E"></header><div id="native-playbar">Native playbar remains Steam owned</div><div id="tabs"></div><div class="row"><aside id="native-sidebar" class="sidebar"><div role="region"><h2>Notes</h2><div><div>Native notes remain available</div></div></div></aside><main class="main"><div id="native-notice">Non-Steam shortcut</div></main></div></div><pre id="result"></pre><script>(${browserChecks.toString()})(${serialize(sources)},${process.env.LINKED_PREPAINT_ONLY === '1'});document.currentScript.remove();</script></body></html>`);
 const profile = path.join(scratch, 'edge-profile');
 const child = spawn(edge, ['--headless=new', '--disable-gpu', '--disable-background-networking', '--no-first-run',

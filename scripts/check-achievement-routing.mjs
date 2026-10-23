@@ -8,9 +8,9 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const edge = process.env.CLOUD_BROWSER_EXECUTABLE || 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
 assert(fs.existsSync(edge), `Edge executable missing: ${edge}`);
 const sourceFiles = {
-  'class-module-cache': 'frontend/steam/class-module-cache.ts',
+  'pure-class-factory': 'frontend/steam/gamepad/components/pure-class-factory.ts', 'class-module-cache': 'frontend/steam/class-module-cache.ts',
   css: 'frontend/steam/css.ts', 'native-dom': 'frontend/steam/native-dom.ts',
-  'class-module-cache': 'frontend/steam/class-module-cache.ts', SteamWebpackRuntime: 'frontend/steam/modules/SteamWebpackRuntime.ts',
+  'pure-class-factory': 'frontend/steam/gamepad/components/pure-class-factory.ts', 'class-module-cache': 'frontend/steam/class-module-cache.ts', SteamWebpackRuntime: 'frontend/steam/modules/SteamWebpackRuntime.ts',
   'library-details': 'frontend/steam/library-details.ts', 'playbar-visibility': 'frontend/steam/playbar-visibility.ts',
   'achievement-playbar-space': 'frontend/steam/achievement-playbar-space.ts',
   'native-route': 'frontend/features/library/native-route.ts', navigation: 'frontend/features/achievements/navigation.ts',

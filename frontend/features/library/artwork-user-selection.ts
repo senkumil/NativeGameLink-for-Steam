@@ -16,7 +16,7 @@ import {
 	type CommunityArtworkSelection,
 	type CommunityArtworkSlot,
 } from './artwork-selection-storage';
-import { hasPendingNativeAssetWrites, writeNativeAsset } from './native-asset-write';
+import { nativeAssetWriteBlocked, writeNativeAsset } from './native-asset-write';
 
 const SLOT_TYPES: Record<'portrait' | 'hero' | 'logo' | 'wide', number> = { portrait: 0, hero: 1, logo: 2, wide: 3 };
 
@@ -31,7 +31,7 @@ export async function applyCommunityArtworkSelection(
 	}
 	const apps = (window as any).SteamClient?.Apps;
 	const isCurrent = captureArtworkApplicationCurrent(targetAppId, steamAppId);
-	if (hasPendingNativeAssetWrites(targetAppId)) return { complete: false, slots: [], missing: ['native_write_pending'], communitySlots: [] };
+	if (nativeAssetWriteBlocked(targetAppId)) return { complete: false, slots: [], missing: ['native_write_pending'], communitySlots: [] };
 	const slots: CommunityArtworkSlot[] = ['portrait', 'hero', 'logo', 'wide', 'icon'];
 	const chosenSlots = slots.filter(slot => Boolean(selection?.[slot]));
 	if (!chosenSlots.length || !chosenSlots.every(slot => isTrustedArtworkChoiceUrl(selection[slot]?.url))) {
@@ -74,7 +74,7 @@ export async function applyCommunityArtworkSelection(
 						backendLog(`Steam artwork API failed (${item.slot}) for ${steamAppId}; trying grid-file fallback: ${String(error)}`);
 					}
 				}
-				if (!saved && !hasPendingNativeAssetWrites(targetAppId)) {
+				if (!saved && !nativeAssetWriteBlocked(targetAppId, `artwork-${item.imageType}`)) {
 					try {
 						const raw = await writeAssetWithDeadline(guard => saveShortcutArtworkBackend({ request_json: JSON.stringify({
 							shortcut_app_id: targetAppId, steam_app_id: steamAppId, image_type: item.imageType,
@@ -90,7 +90,7 @@ export async function applyCommunityArtworkSelection(
 			}
 			// Fallback: If dataUrl was null (e.g. CORS blocked CEF fetch) or base64 failed,
 			// download directly on backend using the verified URL.
-			if (!saved && item.url && !hasPendingNativeAssetWrites(targetAppId)) {
+			if (!saved && item.url && !nativeAssetWriteBlocked(targetAppId, `artwork-${item.imageType}`)) {
 				try {
 					const raw = await writeAssetWithDeadline(guard => saveShortcutArtworkBackend({ request_json: JSON.stringify({
 						shortcut_app_id: targetAppId, steam_app_id: steamAppId, image_type: item.imageType,
@@ -110,7 +110,7 @@ export async function applyCommunityArtworkSelection(
 	}
 
 	// 2. Apply icon slot if chosen
-	if (selection.icon && isCurrent() && !hasPendingNativeAssetWrites(targetAppId)) {
+	if (selection.icon && isCurrent() && !nativeAssetWriteBlocked(targetAppId, 'icon')) {
 		try {
 			const dataUrl = await imageUrlToBase64(selection.icon.url);
 			let saved = false;

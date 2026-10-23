@@ -10,7 +10,8 @@ import { ensureLocalPlaybarStat } from './playbar';
 import {
 	clearLocalAchievementRequestCache,
 	fetchLocalAchievementData,
-	publishAchievementUpdate,
+	publishOptimisticAchievementUpdate,
+	releaseOptimisticAchievementUpdate,
 	subscribeLocalAchievementData,
 	type LocalAchievementUpdate,
 } from './service';
@@ -299,6 +300,8 @@ export function installLocalAchievementUI(doc: Document): void {
  * is published immediately, even when Steam's Properties window is a separate
  * document from the Library surface. */
 function performLocalAchievementRefresh(target?: LocalAchievementRefreshTarget): void {
+	releaseOptimisticAchievementUpdate(target?.steamAppId == null ? undefined : String(target.steamAppId),
+		target?.stateAppId == null ? '' : String(target.stateAppId));
 	if (!target?.steamAppId) {
 		clearLocalAchievementCache();
 	}
@@ -323,7 +326,7 @@ function installAchievementRefreshStorageListener(): void {
 			try {
 				const payload = JSON.parse(event.newValue || '') as LocalAchievementUpdate | null;
 				if (payload?.steamAppId && payload?.data) {
-					publishAchievementUpdate({
+					publishOptimisticAchievementUpdate({
 						steamAppId: String(payload.steamAppId),
 						stateAppId: payload.stateAppId ? String(payload.stateAppId) : '',
 						data: payload.data,
@@ -347,7 +350,7 @@ function broadcastLocalAchievementRefresh(target?: LocalAchievementRefreshTarget
 }
 
 export function broadcastOptimisticAchievementUpdate(update: LocalAchievementUpdate): void {
-	publishAchievementUpdate(update);
+	publishOptimisticAchievementUpdate(update);
 	try {
 		localStorage.setItem(OPTIMISTIC_ACHIEVEMENT_STORAGE_KEY, JSON.stringify({
 			...update,
@@ -365,6 +368,7 @@ export function refreshLocalAchievementUI(target?: LocalAchievementRefreshTarget
 }
 
 export function disposeAchievementRuntime(): void {
+	releaseOptimisticAchievementUpdate();
 	if (achievementRefreshStorageListener) window.removeEventListener('storage', achievementRefreshStorageListener);
 	achievementRefreshStorageListener = null;
 	for (const doc of Array.from(localAchievementDocuments)) disposeLocalAchievementUI(doc);

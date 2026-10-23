@@ -167,6 +167,8 @@ try {
       if (!native) {
         nativeLayout = true;
         check(info.ensureNativeInfoPanel(document, refreshed) === panel, 'Restored modules preserve the existing panel');
+        check(panel.dataset.gdlNativeLayout === '1' && panel.querySelector('.gdl-game-info-grid').classList.contains(oracle.classes.info.InnerContainer),
+          'A fallback panel actually adopts native layout classes when modules arrive without changing game or metadata');
         await frames(); compareIcons(panel, 'modules available after fallback creation');
       }
       shortcut++;

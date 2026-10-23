@@ -20,7 +20,7 @@ local detection_store_cache, detection_appdetails_cache, detection_appinfo_cache
 -- never look like near-certain identification unless the candidate's official
 -- Steam launch configuration also contains the executable we are inspecting.
 local DETECTION_UNVERIFIED_ALIAS_MAX_SCORE = 84
-local DETECTION_MODEL_VERSION = "v12"
+local DETECTION_MODEL_VERSION = "v13"
 -- Pure text matching and the maintained alias catalogue live in focused
 -- modules; this detector remains responsible for filesystem/network evidence.
 local detection_text = deps.shortcut_detection_text
@@ -223,7 +223,7 @@ local function detection_find_appmanifest(exe_path)
     return nil, nil
 end
 local function detection_store_search(query, language, recovery_mode, budget)
-    local cleaned = detection_trim(query)
+    local cleaned = deps.shortcut_detection_catalog.search_query(query)
     if #cleaned < 2 then return {}, false end
     local lang = language or "english"
     local cache_key = cleaned:lower() .. "\31" .. lang
@@ -680,7 +680,7 @@ function M.detect_game_candidates(request_json)
         if not common or not common.name then common = details end
         if type(common) ~= "table" then return end
         if common.name and tostring(common.name) ~= "" then
-            candidate.name = tostring(common.name)
+            candidate.name = tostring((details and details.name) or common.name)
             local norm_name = detection_normalize(candidate.name)
             if norm_name == detection_normalize(title_cleaned) or norm_name == detection_normalize(request.title) then
                 if is_short_title then
@@ -700,10 +700,16 @@ function M.detect_game_candidates(request_json)
             if comp.remake_mismatch and not (candidate._reason_set and candidate._reason_set["remake_mismatch"]) then candidate.score = candidate.score - 30; detection_add_reason(candidate, "remake_mismatch") end
             if comp.is_collision then candidate.identity_collision = true; detection_add_reason(candidate, "identity_collision") end
         end
-        if (candidate.image == "" or candidate.image:find("header.jpg")) and common.header_image then
-            candidate.image = tostring(common.header_image)
+        local official_image = details and (details.header_image or details.capsule_image or details.capsule_imagev5)
+            or common.header_image
+        if official_image and tostring(official_image) ~= "" then
+            candidate.image = tostring(official_image)
         end
         local app_type = tostring(common.type or candidate.item_type or ""):lower()
+        local official_type = tostring(common.type or ""):lower()
+        local details_type = type(details) == "table" and tostring(details.type or ""):lower() or ""
+        candidate._official_type_verified = official_type == "game" or official_type == "app"
+            or details_type == "game" or details_type == "app"
         if app_type ~= "" and app_type ~= "game" and app_type ~= "app" then
             candidate.score = candidate.score - 40; detection_add_reason(candidate, "non_game_result")
         end
@@ -731,15 +737,31 @@ function M.detect_game_candidates(request_json)
     end
     local initial_validation_count = strong_local_candidate and 1 or math.min(#candidates, 3)
     for i = 1, initial_validation_count do validate_candidate(candidates[i]) end
-    table.sort(candidates, function(a, b)
-        if a.executable_match ~= b.executable_match then return a.executable_match end
-        return a.score == b.score and tonumber(a.appid) < tonumber(b.appid) or a.score > b.score
-    end)
+    local function rank_viable()
+        local viable = {}
+        for _, candidate in ipairs(candidates) do
+            if not identity_context.rejected[candidate.appid]
+                and deps.shortcut_detection_catalog.viable_candidate(candidate, identity_context) then viable[#viable + 1] = candidate end
+        end
+        table.sort(viable, function(a, b)
+            if a.executable_match ~= b.executable_match then return a.executable_match end
+            return a.score == b.score and tonumber(a.appid) < tonumber(b.appid) or a.score > b.score
+        end)
+        candidates = viable
+    end
+    rank_viable()
     local top, second = candidates[1], candidates[2]
     local top_gap = (top and second) and (top.score - second.score) or 100
     local has_proof = top and (top.direct or top.executable_match)
-    if (not has_proof or top_gap < 15 or (top and top.identity_collision) or (top and top._reason_set and top._reason_set["non_game_result"])) and #candidates > 3 then
-        for i = 4, math.min(#candidates, 6) do validate_candidate(candidates[i]) end
+    if not has_proof or top_gap < 15 then
+        local validated = initial_validation_count
+        -- Rejected initial hits must not consume positions in the next window.
+        -- Validate the surviving, not-yet-checked candidates, at most six total.
+        for _, candidate in ipairs(candidates) do
+            if validated >= 6 then break end
+            if not candidate._validated then validate_candidate(candidate); validated = validated + 1 end
+        end
+        rank_viable()
     end
     for _, candidate in ipairs(candidates) do
         if candidate.alias_hint and candidate.alias_primary and not candidate.identity_collision then
@@ -753,38 +775,44 @@ function M.detect_game_candidates(request_json)
             candidate.score = math.min(candidate.score, DETECTION_UNVERIFIED_ALIAS_MAX_SCORE)
             detection_add_reason(candidate, "alias_requires_confirmation")
         end
+        if not candidate._official_type_verified and not candidate.direct then
+            candidate.score = math.min(candidate.score, DETECTION_UNVERIFIED_ALIAS_MAX_SCORE)
+            candidate.validation_state = "partial"
+            detection_add_reason(candidate, "official_metadata_unavailable")
+        end
         candidate.score = math.max(0, math.min(99, math.floor(candidate.score + 0.5)))
     end
     table.sort(candidates, function(a, b)
         if a.executable_match ~= b.executable_match then return a.executable_match end
         return a.score == b.score and tonumber(a.appid) < tonumber(b.appid) or a.score > b.score
     end)
+    -- Different releases/editions can publish exactly the same executable name.
+    -- That launch match proves compatibility with each candidate, not which
+    -- AppID the selected installation belongs to. An exact shortcut title must
+    -- not hide this conflict or turn an AppID-order tie into an automatic link.
+    local shared_executable_matches = 0
+    for _, candidate in ipairs(candidates) do
+        if candidate.executable_match and not identity_context.rejected[candidate.appid]
+            and deps.shortcut_detection_catalog.viable_candidate(candidate, identity_context) then
+            shared_executable_matches = shared_executable_matches + 1
+        end
+    end
     local output = {}
     for index = 1, #candidates do
         local candidate = candidates[index]
         if #output >= 6 then break end
-        if deps.shortcut_detection_catalog.viable_candidate(candidate, identity_context)
-            and (candidate.alias_hint or (candidate.image or ""):find("header.jpg")) then
-            local official = detection_fetch_appdetails(candidate.appid, language, budget)
-            if type(official) == "table" then
-                deps.shortcut_detection_catalog.reject_official(candidate.appid, official, identity_context)
-                if official.name and tostring(official.name) ~= "" then candidate.name = tostring(official.name) end
-                if official.type then candidate.item_type = tostring(official.type) end
-                local off_img = official.header_image or official.capsule_image or official.capsule_imagev5
-                if off_img and tostring(off_img) ~= "" then candidate.image = tostring(off_img) end
-            end
-        end
         if not identity_context.rejected[candidate.appid]
             and deps.shortcut_detection_catalog.viable_candidate(candidate, identity_context) then
         local rset = candidate._reason_set or {}
-        candidate._reason_set = nil; candidate._validated = nil
         local runner_up = candidates[index == 1 and 2 or 1]
         candidate.score_gap = runner_up and math.max(0, candidate.score - runner_up.score) or candidate.score
         local exact_identity = rset["official_title_exact"] == true or rset["title_exact"] == true
             or (candidate.alias_primary == true and candidate.alias_unique == true and candidate.score >= 90)
         candidate.ambiguous = candidate.identity_collision == true
+            or (candidate.executable_match == true and shared_executable_matches > 1)
             or (index == 1 and runner_up ~= nil and candidate.score_gap < 12 and not exact_identity)
-        if candidate.direct or candidate.executable_match then candidate.evidence_tier = "proof"
+        if candidate.validation_state == "partial" then candidate.evidence_tier = candidate.score >= 65 and "supporting" or "hint"
+        elseif candidate.direct or candidate.executable_match then candidate.evidence_tier = "proof"
         elseif candidate.score >= 88 or rset["pe_product_exact"] or rset["official_title_exact"] then candidate.evidence_tier = "strong"
         elseif candidate.score >= 65 then candidate.evidence_tier = "supporting"
         else candidate.evidence_tier = "hint" end
@@ -793,8 +821,9 @@ function M.detect_game_candidates(request_json)
             if rset[r] then table.insert(neg, r) end
         end
         candidate.negative_reasons = neg
-        candidate.confidence = (candidate.score >= 90 and candidate.identity_collision ~= true and (not candidate.ambiguous or exact_identity))
+        candidate.confidence = (candidate.score >= 90 and candidate.identity_collision ~= true and not candidate.ambiguous)
             and "high" or (candidate.score >= 70 and "medium" or "low")
+        candidate._reason_set = nil; candidate._validated = nil; candidate._official_type_verified = nil
         table.insert(output, candidate)
         end
     end

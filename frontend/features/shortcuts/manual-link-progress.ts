@@ -1,10 +1,12 @@
-import { getLinkJobCompletion, getLinkJobCompletedShortcutAppId, getPendingLinkJob, PENDING_LINK_JOBS_CHANGED_EVENT, type PendingLinkJob } from './link-job-queue';
+import { getLinkJobCompletion, getLinkJobCompletedShortcutAppId, getLinkJobResourcesPending, getPendingLinkJob, PENDING_LINK_JOBS_CHANGED_EVENT, type PendingLinkJob } from './link-job-queue';
+import { findMappingForShortcut } from './registry';
 
 export type ManualLinkProgress = {
 	status: 'queued' | 'running' | 'failed' | 'completed' | 'cancelled';
 	shortcutAppId: number | null;
 	phase?: 'identity' | 'assets';
 	attempts: number;
+	resourcesPending?: boolean;
 };
 
 /** Subscribe before the initial read so a fast queue completion cannot be lost.
@@ -30,10 +32,18 @@ export function observeManualLinkJob(
 			stop();
 			const completed = getLinkJobCompletion(job.id, job.createdAt) === true;
 			onChange({ status: completed ? 'completed' : 'cancelled',
-				shortcutAppId: completed ? getLinkJobCompletedShortcutAppId(job.id, job.createdAt) || shortcutAppId : shortcutAppId, attempts: 0 });
+				shortcutAppId: completed ? getLinkJobCompletedShortcutAppId(job.id, job.createdAt) || shortcutAppId : shortcutAppId,
+				resourcesPending: completed && getLinkJobResourcesPending(job.id, job.createdAt), attempts: 0 });
 			return;
 		}
 		shortcutAppId = current.shortcutAppId || shortcutAppId;
+		// Only an acknowledged transaction can complete the link. Missing optional
+		// artwork continues through the resource queue without holding the dialog open.
+		if (current.linkCommitted && current.status !== 'failed' && findMappingForShortcut(shortcutAppId, current.title, current.shortcutExecutable) === current.steamAppId) {
+			stop();
+			onChange({ status: 'completed', shortcutAppId, attempts: current.attempts, resourcesPending: true });
+			return;
+		}
 		if (current.status === 'failed') stop();
 		onChange({ status: current.status === 'staged' ? 'queued' : current.status, shortcutAppId,
 			phase: current.phase, attempts: current.attempts });

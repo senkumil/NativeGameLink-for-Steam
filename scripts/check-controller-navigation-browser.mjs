@@ -172,6 +172,11 @@ try {
       return exports;
     }
     const controller = load('controller'), early = load('early'), sections = load('sections');
+    // The shared sidebar stylesheet also targets this panel. It must not add
+    // another painted surface above Steam's cloned controller section shell.
+    const sharedSurface = document.createElement('style');
+    sharedSurface.textContent = '#gdl-controller-section .gdl-native-sidebar-panel{background:rgba(18,24,32,.32)!important}';
+    document.head.appendChild(sharedSurface);
     const commit = target => {
       selected = target; generation++;
       for (const element of [nativeHeader, anchor, column]) element.dataset.nativeAppid = target.shortcutAppId;
@@ -250,7 +255,7 @@ try {
       const beforePaintControlRect = rectangle(beforePaintControl), beforePaintAchievementRect = rectangle(beforePaintAchievement);
       await frame();
       check(JSON.stringify(order()) === JSON.stringify(['gdl-controller-section', 'gdl-achievements-section']),
-        'Deferred scroll work does not change sidebar order or recreate the controller after paint');
+        'The first paint does not change sidebar order or recreate the controller');
       check(noOverlap(rectangle(exactController(selected)), rectangle(document.getElementById('gdl-achievements-section')))
         && sameRectangle(beforePaintControlRect, rectangle(exactController(selected)))
         && sameRectangle(beforePaintAchievementRect, rectangle(document.getElementById('gdl-achievements-section'))),
@@ -271,10 +276,36 @@ try {
       }
       check(exactController(selected) === active && document.querySelector('#gdl-achievements-section .gdl-la-summary') === activeSummary,
         'One hundred repeated core/controller synchronizations preserve the mounted nodes');
+      const card = active.querySelector('.gdl-controller-card');
+      const surface = () => {
+        const css = getComputedStyle(card);
+        return [css.background, css.borderColor, css.boxShadow, css.backdropFilter].join('|');
+      };
+      const unscrolledSurface = surface(), readsBeforeScroll = storeReads, pendingBeforeScroll = frames.size;
+      check(getComputedStyle(card).backgroundColor === 'rgba(0, 0, 0, 0)' && getComputedStyle(card).borderWidth === '0px'
+        && getComputedStyle(card).boxShadow === 'none' && getComputedStyle(card).backdropFilter === 'none',
+        'Controller content remains transparent and delegates its glass to the native section shell');
+      column.style.height = '160px'; column.style.overflowY = 'auto'; column.scrollTop = 20;
+      for (let index = 0; index < 100; index++) {
+        column.dispatchEvent(new Event('scroll'));
+        window.dispatchEvent(new Event('resize'));
+      }
+      check(storeReads === readsBeforeScroll && frames.size === pendingBeforeScroll,
+        'One hundred scroll/resize events schedule no controller scan or animation frame');
+      await frame();
+      check(surface() === unscrolledSurface && !active.hasAttribute('data-gdl-controller-scrolled'),
+        'Scrolling preserves the same controller glass surface without a separate translucency state');
+      column.scrollTop = 0; column.style.height = ''; column.style.overflowY = '';
+      // Native commits can remove a section independently of device events.
+      // The scoped recovery observer must still restore its current owner.
+      active.remove(); await frame(); await frame();
+      const recovered = exactController(selected);
+      check(recovered && recovered !== active && order()[0] === 'gdl-controller-section',
+        'A native section removal still recovers the current controller in its canonical position');
       sections.renderLinkedSidebarCore(document, layout, { ...selected, data: { name: 'Fixture', achievements: { total: 50 } }, friendResult: { totalCount: 1 } });
       check(JSON.stringify(order()) === JSON.stringify(['gdl-controller-section', 'gdl-friends-section', 'gdl-achievements-section']),
         'Cached Friends keep the canonical Controller, Friends, Achievements order');
-      active.querySelector('.gdl-controller-link').click();
+      recovered.querySelector('.gdl-controller-link').click();
       check(opened.length === 1 && opened[0] === Number(selected.shortcutAppId),
         'Only the current destination can open its own controller configurator');
 
@@ -285,7 +316,7 @@ try {
       column.dataset.nativeAppid = selected.shortcutAppId;
       const unauthorized = selections.find(target => target.shortcutAppId !== selected.shortcutAppId);
       controller.syncControllerSidebarSection(document, layout, unauthorized.steamAppId, unauthorized.shortcutAppId);
-      check(exactController(selected) === active, 'A stale target callback cannot replace the current controller section');
+      check(exactController(selected) === recovered, 'A stale target callback cannot replace the current controller section');
 
       controllers = [];
       for (const callback of [...callbacks]) callback();

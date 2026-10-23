@@ -78,6 +78,7 @@ const nativeLocales = Object.fromEntries(['english', 'latam'].map(language => {
 const sources = Object.fromEntries([
   ['feed', 'frontend/features/library/social/feed.ts'], ['news', 'frontend/features/library/news.ts'],
   ['activity', 'frontend/features/library/styles/activity.ts'], ['inject', 'frontend/features/library/styles/inject.ts'],
+  ['activity-footer', 'frontend/features/library/activity-footer.ts'],
   ['activity-summary', process.env.NGL_ACTIVITY_SUMMARY_BASELINE || 'frontend/features/library/activity-summary.ts'],
   ['community-order', 'frontend/features/library/community-order.ts'], ['text', 'frontend/core/text.ts'],
 ].map(([key, file]) => [key, ts.transpileModule(fs.readFileSync(file, 'utf8'), {
@@ -151,13 +152,13 @@ try {
         '../../../api/backend': {}, '../../api/backend': {}, '../../../steam/social': {}, './personas': {}, './host': {},
         '../../../steam/localization': localization, '../../steam/localization': localization,
         '../../../steam/css': cssModule,
-        '../../steam/css': { EVENT_CLASSES: () => classes, FEED_CLASSES: () => ({}) },
+        '../../steam/css': cssModule,
         '../../core/cache': { CACHE_TTL: {}, CACHE_RETENTION: {}, cacheRead: () => null, cacheGet: () => null, cacheSet() {} },
         '../../core/request-cache': { RetryingRequestCache: class { peek() { return null; } } },
         '../../core/game-data': { getSynchronousGameData: () => null },
       };
-      const aliases = { '../../../core/text': 'text', '../news': 'news',
-        './community-order': 'community-order', './inject': 'inject', '../activity-summary': 'activity-summary' };
+      const aliases = { '../../core/text': 'text', '../../../core/text': 'text', '../news': 'news',
+        './community-order': 'community-order', './inject': 'inject', '../activity-footer': 'activity-footer', '../activity-summary': 'activity-summary' };
       const load = key => {
         if (modules[key]) return modules[key];
         const exports = modules[key] = {};

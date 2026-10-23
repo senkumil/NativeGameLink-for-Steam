@@ -6,7 +6,7 @@ const root = process.cwd();
 const failures = [];
 const mutableRootFiles = [
   'mappings.json', 'mappings.backup.json',
-  'achievement_base_path.txt', 'achievement_paths.json', 'achievement_options.json',
+  'achievement_base_path.txt', 'achievement_paths.json', 'achievement_options.json', 'community_item_options.json',
   'playtime_sessions.json', 'sessions.json',
 ];
 

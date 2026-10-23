@@ -53,6 +53,7 @@ local LAZY_MODULES = {
     shortcut_registry = "shortcut_registry",
     shortcut_logo_inventory = "shortcut_logo_inventory",
     community = "community",
+    community_item_settings = "community_item_settings",
     news = "news",
     social = "social",
     artwork_candidates = "artwork_candidates",
@@ -115,10 +116,12 @@ function fetch_community_content(steam_app_id, language)
     local ok, res = pcall(module("community").fetch_community_content, steam_app_id, language)
     return ok and res or cjson.encode({ items = {}, available = false, error = "backend_error" })
 end
-function fetch_community_items_catalog(steam_app_id, language)
-    local ok, res = pcall(module("community").fetch_community_items_catalog, steam_app_id, language)
+function fetch_community_items_catalog(steam_app_id, language, catalog_part, catalog_start)
+    local ok, res = pcall(module("community").fetch_community_items_catalog, steam_app_id, language, catalog_part, catalog_start)
     return ok and res or cjson.encode({ error = "backend_error" })
 end
+function get_game_community_item_options(request_json) return module("community_item_settings").get_options(request_json) end
+function set_game_community_item_options(request_json) return module("community_item_settings").set_options(request_json) end
 function fetch_library_assets(request_json) return module("artwork").fetch_library_assets(request_json) end
 function fetch_community_artwork(request_json)
     local ok, res = pcall(module("artwork").fetch_community_artwork, request_json)
@@ -175,6 +178,7 @@ function factory_reset(request_json)
     pcall(function() module("artwork").clear_all_linked_artworks() end)
     pcall(function() module("mappings").clear_all() end)
     pcall(function() module("achievements").clear_all_settings() end)
+    pcall(function() module("community_item_settings").clear_all() end)
     if delete_playtime then
         pcall(function() module("playtime").clear_all() end)
     end

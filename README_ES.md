@@ -10,6 +10,12 @@ Una vez vinculado, el juego deja de sentirse como un acceso directo vacío: reci
 
 > NativeGameLink modifica la presentación local de los accesos directos vinculados. No concede licencias, propiedad de juegos, objetos de inventario, almacenamiento de Steam Cloud ni logros oficiales para el perfil de Steam.
 
+## v5.0.0
+
+Esta versión mejora la vinculación y su recuperación, acerca el diseño de escritorio al comportamiento nativo de Steam, organiza las Propiedades por juego y comparte los ajustes locales de tarjetas e insignias con Big Picture.
+
+Consulta las [notas de lanzamiento](RELEASE_NOTES_ES.md), las [release notes in English](RELEASE_NOTES.md) y el [inventario de correcciones de la semana](WEEKLY_FIXES.md) para ver todos los cambios.
+
 ---
 
 ## 🎮 Una experiencia de Biblioteca de estilo nativo
@@ -22,9 +28,9 @@ NativeGameLink reconstruye las superficies que normalmente faltan en un acceso d
 - **Feed de actividad y noticias** que combina eventos de socios, anuncios, actualizaciones importantes, parches, hotfixes, ofertas, eventos y lanzamientos de DLC en orden cronológico.
 - **Editor de estados** con emoticonos e historial de actividad independiente para cada acceso directo.
 - **Amigos que juegan** con perfiles, avatares, tiempo reciente, reseñas, capturas, vídeos y actividad cuando Steam permite obtenerla.
-- **Contenido de la comunidad** con capturas, ilustraciones y guías que aparecen progresivamente para acelerar la carga inicial.
+- **Contenido de la comunidad** con capturas, ilustraciones, vídeos y guías que aparecen progresivamente para acelerar la carga inicial.
 - **Panel y ventana de logros** con grupos desbloqueados y bloqueados, progreso, descripciones, fechas, porcentajes globales e iconos nativos.
-- **Presentación de cromos/tarjetas** con recursos oficiales de Steam Community y el Mercado, insignia, colección, expansión 3D centrada, iluminación por cursor y reflejo foil cuando los metadatos lo permiten.
+- **Presentación de cromos/tarjetas** con recursos oficiales de Steam Community y el Mercado, insignia, colecciones normales/foil, ampliación centrada, inclinación 3D limitada e iluminación direccional.
 - **Secciones opcionales de DLC y Workshop** validadas contra el AppID vinculado.
 - **Las notas y áreas multimedia de Steam permanecen disponibles** junto al contenido añadido.
 
@@ -115,6 +121,17 @@ Después de confirmar, NativeGameLink:
 4. Conserva el destino de lanzamiento original.
 5. Termina la identidad y los recursos en segundo plano aunque cierres la ventana de Propiedades.
 
+### Propiedades por juego
+
+La ventana **Propiedades** del acceso directo organiza los ajustes de NativeGameLink en cuatro grupos desplegables:
+
+- **Juego vinculado:** asociación actual, Steam AppID, sugerencias, vinculación y desvinculación.
+- **Inicio y tiempo de juego:** seguimiento local del tiempo y opción de omitir un launcher compatible.
+- **Logros:** progreso simulado, selección individual y archivo local de progreso.
+- **Tarjetas e insignias:** colección local normal/foil, tarjetas seleccionadas e insignia del juego.
+
+El grupo de tarjetas e insignias se oculta cuando el catálogo completo confirma que el juego no tiene ninguna. Un fallo temporal de carga permite reintentar. Estas opciones se aplican localmente a ese acceso vinculado y se comparten con la Biblioteca de escritorio y Big Picture; no añaden objetos ni EXP a tu cuenta de Steam.
+
 ---
 
 ## 🖼️ Ilustraciones automáticas y colocación nativa
@@ -181,7 +198,7 @@ Puedes configurar el origen de los logros de tres formas:
 
 1. **Búsqueda automática por AppID (Por defecto):** Busca automáticamente en `%APPDATA%\SteamAchievements\<AppID>\` y en las carpetas locales configuradas.
 2. **Carpeta global:** Abre los ajustes de NativeGameLink y selecciona tu carpeta raíz de logros.
-3. **Ruta personalizada por juego:** Haz clic derecho en el acceso directo → **Propiedades** → **Juego vinculado** y selecciona un archivo `achievements.json` concreto o su carpeta contenedora.
+3. **Ruta personalizada por juego:** Haz clic derecho en el acceso directo → **Propiedades** → **Logros** → **Archivo de progreso de logros** e introduce un archivo `achievements.json` concreto o su carpeta contenedora.
 
 ---
 
@@ -232,7 +249,7 @@ Cuando la versión de Steam ofrece los datos necesarios, NativeGameLink añade s
 
 - Ilustraciones oficiales de cromos obtenidas desde Steam Community y el Mercado.
 - Insignia, experiencia, cantidades obtenidas/restantes y cuadrícula adaptable.
-- Expansión interactiva con inclinación 3D, brillo direccional, glow del cursor y reflejo holográfico exclusivo para foil.
+- Ampliación interactiva con inclinación 3D limitada, brillo direccional y un efecto de iluminación sobre textura de papel que sigue al cursor.
 - Portadas de DLC validadas y enlaces a la tienda.
 - Vista previa y acceso a Workshop cuando el título lo admite.
 
@@ -251,7 +268,7 @@ Las ventanas propias del complemento, mensajes de detección, ajustes y resultad
 ## 📥 Instalación
 
 1. Instala [Millennium](https://steambrew.app/) para Steam.
-2. Descarga la versión más reciente `NativeGameLink-for-Steam.zip`.
+2. Descarga `NativeGameLinkForSteam-v5.0.0-CLEAN-INSTALL.zip` desde el [lanzamiento v5.0.0](https://github.com/senkumil/NativeGameLink-for-Steam/releases/tag/v5.0.0). Este es el paquete para instalar el complemento; `NativeGameLinkForSteam-v5.0.0-SOURCE.zip` está destinado al desarrollo.
 3. Descomprime el archivo y copia la carpeta incluida `NativeGameLinkForSteam` dentro de `millennium\plugins` de **la instalación de Steam que realmente utilizas**. No asumas que Steam está instalado en `C:`.
 
    - El destino siempre es relativo a la carpeta real de tu Steam:
@@ -268,26 +285,26 @@ Las ventanas propias del complemento, mensajes de detección, ajustes y resultad
 
 1. En Steam, selecciona **Juegos → Añadir un producto que no es de Steam a mi biblioteca...** y agrega el **ejecutable principal** del juego (evita seleccionar launchers o ejecutables intermediarios para que el tiempo de juego se registre correctamente).
 2. Abre el nuevo acceso directo en tu Biblioteca.
-3. Revisa la detección automática y pulsa **Vincular juego**.
-4. Espera el informe que confirma el nombre, icono y recursos aplicados.
+3. Revisa las versiones de Steam sugeridas y la ruta completa del juego, selecciona el candidato correcto y pulsa **Vincular juego**. Si la coincidencia es incierta, revisa las alternativas o introduce el AppID manualmente.
+4. Espera la confirmación del vínculo. Los recursos visuales disponibles pueden seguir cargando en segundo plano.
 5. La página vinculada cargará la información disponible y sus secciones opcionales.
 
 Si la detección es incierta o no aparece:
 
 1. Haz clic derecho sobre el acceso y abre **Propiedades**.
-2. En **Juego vinculado**, revisa los candidatos visuales o pega un AppID/enlace de la tienda.
+2. Despliega **Juego vinculado**, revisa los candidatos sugeridos o pega un AppID/enlace de la tienda. Pulsa **Reintentar búsqueda** si la búsqueda no pudo completarse.
 3. Selecciona la versión correcta y pulsa **Guardar**.
 
 ---
 
 ## Desarrollo de Big Picture
 
-La [implementación y matriz de aceptación de Big Picture](docs/BIG_PICTURE_BASES.md)
-documenta identidad, aislamiento, navegación, capacidades y pruebas. Ejecuta
-`npm run check:big-picture` para verificar la integración. Las cuatro pestañas
-y sus flujos están implementados; la comparación visual 1:1 y la validación
-física con controles en Steam siguen pendientes. Consulta también el
-[informe de integración y recursos](docs/VERIFICACION_2026-10-18.md).
+Usa el paquete de código fuente y ejecuta `npm install`, seguido de
+`npm run check:big-picture`. Las comprobaciones automáticas cubren el aislamiento
+por documento y acceso directo, la limpieza del ciclo de vida, la navegación y
+propiedad del foco, los modales, los logros y los flujos de tarjetas.
+Los escenarios de navegador y runtime verifican estos contratos; no acreditan
+paridad visual exacta ni validación física con mandos o Steam Deck dentro de Steam.
 
 ---
 

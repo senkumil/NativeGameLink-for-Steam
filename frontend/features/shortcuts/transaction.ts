@@ -326,10 +326,10 @@ export function getActiveTransaction(shortcutAppId: number): LinkTransaction | n
 	return null;
 }
 
-export function clearActiveTransaction(shortcutAppId: number): void {
+export function clearActiveTransaction(shortcutAppId: number, reason = 'explicit_clear'): void {
 	const tx = activeTransactions.get(shortcutAppId);
 	if (tx) {
-		tx.abort('explicit_clear');
+		tx.abort(reason);
 		activeTransactions.delete(shortcutAppId);
 	}
 }

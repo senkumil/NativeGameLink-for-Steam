@@ -50,11 +50,17 @@ export interface SteamCommunityBadgeAsset {
 export interface SteamCommunityItemsCatalog {
 	appid?: number;
 	cards: SteamCommunityCardAsset[];
+	/** Alternate set definitions; never appended to the native default collection. */
+	foil_cards?: SteamCommunityCardAsset[];
 	badges?: SteamCommunityBadgeAsset[];
 	foil_badge?: SteamCommunityBadgeAsset | null;
 	source?: string;
 	error?: string;
 	transient_error?: boolean;
+	/** Complete definition sets, independent of account ownership. */
+	cards_complete?: boolean;
+	badges_complete?: boolean;
+	loading?: boolean;
 }
 
 export interface SteamGameData {

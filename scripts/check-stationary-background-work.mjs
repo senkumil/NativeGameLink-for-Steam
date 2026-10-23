@@ -126,7 +126,7 @@ const renderer = load('frontend/features/library/renderer.ts', {
     refreshHistoricalSidebarSections: (_doc, _layout, _data, steam, assets) => writes.push(['history', steam, assets]),
   },
   './controller': { setupControllerSidebarWatcher: () => () => {}, getOwnedControllerSidebar: () => null, disposeControllerSidebarWatcher() {} },
-  './optional-sections': { renderOptionalStoreSections: () => ({ hasWorkshop: false, dlcIds: [] }) },
+  './optional-sections': { linkedStoreCapabilities: () => ({ hasWorkshop: false, dlcIds: [] }), renderOptionalStoreSections: () => ({ hasWorkshop: false, dlcIds: [] }) },
   './activity-view': {
     parkSharedActivityComposer() {},
     createActivityView: (_doc, _layout, options) => {

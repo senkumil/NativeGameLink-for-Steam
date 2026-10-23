@@ -10,6 +10,7 @@ import { clearAllDismissedShortcuts } from './dismissed';
 import { clearAllLinkHistory } from './link-history';
 import { clearShortcutDetectionCache } from './detection';
 import { clearShortcutAchievementSettingsCaches } from './achievement-properties';
+import { clearCommunityItemOptions } from '../../core/community-item-options';
 import { clearLocalAchievementCache } from '../achievements/cache';
 import {
 	bumpFactoryResetEpoch,
@@ -48,6 +49,7 @@ async function withFactoryResetBudget<T>(label: string, operation: Promise<T>, t
 export async function performFactoryReset(options: FactoryResetOptions): Promise<FactoryResetResult> {
 	backendLog(`[NGL][FactoryReset] Starting factory reset (deletePlaytime=${options.deletePlaytime})`);
 	setFactoryResetInProgress(true);
+	clearCommunityItemOptions();
 	try {
 		// 1. Invalidate generations and abort all active link transactions
 		const epoch = bumpFactoryResetEpoch();

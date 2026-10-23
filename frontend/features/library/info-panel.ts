@@ -527,9 +527,7 @@ function setNativeInfoExpanded(
 			if (expanded && !infoAnimationTimers.has(doc)) {
 				setInfoPanelHeight(panel, nativeInfoPanelHeight(panel));
 			}
-			return;
-		}
-
+		} else {
 		panel.dataset.expanded = expanded ? '1' : '0';
 
 		cancelInfoAnimation(doc);
@@ -604,6 +602,7 @@ function setNativeInfoExpanded(
 				}
 			});
 		}
+		}
 	}
 	for (const button of Array.from(doc.querySelectorAll<HTMLElement>('[data-gdl-game-info-button="1"]'))) {
 		if (button.dataset.gameKey !== key) continue;
@@ -651,6 +650,35 @@ export function ensureNativeInfoPanel(doc: Document, model: NativeGameInfo): HTM
 		panel = null;
 	} else if (panel && panel.dataset.signature !== signature) {
 		updateNativeInfoPanelInPlace(doc, panel, model, signature);
+	}
+	if (panel && panel.dataset.gdlNativeLayout !== '1') {
+		const infoModule = GAME_INFO_CLASS_MODULE(doc), outerModule = GAME_INFO_OUTER_CLASS_MODULE(doc);
+		if (infoModule.native && outerModule.native) {
+			// A shortcut can be the first page in a fresh Steam window, before the
+			// private Info class exports exist. Upgrade the existing panel when they
+			// arrive; metadata equality is unrelated to readiness of the native UI.
+			panel.dataset.gdlNativeLayout = '1';
+			const expanded = panel.dataset.expanded === '1';
+			panel.className = `${outerModule.classes.AppGameInfoContainer || ''} ${outerModule.classes.Glassy || ''} ${expanded ? 'gdl-info-expanded' : 'gdl-info-collapsed'}`.trim();
+			addCssModuleClass(panel, expanded ? outerModule.classes.AppDetailsExpanded : outerModule.classes.AppDetailsCollapsed);
+			for (const [selector, className] of [
+				['.gdl-game-info-container', infoModule.classes.Container],
+				['.gdl-game-info-grid', infoModule.classes.InnerContainer],
+				['.gdl-info-portrait', infoModule.classes.Portrait],
+				['.gdl-info-portrait img', infoModule.classes.BoxArt],
+				['.gdl-info-description', `${infoModule.classes.Description || ''} ${infoModule.classes.SectionContainer || ''}`],
+				['.gdl-info-description-text', infoModule.classes.GameDescription],
+				['.gdl-info-stats', `${infoModule.classes.Stats || ''} ${infoModule.classes.SectionContainer || ''}`],
+				['.gdl-info-features', `${infoModule.classes.FeaturesList || ''} ${infoModule.classes.SectionContainer || ''}`],
+			]) {
+				const element = panel.querySelector(selector);
+				if (element) addCssModuleClass(element, className);
+			}
+			const shadow = doc.createElement('div'); shadow.className = outerModule.classes.GameInfoShadow || '';
+			panel.appendChild(shadow);
+			updateNativeInfoPanelInPlace(doc, panel, model, signature);
+			if (expanded) resizeFallbackInfoPanel(panel);
+		}
 	}
 	if (!panel) {
 		created = true;
@@ -777,6 +805,12 @@ export function ensureNativeInfoButton(doc: Document, model: NativeGameInfo): vo
 			} else if (button.dataset.gdlScrollTopActive !== '1' && !button.querySelector('.SVGIcon_Information')) {
 				normalizeInformationButtonIcon(button, playbarModule.native ? (classes.DotDotDot || '') : '');
 			}
+			const expanded = doc.getElementById('gdl-game-info-panel')?.dataset.expanded === '1';
+			button.classList.toggle('gdl-info-active', expanded);
+			if (button.getAttribute('aria-expanded') !== String(expanded)) button.setAttribute('aria-expanded', String(expanded));
+			const label = button.dataset.gdlScrollTopActive === '1' ? scrollTopButtonLabel() : infoButtonLabel(expanded);
+			if (button.getAttribute('aria-label') !== label) button.setAttribute('aria-label', label);
+			if (button.title !== label) button.title = label;
 			if (playbarModule.native) {
 				if (button.classList.contains('gdl-info-button-fallback')) button.classList.remove('gdl-info-button-fallback');
 				if (!hasCssModuleClass(button, classes.MenuButton)) addCssModuleClass(button, classes.MenuButton);
@@ -789,7 +823,7 @@ export function ensureNativeInfoButton(doc: Document, model: NativeGameInfo): vo
 				}
 				if (wrapper && wrapper !== button && !hasCssModuleClass(wrapper, classes.DotDotDot)) addCssModuleClass(wrapper, classes.DotDotDot);
 				const active = hasCssModuleClass(button, classes.MenuActive);
-				if (button.getAttribute('aria-expanded') === 'true') {
+				if (expanded) {
 					if (!active) addCssModuleClass(button, classes.MenuActive);
 				} else if (active) removeCssModuleClass(button, classes.MenuActive);
 			}

@@ -359,7 +359,7 @@ const lifecycle = load('frontend/features/achievements/lifecycle.ts', {
   './cache': { clearLocalAchievementCache: noop }, './context': { clearAchievementRuntimeHost: noop },
   './modal': m.modal, './navigation': { linkedAchievementTarget: () => null, detectLinkedSteamAppId: () => '' },
   './notifications': { disposeAchievementNotifications: noop }, './playbar': {},
-  './service': { clearLocalAchievementRequestCache: noop, subscribeLocalAchievementData: () => noop,
+  './service': { clearLocalAchievementRequestCache: noop, releaseOptimisticAchievementUpdate: noop, subscribeLocalAchievementData: () => noop,
     fetchLocalAchievementData: async (...args) => { readRequests.push(args); return null; } },
   './sidebar': {}, './styles': { ensureLocalAchievementStyles: noop }, './game-info': { clearLocalAchievementGameInfoCache: noop },
   '../../steam/library-sidebar': { withoutLibrarySidebarMutations: records => records },

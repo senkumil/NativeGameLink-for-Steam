@@ -22,7 +22,7 @@ function getCandidateKey(candidate: ShortcutDetectionCandidate): string {
 	return candidate.candidate_key || (candidate.edition ? `${candidate.appid}:edition:${candidate.edition}` : candidate.appid);
 }
 function retryableLinkError(error: unknown): boolean {
-	return !['invalid_appid', 'refusing_to_modify_native_steam_app', 'shortcut_identity_changed', 'shortcut_identity_ambiguous', 'shortcut_not_found', 'steam_appid_file_protection_failed']
+	return !['invalid_appid', 'refusing_to_modify_native_steam_app', 'shortcut_identity_changed', 'shortcut_identity_ambiguous', 'shortcut_not_found', 'steam_appid_file_protection_failed', 'link_cancelled_by_unlink']
 		.includes(String(error || '').replace(/^Error:\s*/i, '').trim());
 }
 let shortcutLinkInProgress = false;
@@ -331,6 +331,7 @@ export function showShortcutManualLinkModal(
 		if (manualAppIdInput.value.trim()) renderManualAppId(); else renderCandidate();
 	};
 	(overlay as any)._updateCandidates = updateCandidatesInPlace;
+	(overlay as any)._getDetectionSnapshot = () => ({ context: { ...activeContext }, candidates: currentCandidates.slice() });
 	(overlay as any)._beginEnrichment = (): void => {
 		if (busy()) return;
 		searchUnavailable = false;
@@ -509,7 +510,9 @@ export function showShortcutManualLinkModal(
 				linkSucceeded = true;
 				successfulLinkedShortcutId = state.shortcutAppId;
 				setProgress(3);
-				setStatus(gdlText('link_queued_complete', '✓ Ready. The game is prepared in your library.'), 'success');
+				setStatus(state.resourcesPending
+					? gdlText('link_ready_resources_pending', '✓ Linked. Available artwork will continue loading in the background.')
+					: gdlText('link_queued_complete', '✓ Ready. The game is prepared in your library.'), 'success');
 				confirm.style.display = 'none';
 				cancel.textContent = gdlText('done', 'Done');
 				shortcutRuntimeHost().resetLibraryInjection?.(true, shortcutRuntimeHost().getMainWindowDoc() || targetDoc);
@@ -597,7 +600,10 @@ export function showShortcutManualLinkModal(
 			if (result.ok) {
 				const setup = result.setup;
 				const resourcesComplete = Boolean(setup?.artworkComplete && setup?.iconApplied);
-				linkSucceeded = resourcesComplete;
+				linkSucceeded = true;
+				// Retire the original recovery intent even when Steam regenerated
+				// the ID during rename, before queuing optional artwork for the new ID.
+				cancelPendingLinkJobs(activeContext.shortcutAppId, activeContext.title);
 				if (result.shortcutAppId && result.shortcutAppId !== activeContext.shortcutAppId) {
 					if (selected?.is_edition && !manualAppId) {
 						saveShortcutEdition(result.shortcutAppId, {
@@ -616,11 +622,12 @@ export function showShortcutManualLinkModal(
 					setProgress(3, false);
 					setStatus(gdlText('link_ready_library', '✓ Ready. The game is prepared in your library.'), 'success');
 				} else {
-					setProgress(2, false, 3);
-					queueLinkInBackground(linkInput, result.shortcutAppId || linkInput.shortcutAppId, true);
+					enqueueLinkJob({ ...linkInput, shortcutAppId: result.shortcutAppId || linkInput.shortcutAppId, repairResources: true, linkCommitted: true });
+					setProgress(3, false);
+					setStatus(gdlText('link_ready_resources_pending', '✓ Linked. Available artwork will continue loading in the background.'), 'success');
 				}
-				if (resourcesComplete) confirm.style.display = 'none';
-				cancel.textContent = resourcesComplete ? gdlText('done', 'Done') : gdlText('close', 'Close');
+				confirm.style.display = 'none';
+				cancel.textContent = gdlText('done', 'Done');
 				cancel.disabled = false;
 				confirm.disabled = true;
 				modalSubmitting = false;

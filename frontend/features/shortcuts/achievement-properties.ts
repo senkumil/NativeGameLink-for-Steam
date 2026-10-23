@@ -154,53 +154,60 @@ function parseIpcObject<T extends object>(raw: unknown): T | null {
 }
 
 export function shortcutAchievementSettingsHtml(): string {
-	return `<div class="gdl-game-achievement-source gdl-native-section">
-		<div class="gdl-native-section-heading">${escapeHtml(gdlText('game_achievement_options_title', 'Achievement progress options'))}</div>
-		<div class="gdl-native-section-description">${escapeHtml(gdlText('game_simulated_achievements_description', 'Show progress using the real Steam names and icons.'))}</div>
-		<div class="gdl-game-achievement-options">
-			<div class="gdl-game-achievement-slider-row gdl-native-setting-row gdl-achievement-setting-row">
-				<div class="gdl-native-setting-copy">
-					<div class="gdl-game-achievement-slider-title gdl-native-setting-title">${escapeHtml(gdlText('game_simulate_count_title', 'Simulated achievements'))}</div>
-					<div class="gdl-game-achievement-slider-desc gdl-native-setting-description">${escapeHtml(gdlText('game_simulate_count_desc', 'Select how many achievements to simulate for this game (0 for real achievements).'))}</div>
+	return `<details class="gdl-game-achievement-source gdl-native-section gdl-properties-category">
+		<summary class="gdl-properties-category-summary">
+			<span class="gdl-properties-category-copy">
+				<span class="gdl-native-section-heading gdl-properties-category-title">${escapeHtml(gdlText('properties_achievements', 'Achievements'))}</span>
+				<span class="gdl-native-section-description gdl-properties-category-description">${escapeHtml(gdlText('properties_achievements_description', 'Progress, individual selection and local file.'))}</span>
+			</span>
+			<span class="gdl-properties-category-chevron" aria-hidden="true">›</span>
+		</summary>
+		<div class="gdl-properties-category-body">
+			<div class="gdl-game-achievement-options">
+				<div class="gdl-game-achievement-slider-row gdl-native-setting-row gdl-achievement-setting-row">
+					<div class="gdl-native-setting-copy">
+						<div class="gdl-game-achievement-slider-title gdl-native-setting-title">${escapeHtml(gdlText('game_simulate_count_title', 'Simulated achievements'))}</div>
+						<div class="gdl-game-achievement-slider-desc gdl-native-setting-description">${escapeHtml(gdlText('game_simulate_count_desc', 'Select how many achievements to simulate for this game (0 for real achievements).'))}</div>
+					</div>
+					<div class="gdl-achievement-control">
+						<div class="gdl-game-achievement-count-display gdl-game-achievement-percent-display gdl-achievement-count">0 logros</div>
+						<input type="range" class="gdl-game-achievement-slider gdl-game-achievement-count-slider gdl-game-achievement-percent-slider" aria-label="${escapeHtml(gdlText('game_simulate_count_title', 'Simulated achievements'))}" min="0" max="0" step="1" value="0" />
+					</div>
 				</div>
-				<div class="gdl-achievement-control">
-					<div class="gdl-game-achievement-count-display gdl-game-achievement-percent-display gdl-achievement-count">0 logros</div>
-					<input type="range" class="gdl-game-achievement-slider gdl-game-achievement-count-slider gdl-game-achievement-percent-slider" min="0" max="0" step="1" value="0" />
+				<div class="gdl-game-achievement-online-row gdl-native-setting-row gdl-achievement-setting-row" style="display:none;">
+					<div class="gdl-native-setting-copy">
+						<div class="gdl-game-achievement-online-title gdl-native-setting-title">${escapeHtml(gdlText('game_simulate_online_count_title', 'Simulated online achievements'))}</div>
+						<div class="gdl-game-achievement-online-desc gdl-native-setting-description">${escapeHtml(gdlText('game_simulate_online_count_desc', 'Select how many online achievements to simulate for this game.'))}</div>
+					</div>
+					<div class="gdl-achievement-control">
+						<div class="gdl-game-achievement-online-count-display gdl-game-achievement-online-percent-display gdl-achievement-count">0 logros online</div>
+						<input type="range" class="gdl-game-achievement-slider gdl-game-achievement-online-count-slider gdl-game-achievement-online-percent-slider" aria-label="${escapeHtml(gdlText('game_simulate_online_count_title', 'Simulated online achievements'))}" min="0" max="0" step="1" value="0" />
+					</div>
 				</div>
 			</div>
-			<div class="gdl-game-achievement-online-row gdl-native-setting-row gdl-achievement-setting-row" style="display:none;">
-				<div class="gdl-native-setting-copy">
-					<div class="gdl-game-achievement-online-title gdl-native-setting-title">${escapeHtml(gdlText('game_simulate_online_count_title', 'Simulated online achievements'))}</div>
-					<div class="gdl-game-achievement-online-desc gdl-native-setting-description">${escapeHtml(gdlText('game_simulate_online_count_desc', 'Select how many online achievements to simulate for this game.'))}</div>
-				</div>
-				<div class="gdl-achievement-control">
-					<div class="gdl-game-achievement-online-count-display gdl-game-achievement-online-percent-display gdl-achievement-count">0 logros online</div>
-					<input type="range" class="gdl-game-achievement-slider gdl-game-achievement-online-count-slider gdl-game-achievement-online-percent-slider" min="0" max="0" step="1" value="0" />
-				</div>
+			<div class="gdl-achievement-actions">
+				<button class="gdl-game-achievement-picker-btn gdl-native-button" type="button"><span aria-hidden="true">★</span> ${escapeHtml(gdlText('game_achievement_picker_btn', 'Customize achievements individually'))}</button>
+				<button class="gdl-game-achievement-reset gdl-native-button" type="button">${escapeHtml(gdlText('game_achievement_options_use_real', 'Use real achievements'))}</button>
+				<span class="gdl-game-achievement-options-status gdl-native-status" aria-live="polite"></span>
 			</div>
+			<details class="gdl-achievement-path-disclosure gdl-native-disclosure">
+				<summary>
+					<span>${escapeHtml(gdlText('game_achievement_path_title', 'Achievement progress file'))}</span>
+					<span class="gdl-native-disclosure-chevron" aria-hidden="true">⌄</span>
+				</summary>
+				<div class="gdl-native-disclosure-body">
+					<div class="gdl-native-setting-description" style="margin:0 0 10px;">${escapeHtml(gdlText('game_achievement_path_description', 'Optional. Paste this game\'s achievements JSON file, or a folder that contains achievements.json. This source is checked before the global AppID folders.'))}</div>
+					<div class="gdl-achievement-path-controls">
+						<input class="gdl-game-achievement-path-input gdl-native-input" type="text" placeholder="${escapeHtml(gdlText('game_achievement_path_placeholder', 'Example: D:\\Game\\achievements.json'))}" />
+						<button class="gdl-game-achievement-path-save gdl-native-button gdl-native-button-primary" type="button">${escapeHtml(gdlText('game_achievement_path_save', 'Save path'))}</button>
+						<button class="gdl-game-achievement-path-clear gdl-native-button" type="button">${escapeHtml(gdlText('game_achievement_path_clear', 'Use automatic'))}</button>
+					</div>
+					<div class="gdl-game-achievement-path-status gdl-native-status" aria-live="polite"></div>
+					<div class="gdl-achievement-hint">${escapeHtml(gdlText('game_achievement_real_priority_hint', 'When using real achievements, this game\'s custom path is checked first, followed by the plugin\'s automatic folders.'))}</div>
+				</div>
+			</details>
 		</div>
-		<div class="gdl-achievement-actions">
-			<button class="gdl-game-achievement-picker-btn gdl-native-button" type="button"><span aria-hidden="true">★</span> ${escapeHtml(gdlText('game_achievement_picker_btn', 'Customize achievements individually'))}</button>
-			<button class="gdl-game-achievement-reset gdl-native-button" type="button">${escapeHtml(gdlText('game_achievement_options_use_real', 'Use real achievements'))}</button>
-			<span class="gdl-game-achievement-options-status gdl-native-status" aria-live="polite"></span>
-		</div>
-		<details class="gdl-achievement-path-disclosure gdl-native-disclosure">
-			<summary>
-				<span>${escapeHtml(gdlText('game_achievement_path_title', 'Achievement progress file'))}</span>
-				<span class="gdl-native-disclosure-chevron" aria-hidden="true">⌄</span>
-			</summary>
-			<div class="gdl-native-disclosure-body">
-				<div class="gdl-native-setting-description" style="margin:0 0 10px;">${escapeHtml(gdlText('game_achievement_path_description', 'Optional. Paste this game\'s achievements JSON file, or a folder that contains achievements.json. This source is checked before the global AppID folders.'))}</div>
-				<div class="gdl-achievement-path-controls">
-					<input class="gdl-game-achievement-path-input gdl-native-input" type="text" placeholder="${escapeHtml(gdlText('game_achievement_path_placeholder', 'Example: D:\\Game\\achievements.json'))}" />
-					<button class="gdl-game-achievement-path-save gdl-native-button gdl-native-button-primary" type="button">${escapeHtml(gdlText('game_achievement_path_save', 'Save path'))}</button>
-					<button class="gdl-game-achievement-path-clear gdl-native-button" type="button">${escapeHtml(gdlText('game_achievement_path_clear', 'Use automatic'))}</button>
-				</div>
-				<div class="gdl-game-achievement-path-status gdl-native-status" aria-live="polite"></div>
-				<div class="gdl-achievement-hint">${escapeHtml(gdlText('game_achievement_real_priority_hint', 'When using real achievements, this game\'s custom path is checked first, followed by the plugin\'s automatic folders.'))}</div>
-			</div>
-		</details>
-	</div>`;
+	</details>`;
 }
 
 export function bindShortcutAchievementSettings(context: ShortcutAchievementSettingsContext): { sync: (appId?: string) => void } {
@@ -404,6 +411,13 @@ export function bindShortcutAchievementSettings(context: ShortcutAchievementSett
 		const targetShortcutAppId = context.shortcutAppId() || targetSteamAppId;
 		const totalUnlocked = Math.max(0, offlineCount) + Math.max(0, onlineCount);
 		const base = getCachedLocalAchievementsForShortcut(targetSteamAppId, targetShortcutAppId);
+		if (!base?.achievements?.length) return;
+		// Zero selects real progress; keep the current view until that source is
+		// read after saving rather than inventing a temporary fully locked game.
+		if (totalUnlocked === 0) {
+			broadcastOptimisticAchievementUpdate({ steamAppId: targetSteamAppId, stateAppId: targetShortcutAppId, data: base });
+			return;
+		}
 		const total = base?.total || totalAchievements || (offlineAchievementsCount + onlineAchievementsCount) || 1;
 
 		let offEarned = 0;
@@ -454,12 +468,21 @@ export function bindShortcutAchievementSettings(context: ShortcutAchievementSett
 
 	let pendingSave: { next: Partial<typeof options>; reset: boolean } | null = null;
 	let debounceSaveTimer: number | null = null;
+	let latestQueuedKey = '';
+	let activeSaveKey = '';
+	const optionsKey = (value: Partial<typeof options>): string => JSON.stringify([
+		value.simulate, value.simulate_count, value.simulate_online_count, value.unlocked_names,
+	]);
 
 	const queueSaveOptions = (next: Partial<typeof options>, delayMs = 0, reset = false): void => {
+		next = { ...options, ...next };
+		const key = optionsKey(next);
+		latestQueuedKey = key;
 		if (debounceSaveTimer !== null) {
 			window.clearTimeout(debounceSaveTimer);
 			debounceSaveTimer = null;
 		}
+		if (saving && activeSaveKey === key) { pendingSave = null; return; }
 		if (delayMs > 0) {
 			debounceSaveTimer = window.setTimeout(() => {
 				debounceSaveTimer = null;
@@ -475,7 +498,7 @@ export function bindShortcutAchievementSettings(context: ShortcutAchievementSett
 			pendingSave = { next, reset };
 			return;
 		}
-		await saveOptions(next, reset);
+		await saveOptions(next, reset, true);
 		if (pendingSave) {
 			const queued = pendingSave;
 			pendingSave = null;
@@ -483,7 +506,7 @@ export function bindShortcutAchievementSettings(context: ShortcutAchievementSett
 		}
 	};
 
-	const saveOptions = async (next: Partial<typeof options>, reset = false): Promise<void> => {
+	const saveOptions = async (next: Partial<typeof options>, reset = false, queued = false): Promise<void> => {
 		if (loading || saving) return;
 		const candidate = { ...options, ...next };
 		const hasNames = Array.isArray(candidate.unlocked_names) && candidate.unlocked_names.length > 0;
@@ -494,6 +517,8 @@ export function bindShortcutAchievementSettings(context: ShortcutAchievementSett
 			candidate.simulate_online_count = 0;
 			candidate.unlocked_names = undefined;
 		}
+		const candidateKey = optionsKey(candidate);
+		if (!queued) latestQueuedKey = candidateKey;
 		const pct = offlineAchievementsCount > 0 && typeof candidate.simulate_count === 'number'
 			? Math.round((candidate.simulate_count / offlineAchievementsCount) * 100)
 			: candidate.simulate_percent;
@@ -501,6 +526,7 @@ export function bindShortcutAchievementSettings(context: ShortcutAchievementSett
 			? Math.round((candidate.simulate_online_count / onlineAchievementsCount) * 100)
 			: candidate.simulate_online_percent;
 		saving = true;
+		activeSaveKey = optionsKey(candidate);
 		try {
 			const raw = await setGameAchievementOptionsBackend({ request_json: request({
 				reset,
@@ -514,6 +540,9 @@ export function bindShortcutAchievementSettings(context: ShortcutAchievementSett
 			}) });
 			const result = parseIpcObject<GameAchievementOptions>(raw) || {};
 			if (!result.ok) throw new Error(result.error || 'save_failed');
+			// A slower acknowledgement belongs to its original slider position.
+			// The queued newest intent alone may reconcile the visible preview.
+			if (candidateKey !== latestQueuedKey) return;
 			const targetAppId = context.steamAppId();
 			if (targetAppId) storeOptions(targetAppId, result);
 			saving = false;
@@ -533,11 +562,15 @@ export function bindShortcutAchievementSettings(context: ShortcutAchievementSett
 			refreshCurrentGame();
 		} catch {
 			saving = false;
+			if (candidateKey !== latestQueuedKey) return;
+			latestQueuedKey = '';
 			render();
 			optionsStatus.textContent = gdlText('game_achievement_options_failed', 'Achievement options could not be saved.');
 			optionsStatus.style.color = '#d94126';
+			refreshCurrentGame();
 		} finally {
 			saving = false;
+			activeSaveKey = '';
 		}
 	};
 
@@ -749,6 +782,7 @@ export function bindShortcutAchievementSettings(context: ShortcutAchievementSett
 	const syncForAppId = (targetAppId: string): void => {
 		syncGeneration += 1;
 		const thisGeneration = syncGeneration;
+		const loadIntent = latestQueuedKey;
 		if (!targetAppId || !/^\d+$/.test(targetAppId)) {
 			achievementSection.style.display = 'none';
 			return;
@@ -799,7 +833,7 @@ export function bindShortcutAchievementSettings(context: ShortcutAchievementSett
 			const pathResult = parseIpcObject<{ ok?: boolean; configured?: boolean; path?: string; usable?: boolean }>(pathRaw) || {};
 			const optionsResult = parseIpcObject<GameAchievementOptions>(optionsRaw) || {};
 			if (pathResult.ok) storePath(targetAppId, pathResult);
-			if (optionsResult.ok) storeOptions(targetAppId, optionsResult);
+			if (optionsResult.ok && latestQueuedKey === loadIntent) storeOptions(targetAppId, optionsResult);
 			if (pathResult.ok) {
 				customPathConfigured = pathResult.configured === true;
 				pathInput.value = pathResult.path || '';
@@ -809,7 +843,7 @@ export function bindShortcutAchievementSettings(context: ShortcutAchievementSett
 					: gdlText('game_achievement_path_automatic', 'Using automatic AppID folders from the global plugin setting.');
 			}
 			loading = false;
-			if (optionsResult.ok) applyOptions(optionsResult);
+			if (optionsResult.ok && latestQueuedKey === loadIntent) applyOptions(optionsResult);
 			else render();
 			updateSectionVisibility();
 		}).catch(() => {
@@ -833,7 +867,7 @@ export function bindShortcutAchievementSettings(context: ShortcutAchievementSett
 				offlineAchievementsCount = Math.max(0, totalAchievements - onlineAchievementsCount);
 			}
 			if (!hasOnlineAchievements) options.unlock_online = false;
-			if (lastLoadedOptions) applyOptions(lastLoadedOptions);
+			if (lastLoadedOptions && latestQueuedKey === loadIntent) applyOptions(lastLoadedOptions);
 			else render();
 			updateSectionVisibility();
 		}).catch(() => {

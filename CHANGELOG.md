@@ -1,4 +1,49 @@
-## Unreleased - Big Picture integration and resource lifecycle (2026-10-18)
+## v5.0.0 - Official release (2026-10-23)
+
+- Reorganize linked-game Properties into compact, accessible groups for linking,
+  launch/playtime, achievements and trading cards/badges. Keep the confirmed
+  identity visible during candidate review and remove the duplicate thumbnail.
+- Hide trading-card/badge settings only when complete catalogs confirm absence;
+  retain loading, error and retry states for incomplete responses.
+- Add local regular/foil card and badge preferences, isolated by shortcut and
+  linked AppID and shared by Desktop and Big Picture. Serialize saves, reject
+  stale responses and synchronize confirmed changes across windows.
+- Load native item definitions first and public catalogs progressively; separate
+  cards and badges, validate pagination, fix foil detection, retain known content
+  during partial responses and reject login/challenge pages as confirmed empties.
+- Preserve Steam's community grid, native card dimensions and aligned rows;
+  prioritize ordinary-proportion content at the beginning when available, defer
+  portraits/panoramas, keep videos in one cell and preserve active video state.
+- Correct Activity/Community spacing, native composer/footer structure, sidebar
+  recovery and duplicate background layers on achievements and controller panels.
+- Improve Information, native feature icons, responsive primary links, overflow
+  navigation, back-to-top behavior, achievement geometry and playbar widths.
+- Prevent achievement sliders from reverting to old polling/save results; keep
+  the latest preview synchronized between Properties and the Library.
+- Improve detection from the real shortcut executable, working directory and
+  arguments; show full paths and preserve explicitly empty launch arguments.
+- Improve title/edition/sequel normalization and candidate validation, bounded
+  local/remote lookups, late-result recovery and retryable partial detection.
+- Confirm renamed shortcut identity and regenerated IDs before completion;
+  recover interrupted jobs and distinguish cancellation from successful linking.
+- Finish confirmed links when optional artwork is missing, repairing resources
+  in the background instead of leaving valid links permanently failed.
+- Fence artwork/icon/logo/rename writes against stale jobs and protect unlink/
+  relink cycles from delayed cleanup or writes belonging to the previous link.
+- Protect and restore existing steam_appid.txt content, report conflicts and
+  expose recovery for failed restoration.
+- Discover native artwork stores by capabilities instead of fixed module IDs;
+  support signed/unsigned IDs and use the correct owning Steam window.
+- Recover CSS and Information presentation after cold starts; bound listeners,
+  retries and caches and preserve teardown ownership across documents.
+- Synchronize all manifests and package metadata to 5.0.0; harden clean/source
+  packaging, preserve previous archives and use explicit GitHub release notes.
+
+See [release notes](RELEASE_NOTES.md), [notas en español](RELEASE_NOTES_ES.md)
+and the [dated weekly fix inventory](WEEKLY_FIXES.md). The following Big Picture
+work was prepared before the October 19–23 fix window and is also included.
+
+### Big Picture integration and resource lifecycle (development, 2026-10-18)
 
 - Preserve the outgoing tab's passive presentation through Steam's own transition
   and adopt incoming panels before paint, including rapid tab changes.
@@ -23,7 +68,7 @@
   delayed farmer startup when stop/unload arrives first.
 - Validate complete shortcut IDs before logo layout file access.
 - Add a same-page Big Picture heap soak and backend process/resource checks to
-  the regular verification suite; include the acceptance documentation in packages.
+  the regular verification suite.
 
 ## v4.0.3 - Dynamic Controller Switching, Native Links Bar & Webpack Polish (2026-09-13)
 
@@ -162,8 +207,8 @@
 
 > **Versioning note:** `v2.6.0-alpha.1` and `v2.6.0-alpha.2` below were
 > internal development milestones only. They were never published or distributed
-> as plugin releases. `v1.5.0` was the previous public release and `v2.0.0` is
-> the current public release line.
+> as plugin releases. This historical note described the transition from
+> `v1.5.0` to the `v2.0.0` public release line.
 
 
 ## v1.0.0

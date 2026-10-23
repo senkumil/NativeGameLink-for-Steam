@@ -161,6 +161,29 @@ for (const error of ['invalid_appid', 'Error: refusing_to_modify_native_steam_ap
  assert.equal(api.getPendingLinkJob(job.id), null);
 }
 {
+ const { api, state } = queueHarness();
+ state.result = async () => ({ ok: true, setup: { artworkComplete: false, iconApplied: false } });
+ const job = api.enqueueLinkJob(input(3000000001));
+ for (let attempt = 0; attempt < 5; attempt++) {
+  if (attempt) api.enqueueLinkJob(input(3000000001, { repairResources: true }));
+  await api.processPendingLinkJobs();
+  const pending = api.getPendingLinkJob(job.id);
+  if (pending) assert.equal(pending.linkCommitted, true, 'Successful identity/protection transaction is recorded separately from optional resources');
+ }
+ assert.equal(api.getPendingLinkJob(job.id), null, 'Unavailable images cannot leave a permanent failed link job');
+ assert.equal(api.getLinkJobCompletion(job.id, job.createdAt), true);
+ assert.equal(api.getLinkJobResourcesPending(job.id, job.createdAt), true, 'Degraded completion remains honest about unavailable images');
+}
+{
+ const { api, state } = queueHarness();
+ state.mapped = '100';
+ state.result = async () => ({ ok: false, error: 'steam_appid_file_protection_failed', setup: { artworkComplete: true, iconApplied: true } });
+ const job = api.enqueueLinkJob(input(3000000001, { repairResources: true }));
+ await api.processPendingLinkJobs();
+ assert.equal(api.getPendingLinkJob(job.id).status, 'failed', 'An old mapping and images cannot hide failed launch-file protection');
+ assert.notEqual(api.getLinkJobCompletion(job.id, job.createdAt), true);
+}
+{
  const timers = new Map(), requests = [], snapshots = [];
  let timerId = 0;
  const { refreshShortcutRecordsFromBackend: refresh, getAllShortcutRecords: records } = load('frontend/features/shortcuts/registry.ts', {

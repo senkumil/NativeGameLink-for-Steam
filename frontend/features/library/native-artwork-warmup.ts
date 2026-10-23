@@ -1,8 +1,8 @@
 import { isMappingSnapshotVerified, mappings, shortcutMappingKey, subscribeMappings } from '../../core/mappings';
 import { cancelLibrarySidebarWork, runWhenLibrarySidebarIdle } from '../../steam/sidebar-interaction';
-import { steamWebpackRuntime } from '../../steam/modules/SteamWebpackRuntime';
 import { routedSteamAppId } from './native-route';
 import { installNativeLogoSources, refreshNativeLogoInventoryReadiness } from './native-logo-sources';
+import { resolveNativeArtworkStores } from './native-artwork-stores';
 
 const MAX_POSITION_KEYS = 128;
 
@@ -15,8 +15,6 @@ type WarmupState = {
 	retryTimer?: ReturnType<typeof setTimeout>;
 	retryAttempts: number;
 	store?: any;
-	stores?: NativeStores;
-	nextStoreProbeAt?: number;
 	disposed: boolean;
 	dispose?: () => void;
 	logoSourcesCleanup?: () => void;
@@ -55,29 +53,11 @@ function rememberMissing(state: WarmupState, id: number): void {
 }
 
 /** Resolve this document's stores without installing native component guards. */
-function nativeStores(doc: Document, state: WarmupState): NativeStores | null {
+function nativeStores(doc: Document): NativeStores | null {
 	const view = doc.defaultView as any;
 	if (!view || view.closed) return null;
-	let details = typeof view.appDetailsStore?.GetCustomLogoPosition === 'function' ? view.appDetailsStore : state.stores?.details;
-	let apps = typeof view.appStore?.GetAppOverviewByAppID === 'function' ? view.appStore : state.stores?.apps;
-	if (typeof details?.GetCustomLogoPosition === 'function' && typeof apps?.GetAppOverviewByAppID === 'function') {
-		return state.stores = { details, apps };
-	}
-	if (Date.now() < (state.nextStoreProbeAt || 0)) return null;
-	state.nextStoreProbeAt = Date.now() + 1_000;
-	if (typeof details?.GetCustomLogoPosition !== 'function' || typeof apps?.GetAppOverviewByAppID !== 'function') {
-		steamWebpackRuntime.captureRuntime(doc);
-		const require = steamWebpackRuntime.getRequire(doc);
-		try { if (typeof details?.GetCustomLogoPosition !== 'function') details = require?.(78057)?.H; } catch {}
-		try { if (typeof apps?.GetAppOverviewByAppID !== 'function') apps = require?.(1776)?.tw; } catch {}
-		if (typeof details?.GetCustomLogoPosition !== 'function') {
-			for (const entry of steamWebpackRuntime.getAllModules(doc)) {
-				const candidate = entry.exports?.H;
-				if (typeof candidate?.GetCustomLogoPosition === 'function' && typeof candidate.GetAppData === 'function') { details = candidate; break; }
-			}
-		}
-	}
-	return typeof details?.GetCustomLogoPosition === 'function' && typeof apps?.GetAppOverviewByAppID === 'function' ? state.stores = { details, apps } : null;
+	const { details, apps } = resolveNativeArtworkStores(doc) || {};
+	return typeof details?.GetCustomLogoPosition === 'function' && typeof apps?.GetAppOverviewByAppID === 'function' ? { details, apps } : null;
 }
 
 /** Prime Steam's own grid.json cache; never assign metadata, image URLs or DOM. */
@@ -89,7 +69,7 @@ export function warmNativeShortcutArtwork(doc: Document, rawId: number): boolean
 	if (!/^\d+$/.test(String(mapping || ''))) return false;
 	const state = stateFor(doc);
 	if (state.disposed) return false;
-	const stores = nativeStores(doc, state);
+	const stores = nativeStores(doc);
 	if (!stores) { rememberMissing(state, id); return false; }
 	state.logoSourcesCleanup = installNativeLogoSources(doc, stores.apps);
 	let overview: any;
@@ -185,7 +165,7 @@ export function installNativeArtworkWarmup(doc: Document): () => void {
 		if (state.positionTimer) clearTimeout(state.positionTimer);
 		if (state.retryTimer) clearTimeout(state.retryTimer);
 		state.pendingShortcuts = [];
-		state.positions.clear(); state.store = undefined; state.stores = undefined;
+		state.positions.clear(); state.store = undefined;
 		state.missingShortcuts.clear();
 		states.delete(doc);
 	};

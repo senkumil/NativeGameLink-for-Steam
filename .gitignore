@@ -17,6 +17,7 @@ web_modules/
 /achievement_base_path.txt
 /achievement_paths.json
 /achievement_options.json
+/community_item_options.json
 /playtime_sessions.json
 /sessions.json
 /steam_appid.txt
@@ -74,6 +75,7 @@ export_schema.cjs
 _*.py
 _*.ps1
 *_FIX*.md
+!/WEEKLY_FIXES.md
 *_REVIEW*.md
 REPAIR_NOTES*.md
 *_BENCHMARK*.json

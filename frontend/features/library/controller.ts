@@ -7,7 +7,6 @@ import { ensureControllerStyles } from './styles/controller';
 import { buildNativeSidebarSection, type NativeLibraryLayout } from './layout';
 import { getSteamStore } from '../../steam/modules/SteamModuleResolver';
 import { steamWebpackRuntime } from '../../steam/modules/SteamWebpackRuntime';
-import { isLibrarySidebarNode } from '../../steam/library-sidebar';
 import { isLibrarySidebarInteractionActive } from '../../steam/sidebar-interaction';
 import { linkedAchievementTarget } from '../achievements/navigation';
 import { committedHeaderAppId } from '../../steam/library-details';
@@ -572,38 +571,9 @@ export function syncControllerSidebarSection(
 	return section;
 }
 
-const CONTROLLER_SCROLL_TRANSLUCENCY_THRESHOLD = 2;
-
-function currentControllerScrollTop(doc: Document, section: HTMLElement | null): number {
-	if (!section?.isConnected) return 0;
-	const view = doc.defaultView;
-	let top = Math.max(0, view?.scrollY || 0);
-	const scrolling = doc.scrollingElement;
-	if (scrolling instanceof HTMLElement) top = Math.max(top, Math.max(0, scrolling.scrollTop || 0));
-
-	let current: HTMLElement | null = section;
-	while (current && current !== doc.body && current !== doc.documentElement) {
-		const style = view?.getComputedStyle(current);
-		const overflowY = style?.overflowY || '';
-		const scrollable = current.scrollHeight > current.clientHeight + 8
-			&& (overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay' || current.scrollTop > 0);
-		if (scrollable) top = Math.max(top, Math.max(0, current.scrollTop || 0));
-		current = current.parentElement;
-	}
-
-	return top;
-}
-
-function updateControllerScrollState(doc: Document, section: HTMLElement | null): void {
-	if (!section?.isConnected) return;
-	const top = currentControllerScrollTop(doc, section);
-	const wasScrolled = section.dataset.gdlControllerScrolled === '1';
-	const scrolled = wasScrolled ? top > 0.25 : top >= CONTROLLER_SCROLL_TRANSLUCENCY_THRESHOLD;
-	const value = scrolled ? '1' : '0';
-	if (section.dataset.gdlControllerScrolled !== value) section.dataset.gdlControllerScrolled = value;
-}
-
-function setupControllerScrollTranslucencyWatcher(
+/** The native controller surface stays static while the shared page glass
+ * moves behind it. Only recover an owned section removed by a native commit. */
+function setupControllerSectionRecoveryWatcher(
 	doc: Document,
 	layout: NativeLibraryLayout,
 	steamAppId: string,
@@ -623,12 +593,9 @@ function setupControllerScrollTranslucencyWatcher(
 			if (disconnected || !isCurrent()) return;
 			const section = syncControllerSidebarSection(doc, layout, steamAppId, shortcutAppId);
 			onSection?.(section);
-			updateControllerScrollState(doc, section);
 		});
 	};
 
-	const onScroll = (event: Event) => { if (!isLibrarySidebarNode(event.target)) schedule(); };
-	const onResize = () => schedule();
 	const observer = new MutationObserver(records => {
 		if (records.some(record => record.target === layout.sidebarColumn && Array.from(record.removedNodes)
 			.some(node => node instanceof HTMLElement && node.id === 'gdl-controller-section'))) schedule();
@@ -636,16 +603,9 @@ function setupControllerScrollTranslucencyWatcher(
 	try {
 		if (layout.sidebarColumn) observer.observe(layout.sidebarColumn, { childList: true });
 	} catch {}
-	const view = doc.defaultView;
-	view?.addEventListener('scroll', onScroll, true);
-	view?.addEventListener('resize', onResize);
-	schedule();
-
 	return () => {
 		disconnected = true;
 		observer.disconnect();
-		view?.removeEventListener('scroll', onScroll, true);
-		view?.removeEventListener('resize', onResize);
 		if (frame && doc.defaultView) doc.defaultView.cancelAnimationFrame(frame);
 	};
 }
@@ -678,20 +638,18 @@ export function setupControllerSidebarWatcher(
 	// before any browser frame or controller event can expose the sidebar.
 	if (current()) {
 		adopt(syncControllerSidebarSection(doc, layout, steamAppId, shortcutAppId));
-		updateControllerScrollState(doc, ownedSection);
 	}
-	const scrollCleanup = setupControllerScrollTranslucencyWatcher(doc, layout, steamAppId, shortcutAppId, current, adopt);
+	const recoveryCleanup = setupControllerSectionRecoveryWatcher(doc, layout, steamAppId, shortcutAppId, current, adopt);
 	const unsubscribe = subscribeControllerChanges(doc, () => {
 		if (!current()) return;
 		const section = syncControllerSidebarSection(doc, layout, steamAppId, shortcutAppId);
 		adopt(section);
-		updateControllerScrollState(doc, section);
 	});
 
 	const dispose = (preserveSection = false): void => {
 		if (disposed) return;
 		disposed = true;
-		scrollCleanup();
+		recoveryCleanup();
 		unsubscribe();
 		if (ownedSection && controllerSidebarOwners.get(ownedSection) === owner) {
 			controllerSidebarOwners.delete(ownedSection);

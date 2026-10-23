@@ -19,7 +19,7 @@ const steamCss = process.env.STEAM_PLAYBAR_CSS || [
 assert.ok(fs.existsSync(edge), `Edge executable missing: ${edge}`);
 assert.ok((steamCss && fs.existsSync(steamCss)), `Installed Steam CSS missing: ${steamCss}`);
 const sources = Object.fromEntries([
-  ['class-module-cache', 'frontend/steam/class-module-cache.ts'],
+  ['pure-class-factory', 'frontend/steam/gamepad/components/pure-class-factory.ts'], ['class-module-cache', 'frontend/steam/class-module-cache.ts'],
   ['css', 'frontend/steam/css.ts'],
   ['native-dom', 'frontend/steam/native-dom.ts'],
   ['library-header', 'frontend/steam/library-header.ts'],

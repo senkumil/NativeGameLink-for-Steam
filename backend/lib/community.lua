@@ -427,12 +427,20 @@ end
 -- economy asset.  The icon_url value is the original composed card image; it
 -- must not be suffixed with /100x100 because Steam only does that in low
 -- bandwidth mode and the image becomes visibly pixelated when the card lifts.
-local function community_items_parse_market_catalog(body, appid)
+local function community_items_parse_market_catalog(body, appid, requested_start)
     local cards, seen_cards = {}, {}
     local ok, payload = pcall(cjson.decode, tostring(body or ""))
-    if not ok or type(payload) ~= "table" or type(payload.results) ~= "table" then
-        return cards
+    if not ok or type(payload) ~= "table" or type(payload.results) ~= "table"
+        or payload.success == false or payload.success == 0 then
+        return cards, false
     end
+
+    local start = tonumber(requested_start) or 0
+    if payload.start ~= nil and tonumber(payload.start) ~= start then return cards, false end
+    local total = tonumber(payload.total_count) or (start + #payload.results)
+    if total < start or total % 1 ~= 0 or total == math.huge then return cards, false end
+    local next_start = start + #payload.results
+    if next_start < total and #payload.results == 0 then return cards, false end
 
     for _, result in ipairs(payload.results) do
         local description = type(result) == "table" and result.asset_description or nil
@@ -450,7 +458,18 @@ local function community_items_parse_market_catalog(body, appid)
                 or item_type ~= ""
             local is_foil = item_type:find("foil", 1, true) ~= nil
                 or market_hash:lower():find("(foil)", 1, true) ~= nil
-            if is_card and not is_foil and title ~= "" and icon ~= "" then
+            -- Market tags are language-independent. The translated type/name
+            -- alone cannot distinguish the normal and foil badge sets.
+            if type(description.tags) == "table" then
+                for _, tag in ipairs(description.tags) do
+                    if type(tag) == "table" and tag.category == "cardborder"
+                        and tag.internal_name == "cardborder_1" then
+                        is_foil = true
+                        break
+                    end
+                end
+            end
+            if is_card and title ~= "" and icon ~= "" then
                 local image = icon
                 if not image:match("^https://") then
                     image = "https://community.cloudflare.steamstatic.com/economy/image/" .. image
@@ -462,22 +481,32 @@ local function community_items_parse_market_catalog(body, appid)
                         title = title,
                         image = image,
                         artwork = "",
+                        foil = is_foil,
                     })
                 end
             end
         end
     end
 
-    return cards
+    return cards, true, next_start < total and next_start or nil, total
 end
 
-function M.fetch_community_items_catalog(steam_app_id, language)
+function M.fetch_community_items_catalog(steam_app_id, language, catalog_part, catalog_start)
     local appid, safe_language = util.normalize_appid_and_language(steam_app_id, language)
     if not appid:match("^%d+$") then
         return cjson.encode({ error = "invalid_appid", cards = {}, badges = {} })
     end
 
-    local cache_key = appid .. "|" .. safe_language
+    local part = tostring(catalog_part or "all")
+    if part ~= "all" and part ~= "cards" and part ~= "badges" then
+        return cjson.encode({ error = "invalid_catalog_part", cards = {}, badges = {} })
+    end
+    local start = tonumber(catalog_start or 0)
+    if not start or start < 0 or start > 512 or start % 1 ~= 0 then
+        return cjson.encode({ error = "invalid_catalog_start", cards = {}, badges = {} })
+    end
+    if part == "badges" then start = 0 end
+    local cache_key = appid .. "|" .. safe_language .. "|" .. part .. "|" .. tostring(start)
     if community_items_catalog_cache[cache_key] then
 		local cached = community_items_catalog_cache[cache_key]
 		local ttl = cached.complete and COMMUNITY_ITEMS_SUCCESS_CACHE_SECONDS or COMMUNITY_ITEMS_FAILURE_CACHE_SECONDS
@@ -488,64 +517,83 @@ function M.fetch_community_items_catalog(steam_app_id, language)
 		community_items_catalog_cache[cache_key] = nil
     end
 
-    local market_url = "https://steamcommunity.com/market/search/render/"
-        .. "?query=&start=0&count=100&search_descriptions=0"
-        .. "&sort_column=name&sort_dir=asc&appid=753&l=" .. detection_url_encode(safe_language)
-        .. "&category_753_Game%5B%5D=tag_app_" .. appid .. "&norender=1"
-        .. "&category_753_item_class%5B%5D=tag_item_class_2"
-        .. "&category_753_cardborder%5B%5D=tag_cardborder_0"
-    local market_ok, market_response = pcall(http.get, market_url, {
-        headers = {
-            ["Accept"] = "application/json,text/plain,*/*",
-            ["Accept-Language"] = "en-US,en;q=0.8",
-            ["User-Agent"] = USER_AGENT,
-        },
-        timeout = 4,
-    })
+    local result = { appid = tonumber(appid) or 0, cards = {}, badges = {}, source = "unavailable", catalog_part = part }
+    local market_complete = part == "badges"
+    if part ~= "badges" then
+        local market_url = "https://steamcommunity.com/market/search/render/"
+            .. "?query=&start=" .. tostring(start) .. "&count=100&search_descriptions=0"
+            .. "&sort_column=name&sort_dir=asc&appid=753&l=" .. detection_url_encode(safe_language)
+            .. "&category_753_Game%5B%5D=tag_app_" .. appid .. "&norender=1"
+            .. "&category_753_item_class%5B%5D=tag_item_class_2"
+            -- Keep both normal and foil borders in the official catalogue.
+        local market_ok, market_response = pcall(http.get, market_url, {
+            headers = {
+                ["Accept"] = "application/json,text/plain,*/*",
+                ["Accept-Language"] = "en-US,en;q=0.8",
+                ["User-Agent"] = USER_AGENT,
+            },
+            timeout = 4,
+        })
 
-    local result = { appid = tonumber(appid) or 0, cards = {}, badges = {}, source = "unavailable" }
-    local market_complete = market_ok and market_response and market_response.status == 200
-        and type(market_response.body) == "string"
-    if market_complete then
-        result.cards = community_items_parse_market_catalog(market_response.body, appid)
-        if #result.cards > 0 then
-            result.source = "steam-community-market"
+        market_complete = market_ok and market_response and market_response.status == 200
+            and type(market_response.body) == "string"
+        if market_complete then
+            local parsed
+            result.cards, parsed, result.next_start, result.total_count = community_items_parse_market_catalog(market_response.body, appid, start)
+            market_complete = parsed == true
+            if #result.cards > 0 then
+                result.source = "steam-community-market"
+            end
+        else
+            logger:info("Official Steam card catalogue unavailable for " .. appid
+                .. " (HTTP " .. tostring(market_response and market_response.status or "request_failed") .. ")")
         end
-    else
-        logger:info("Official Steam card catalogue unavailable for " .. appid
-            .. " (HTTP " .. tostring(market_response and market_response.status or "request_failed") .. ")")
+
     end
 
-    -- Badge artwork is not tradable and therefore is absent from the Market
-    -- response. Keep the existing public catalogue only as a badge index.
-    -- Cards must always be confirmed by Steam's own Market response: using a
-    -- third-party card fallback can create a section for games that never
-    -- released Steam Trading Cards.
-    local url = "https://steamlvlup.com/gameinfo/" .. appid
-    local ok, response = pcall(http.get, url, {
-        headers = {
-            ["Accept"] = "text/html,*/*",
-            ["Accept-Language"] = "en-US,en;q=0.8",
-            ["User-Agent"] = USER_AGENT,
-        },
-        timeout = 4,
-    })
+    -- Cards and badges use independent IPC/cache entries so a slow badge
+    -- index cannot hold the Steam Market cards behind another HTTP timeout.
+    local badge_complete = part == "cards"
+    local badge_confirmed_empty = false
+    if part ~= "cards" then
+        -- Badge artwork is not tradable and therefore is absent from the Market
+        -- response. Keep the existing public catalogue only as a badge index.
+        -- Cards must always be confirmed by Steam's own Market response: using a
+        -- third-party card fallback can create a section for games that never
+        -- released Steam Trading Cards.
+        local url = "https://steamlvlup.com/gameinfo/" .. appid
+        local ok, response = pcall(http.get, url, {
+            headers = {
+                ["Accept"] = "text/html,*/*",
+                ["Accept-Language"] = "en-US,en;q=0.8",
+                ["User-Agent"] = USER_AGENT,
+            },
+            timeout = 4,
+        })
 
-    local badge_complete = ok and response and response.status == 200 and type(response.body) == "string"
-    local badge_confirmed_empty = ok and response
-        and (tonumber(response.status) == 404 or tonumber(response.status) == 410)
-    if badge_complete then
-        local indexed = community_items_parse_catalog(response.body, appid)
-        result.badges = indexed.badges
-        result.foil_badge = indexed.foil_badge
-        logger:info("Community items for " .. appid .. ": "
-            .. tostring(#result.cards) .. " cards, " .. tostring(#result.badges) .. " badges")
-    else
-        logger:info("Community item catalogue unavailable for " .. appid
-            .. " (HTTP " .. tostring(response and response.status or "request_failed") .. ")")
+        badge_complete = ok and response and response.status == 200 and type(response.body) == "string"
+        badge_confirmed_empty = ok and response
+            and (tonumber(response.status) == 404 or tonumber(response.status) == 410)
+        if badge_complete then
+            local indexed = community_items_parse_catalog(response.body, appid)
+            result.badges = indexed.badges
+            result.foil_badge = indexed.foil_badge
+            -- A 200 login/challenge page or a changed index layout is not an
+            -- authoritative empty badge set. Keep prior assets and permit retry.
+            badge_complete = #result.badges > 0
+            if part == "badges" then result.source = "steam-community-assets" end
+            logger:info("Community items for " .. appid .. ": "
+                .. tostring(#result.cards) .. " cards, " .. tostring(#result.badges) .. " badges")
+        else
+            logger:info("Community item catalogue unavailable for " .. appid
+                .. " (HTTP " .. tostring(response and response.status or "request_failed") .. ")")
+        end
+
     end
 
     result.transient_error = not market_complete or not (badge_complete or badge_confirmed_empty)
+    result.cards_complete = part ~= "badges" and market_complete and result.next_start == nil
+    result.badges_complete = part ~= "cards" and (badge_complete or badge_confirmed_empty)
 
     local encoded = cjson.encode(result)
 	local complete = result.transient_error ~= true

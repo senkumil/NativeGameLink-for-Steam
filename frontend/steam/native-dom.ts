@@ -382,7 +382,7 @@ export function buildNativeCloudBlueprint(doc: Document): HTMLElement | null {
 export function buildNativeInfoButtonBlueprint(doc: Document): HTMLElement | null {
 	const button = loadNativeUiBlueprint(doc, NATIVE_UI_BLUEPRINT_KEYS.infoButton);
 	if (!button) return null;
-	const ps = PLAYBAR_CLASSES();
+	const ps = PLAYBAR_CLASSES(doc);
 	if (ps.MenuButton && !hasCssModuleClass(button, ps.MenuButton)) return null;
 	button.removeAttribute('id');
 	button.removeAttribute('onclick');

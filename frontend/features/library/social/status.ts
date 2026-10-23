@@ -70,20 +70,18 @@ export function setupStatusPostBox(
 	};
 
 	const autoResizeTextarea = (): void => {
-		if (typeof CSS !== 'undefined' && CSS.supports && CSS.supports('field-sizing', 'content')) {
-			statusArea.style.removeProperty('height');
-			return;
-		}
+		// Match Steam's auto-sizing textarea: 20px of content while collapsed,
+		// 40px while editing, with the native CSS padding outside that height.
 		const hasContent = statusArea.value.length > 0;
-		const isActive = container.classList.contains('gdl-composer-active') || doc.activeElement === statusArea || hasContent;
-		if (!isActive && !hasContent) {
-			statusArea.style.setProperty('height', '40px', 'important');
-			return;
-		}
-		statusArea.style.setProperty('height', 'auto', 'important');
-		const contentH = statusArea.scrollHeight;
-		const nextH = Math.max(64, contentH);
-		statusArea.style.setProperty('height', `${nextH}px`, 'important');
+		const active = container.classList.contains('gdl-composer-active') || doc.activeElement === statusArea || hasContent;
+		const minimum = active ? 40 : 20;
+		const style = doc.defaultView?.getComputedStyle(statusArea);
+		const padding = style?.boxSizing === 'border-box' ? 0
+			: Number.parseFloat(style?.paddingTop || '0') + Number.parseFloat(style?.paddingBottom || '0');
+		statusArea.style.height = `${minimum}px`;
+		const height = Math.max(minimum, statusArea.scrollHeight - padding);
+		statusArea.style.height = `${Math.min(500, height)}px`;
+		statusArea.style.overflow = height > 500 ? 'auto' : 'hidden';
 	};
 
 	const setActive = (active: boolean): void => {
@@ -124,7 +122,7 @@ export function setupStatusPostBox(
 
 	lifecycle.listen(statusArea, 'input', () => {
 		syncPostButtonState();
-		autoResizeTextarea();
+		setActive((!isGamepad && doc.activeElement === statusArea) || statusArea.value.length > 0);
 	});
 	lifecycle.listen(statusArea, 'focus', () => {
 		setActive(true);
@@ -170,7 +168,9 @@ export function setupStatusPostBox(
 	}
 
 	syncPostButtonState();
-	autoResizeTextarea();
+	// A retained composer can be reparented while its previous blur timeout is
+	// cancelled. Reconcile its editing state with this document before sizing.
+	setActive((!isGamepad && doc.activeElement === statusArea) || statusArea.value.length > 0);
 
 	// Keep the expanded composer from collapsing between pointer down and click.
 	// Its height change moves the news button out from under the pointer, causing

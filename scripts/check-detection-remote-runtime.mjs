@@ -3,6 +3,7 @@ import { runLuaCheck } from './helpers/lua-runtime.mjs';
 
 // Captured from the public Steam API; routine checks never need the network.
 const official = JSON.parse(fs.readFileSync('tests/fixtures/shortcut-detection-remote-official.json', 'utf8').replace(/^\uFEFF/, ''));
+const querySnapshot = JSON.parse(fs.readFileSync('tests/fixtures/shortcut-detection-query-canonicalization.json', 'utf8'));
 function lua(value) {
   if (value == null) return 'nil';
   if (typeof value === 'string') return JSON.stringify(value);
@@ -26,7 +27,7 @@ const shortcutLua = Array.from({ length: Math.ceil(shortcutBytes.length / 100) }
   `string.char(${[...shortcutBytes.subarray(index * 100, (index + 1) * 100)].join(',')})`).join('..');
 runLuaCheck({ text: 'backend/lib/shortcut_detection_text.lua', aliases: 'backend/lib/shortcut_detection_aliases.lua',
   ttl: 'backend/lib/ttl_cache.lua', util: 'backend/lib/util.lua', catalog: 'backend/lib/shortcut_detection_catalog.lua',
-  detector: 'backend/lib/shortcut_detection.lua' }, `local official=${lua(official)}\nlocal shortcut_bytes=${shortcutLua}\n` + String.raw`
+  detector: 'backend/lib/shortcut_detection.lua' }, `local official=${lua(official)}\nlocal query_snapshot=${lua(querySnapshot)}\nlocal shortcut_bytes=${shortcutLua}\n` + String.raw`
 local checks=0
 local function check(value,message)checks=checks+1;assert(value,message)end
 local function has(items,value)for _,item in ipairs(items or{})do if item==value then return true end end;return false end
@@ -102,13 +103,85 @@ for _,candidate in ipairs(result.candidates)do
  check(candidate.appid~='41070','BF3 never suggests Serious Sam')
  check(candidate.appid~='1238831'and candidate.appid~='1278134','known official DLC metadata cannot become a game suggestion')
 end
-local withPE=make({product='Battlefield 3™',description='Battlefield 3™',search=function(term)return term=='Battlefield 3™'and official['Battlefield 3'].items or{}end})
+local withPE=make({product='Battlefield 3™',description='Battlefield 3™',search=function(term)return term=='Battlefield 3'and official['Battlefield 3'].items or{}end})
 result=withPE.detect(request())
 check(result.candidates[1]and result.candidates[1].appid=='1238820'and result.candidates[1].score>=94,'PE product gives strong exact BF3 identity')
 check(storeCalls(withPE)[1]:find('Battlefield%%203'),'PE query precedes abbreviated exe')
 local queries=withPE.catalog.discovery_queries({title='bf3',exe_stem='bf3',pe_product='Battlefield 3™',folders={'Battlefield 3','Juegos'}},aliases)
 check(text.normalize(queries[1])=='battlefield 3','product is first query')
 for _,query in ipairs(queries)do check(text.normalize(query)~='juegos','generic installation roots never consume network query budget')end
+check(#query_snapshot.search.spaced_trademark.payload.items==0 and #query_snapshot.search.canonical.payload.items>0,
+ 'public Store snapshot reproduces a successful empty legal-mark query alongside the useful canonical query')
+local canonical=make({aliases={},product=query_snapshot.pe_product,description=query_snapshot.pe_product,
+ details=query_snapshot.details,appinfo=query_snapshot.appinfo,
+ search=function(term)return term==query_snapshot.title and query_snapshot.search.canonical.payload.items
+  or query_snapshot.search.spaced_trademark.payload.items end})
+result=canonical.detect({title=query_snapshot.title,exe_path='E:\\Juegos\\Dead Space\\Dead Space.exe',
+ start_dir='E:\\Juegos\\Dead Space',language=query_snapshot.language})
+check(result.queries[1]==query_snapshot.title and #storeCalls(canonical)==1,
+ 'PE legal mark is removed before its priority suppresses the clean title/folder query')
+local releases={}
+for _,candidate in ipairs(result.candidates)do releases[candidate.appid]=candidate end
+for _,id in ipairs({'17470','1693980'})do
+ local candidate=releases[id]
+ check(candidate~=nil,'canonical query exposes both original/remake from actual provider payloads: '..id)
+ check(candidate.executable_match and candidate.ambiguous and candidate.confidence~='high',
+  'shared official launch filename is ambiguous even with an exact title and score99: '..id)
+end
+check(result.ambiguous==true,'aggregate result tells review/bulk callers not to auto-select a release')
+check(releases['17470'].name=='Dead Space (2008)'and releases['1693980'].name=='Dead Space',
+ 'official edition names remain visible instead of manufacturing a release from the executable name')
+check(#result.candidates==2 and has(result.rejected_appids,'1303197'),
+ 'captured official DLC metadata removes a similarly named Store app before the final ranking')
+local shared_items={{id=910001,name='Ordinary Collection',type='app'},{id=910002,name='Ordinary Collection',type='app'}}
+local shared_details,shared_info={},{}
+for _,item in ipairs(shared_items)do local id=tostring(item.id)
+ shared_details[id]={success=true,data={name=item.name,type='game'}}
+ shared_info[id]={common={name=item.name,type='game'},config={launch={{executable='shared.exe'}}}}
+end
+local shared=make({aliases={},product='Ordinary Collection',search=function()return shared_items end,
+ details=shared_details,appinfo=shared_info})
+local shared_request={title='Ordinary Collection',exe_path='X:\\Any Computer\\Ordinary Collection\\shared.exe',
+ start_dir='X:\\Any Computer\\Ordinary Collection'}
+result=shared.detect(shared_request)
+check(#result.candidates==2 and result.candidates[1].ambiguous and result.candidates[2].ambiguous,
+ 'homonymous AppIDs with a reused executable never gain certainty from AppID sort order')
+local only_game=make({aliases={},product='Ordinary Collection',search=function()return shared_items end,
+ details=shared_details,appinfo={['910001']=shared_info['910001'],['910002']={common={name='Ordinary Collection',type='dlc'},
+  config={launch={{executable='shared.exe'}}}}}})
+result=only_game.detect(shared_request)
+check(#result.candidates==1 and not result.candidates[1].ambiguous,
+ 'an officially rejected non-game cannot create a shared-executable conflict')
+local explicit=make({aliases={},details=shared_details,appinfo=shared_info})
+shared_request.launch_options='--appid 910002'
+result=explicit.detect(shared_request)
+check(result.candidates[1].appid=='910002'and not result.candidates[1].ambiguous and #storeCalls(explicit)==0,
+ 'an explicit AppID remains decisive instead of searching for a shared-filename rival')
+local window_items,window_details,window_info={},{},{}
+for index=1,6 do
+ local id=tostring(920000+index)
+ window_items[index]={id=id,name='Ordinary Collection',type='app'}
+ local kind=index==6 and'game'or'dlc'
+ window_details[id]={success=true,data={name='Ordinary Collection',type=kind}}
+ window_info[id]={common={name='Ordinary Collection',type=kind},config={launch={{executable='collection.exe'}}}}
+end
+local window=make({aliases={},product='Ordinary Collection',search=function()return window_items end,
+ details=window_details,appinfo=window_info})
+result=window.detect({title='Ordinary Collection',exe_path='Y:\\Portable\\Ordinary Collection\\collection.exe',
+ start_dir='Y:\\Portable\\Ordinary Collection'})
+check(#result.candidates==1 and result.candidates[1].appid=='920006'and result.candidates[1].executable_match,
+ 'after three official DLC rejections, the adaptive window validates surviving positions4..6')
+check(#result.rejected_appids==5,'all five officially known DLCs are excluded instead of resurfacing as local/Store hints')
+local validated_ids={};for _,url in ipairs(window.calls)do local id=url:match('/v1/info/(%d+)');if id then validated_ids[id]=true end end
+local validated_count=0;for _ in pairs(validated_ids)do validated_count=validated_count+1 end
+check(validated_count==6 and #window.calls==13,'adaptive validation stays bounded to six AppIDs and one request per endpoint')
+local unavailable=make({aliases={},product='Ordinary Collection',details={},search=function()return{shared_items[1]}end})
+result=unavailable.detect({title='Ordinary Collection',exe_path='Z:\\Other PC\\Ordinary Collection\\shared.exe',
+ start_dir='Z:\\Other PC\\Ordinary Collection'})
+check(#result.candidates==1 and result.candidates[1].score<=84 and result.candidates[1].confidence=='medium'
+ and result.candidates[1].evidence_tier=='supporting'and result.candidates[1].validation_state=='partial',
+ 'Store app with missing official game metadata stays available but cannot claim HIGH or proof')
+check(result.validation_state=='partial','unknown Store app metadata never becomes a confirmed automatic identity')
 local claimed={Q100={claims={P1733={{mainsnak={datavalue={value='1238820'}}}}}}}
 local noise={id=41070,name='Serious Sam 3 BFE',type='app',tiny_image='noise.jpg'}
 local fallback=make({search=function()return{noise}end,graph=function(term)return term=='Battlefield 3'and{{id='Q100',label='Battlefield 3',description='2011 video game'}}or{}end,entities=claimed})
@@ -246,7 +319,10 @@ check(elapsed-began<=5.5,'all provider and fallback timeouts share one 5.5-secon
 check(#delayed.calls<=2,'expired normal detection does not keep issuing Store or graph requests')
 check(result.transient_error==true and result.validation_state=='partial','budget exhaustion is an incomplete result, not a confirmed miss')
 check(result.candidates[1]and result.candidates[1].appid==generic_id,'deadline retains independently discovered local candidates')
-for _,timing in ipairs(delayed.timings)do check(timing.timeout>0 and timing.timeout<=2.5,'normal endpoint timeout is clipped and positive')end
+for _,timing in ipairs(delayed.timings)do
+ check(timing.timeout>=1 and timing.timeout<=2 and timing.timeout==math.floor(timing.timeout),
+  'normal endpoint timeout is a bounded positive integer accepted by the real Millennium HTTP host')
+end
 slow=false
 local failed_calls=#delayed.calls
 result=delayed.detect(generic_request())
@@ -262,9 +338,15 @@ local recovery=make({aliases={},product=generic_name,http=function(_,_,_,opts)
 began=elapsed
 result=recovery.detect(generic_request({language='spanish',recovery_mode=true,local_candidates={}}))
 check(elapsed-began<=5.5,'localized Store and English recovery consume the same coarse-clock budget')
-check(#recovery.calls==2,'recovery stops after budget instead of six Store searches and graph fallbacks')
-check(recovery.timings[1].timeout==4 and recovery.timings[2].timeout<1,'English retry receives only the remaining budget')
+check(#recovery.calls==1,'recovery stops when less than one whole second remains instead of passing a zero/unlimited timeout')
+check(recovery.timings[1].timeout==4,'recovery uses its permitted whole-second timeout')
 check(result.transient_error==true,'failed recovery remains retryable')
+check(recovery.catalog.remaining_timeout(nil,2.5)==2 and recovery.catalog.remaining_timeout(nil,1.5)==1,
+ 'standalone requests also respect Millennium integer-second timeout ABI')
+check(recovery.catalog.remaining_timeout(nil,0.9)==nil,'a sub-second allowance never becomes host timeout zero')
+local subsecond=recovery.catalog.new_request_budget(os.time()*1000+1999)
+check(recovery.catalog.remaining_timeout(subsecond,2.5)==nil and subsecond.exhausted and subsecond.incomplete,
+ 'insufficient whole-second budget becomes partial without starting another provider request')
 
 local queued=make({aliases={},product=generic_name})
 result=queued.detect(generic_request({expires_at_ms=elapsed*1000-2000}))

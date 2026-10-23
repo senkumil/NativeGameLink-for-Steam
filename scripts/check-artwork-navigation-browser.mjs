@@ -11,12 +11,13 @@ const edge = process.env.ARTWORK_BROWSER_EXECUTABLE || process.env.CLOUD_BROWSER
 assert.ok(fs.existsSync(edge), `Edge executable missing: ${edge}`);
 const sources = Object.fromEntries([
   ['runtime', 'frontend/features/library/runtime.ts'],
+  ['mounted-sidebar', 'frontend/features/library/mounted-sidebar.ts'],
   ['after-native-paint', 'frontend/core/after-native-paint.ts'],
   ['navigation-controller', 'frontend/features/library/navigation-controller.ts'],
   ['render-session', 'frontend/features/library/render-session.ts'],
   ['sidebar-interaction', 'frontend/steam/sidebar-interaction.ts'],
   ['library-sidebar', 'frontend/steam/library-sidebar.ts'],
-  ['class-module-cache', 'frontend/steam/class-module-cache.ts'],
+  ['pure-class-factory', 'frontend/steam/gamepad/components/pure-class-factory.ts'], ['class-module-cache', 'frontend/steam/class-module-cache.ts'],
   ['css', 'frontend/steam/css.ts'],
   ['native-dom', 'frontend/steam/native-dom.ts'],
   ['library-details', 'frontend/steam/library-details.ts'],
@@ -43,6 +44,7 @@ async function browserChecks(sources) {
   let scans = 0;
   let prepares = 0;
   let stages = 0;
+  let cardRefreshes = 0, cardOwnerCurrent = true;
   let cacheReads = 0;
   const shortcutMutationAttempts = [];
   let frameTurn = 0;
@@ -121,13 +123,14 @@ async function browserChecks(sources) {
     './social/feed': { disposeActivityFeedInteractions: noop },
     './social/status': { disposeStatusPostBox: noop },
     './community-view': { disposeCommunitySection: noop },
-    './trading-cards': { disposeTradingCardUI: noop },
+    './trading-cards': { disposeTradingCardUI: noop, refreshTradingCardUI: () => { cardRefreshes++; return cardOwnerCurrent; } },
 	'./controller': { disposeControllerSidebarWatcher: noop },
     './sidebar-order': { disposeLinkedSidebarOrder: noop },
     './shortcut-launch-options': { reconcileShortcutLaunchOptions: (...args) => shortcutMutationAttempts.push({ type: 'launch-options', args }) },
     './renderer': { renderLinkedGamePage: (doc, notice, model, id, news, friends, community, context) => {
       if (!context.isCurrent()) return false;
       renders.push({ id, frame: frameTurn });
+      cardOwnerCurrent = true;
       renderGuards.push(context.isCurrent);
       doc.getElementById('gdl-library-injected')?.remove();
       doc.getElementById('gdl-link-bar')?.remove();
@@ -459,6 +462,14 @@ async function browserChecks(sources) {
     check(renders.length === beforeLateMetadata.renders + 1 && renders.at(-1).id === steamIds.b,
       'The deferred metadata response renders once after the current native hero finishes loading');
     deferred.delete(steamIds.b); cached.set(steamIds.b, data(steamIds.b));
+    const beforeCardRefresh = { renders: renders.length, refreshes: cardRefreshes };
+    await runtime.tryInjectLibraryData(document);
+    check(cardRefreshes === beforeCardRefresh.refreshes + 1 && renders.length === beforeCardRefresh.renders,
+      'An intact mounted route renews the card binding without rebuilding the activity feed');
+    cardOwnerCurrent = false;
+    await runtime.tryInjectLibraryData(document);
+    check(renders.length === beforeCardRefresh.renders + 1 && renders.at(-1).id === steamIds.b && cardOwnerCurrent,
+      'A retained activity root cannot suppress sidebar recovery when Steam replaced its native column owner');
     check(shortcutMutationAttempts.length === 0,
       'Cached, cold, repeated, sibling and native navigation stay read-only over Steam shortcut identity and artwork');
     runtime.disposeLibraryRuntime();

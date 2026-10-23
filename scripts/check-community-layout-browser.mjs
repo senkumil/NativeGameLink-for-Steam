@@ -26,8 +26,9 @@ const sources = Object.fromEntries([
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
   }).outputText;
   if (name === 'community-view') {
-    assert(source.includes('const occupied = [];'), 'The resize-work probe must instrument the production dense placement loop');
-    source = source.replace('const occupied = [];', 'window.__gdlDensePlacementPasses = (window.__gdlDensePlacementPasses || 0) + 1; const occupied = [];');
+    const placement = 'const occupied = [];';
+    assert(source.includes(placement), 'The resize-work probe must instrument native dense-grid placement');
+    source = source.replaceAll(placement, `window.__gdlDensePlacementPasses = (window.__gdlDensePlacementPasses || 0) + 1; ${placement}`);
   }
   return [name, source];
 }));
@@ -240,7 +241,7 @@ async function browserChecks(sources) {
       const placements = targetCards.map(card => {
         const rect = card.getBoundingClientRect(), image = card.querySelector('.gdl-community-media .gdl-community-preview');
         const ratio = image?.naturalWidth && image?.naturalHeight ? image.naturalWidth / image.naturalHeight : 16 / 9;
-        const span = isVideo(card) ? Math.min(2, count) : image && ratio > 2.5 ? Math.min(3, count) : 1;
+        const span = !isVideo(card) && image && ratio > 2.5 ? Math.min(3, count) : 1;
         const rows = !isVideo(card) && image && ratio <= .8 ? 2 : 1;
         const top = (rect.top - box.top) / zoom, left = (rect.left - box.left) / zoom;
         const row = rowTops.findIndex(value => Math.abs(value - top) <= 1.1);
@@ -268,16 +269,6 @@ async function browserChecks(sources) {
         const expectedHeight = heights.slice(row, row + rows).reduce((sum, value) => sum + value, 0) + (rows - 1) * 32;
         check(row + rows <= heights.length && Math.abs(height - expectedHeight) <= 1.1,
           `${label}: entry ${card.dataset.gdlCommunityCard} stretches to its complete ${rows}-row boundary`);
-        const batchStart = targetGrid === grid ? Math.max(0, ...publishedBatchEnds.filter(end => end <= index)) : 0;
-        const firstRow = Math.max(0, ...placements.slice(0, batchStart).map(item => item.row + item.rows));
-        const earlierFit = Array.from({ length: row - firstRow + 1 }, (_value, offset) => firstRow + offset).some(candidateRow =>
-          Array.from({ length: count - span + 1 }, (_value, candidateColumn) => candidateColumn).some(candidateColumn => {
-            if (candidateRow === row && candidateColumn >= column) return false;
-            return Array.from({ length: rows }, (_value, offsetRow) => offsetRow).every(offsetRow =>
-              Array.from({ length: span }, (_value, offsetColumn) => offsetColumn).every(offsetColumn =>
-                !occupied.has(`${candidateRow + offsetRow}:${candidateColumn + offsetColumn}`)));
-          }));
-        check(row >= firstRow && !earlierFit, `${label}: entry ${card.dataset.gdlCommunityCard} fills the earliest free cells in its published batch without moving previous rows`);
         for (let y = row; y < row + rows; y++) for (let x = column; x < column + span; x++) {
           check(!occupied.has(`${y}:${x}`), `${label}: entry ${card.dataset.gdlCommunityCard} never shares an occupied row cell`);
           occupied.add(`${y}:${x}`);
@@ -294,7 +285,7 @@ async function browserChecks(sources) {
           const thumbBox = thumb.getBoundingClientRect();
           check(Math.abs(thumbBox.width / zoom - expectedWidth) <= 1.1
             && Math.abs(thumbBox.height / zoom - expectedWidth * 9 / 16) <= 1.1,
-            `${label}: the enlarged video poster or player retains the native 16:9 rectangle`);
+            `${label}: the single-cell video poster or player retains its complete 16:9 rectangle`);
         }
         check(rect.right <= box.right + 1.1 * zoom, `${label}: every complete card stays inside the feed width`);
       }
@@ -308,7 +299,24 @@ async function browserChecks(sources) {
       check(Math.abs(box.height / zoom - maxBottom) <= 1.1, `${label}: grid height ends at its lowest complete row`);
       return measured;
     };
+    const assertOpeningRow = (label, targetGrid, targetCards) => {
+      const images = card => card.querySelector('.gdl-community-media .gdl-community-preview');
+      const regular = card => {
+        const image = images(card);
+        if (!image) return true;
+        return image.complete && image.naturalWidth > 0 && image.naturalHeight > 0
+          && image.naturalWidth / image.naturalHeight > .8 && image.naturalWidth / image.naturalHeight <= 2.5;
+      };
+      const ranked = [...targetCards].sort((a,b) => +a.dataset.gdlCommunityCard - +b.dataset.gdlCommunityCard);
+      const firstBatch = targetGrid === grid ? ranked.slice(0, publishedBatchEnds[0]) : ranked;
+      if (!firstBatch.some(regular)) return;
+      const top = Math.min(...targetCards.map(card => card.getBoundingClientRect().top));
+      const first = targetCards.filter(card => Math.abs(card.getBoundingClientRect().top - top) <= 1.1);
+      check(first.length > 0 && first.every(regular),
+        label + ': the opening native row reserves its cells for regular media, videos and guides');
+    };
     const assertRows = label => {
+      assertOpeningRow(label, grid, visible());
       const measured = assertGridRows(label, grid, visible());
       const { box, zoom, count, placements } = measured;
       const maxBottom = Math.max(...placements.map(item => item.top + item.height), 0);
@@ -642,7 +650,8 @@ async function browserChecks(sources) {
       geometry[`nativeRows${columns}`] = { columns, rows: initial.heights, cards: initial.placements.map(({ top, left, width, height, span, rows }) => ({ top, left, width, height, span, rows })) };
       ui.disposeCommunitySection(rowSection); rowFixture.hidden = true;
     }
-    // Steam displays two videos side by side across its four normal columns.
+    // Each video uses one normal column so multiple distinct entries can share
+    // a row instead of enlarging a video to consume two content slots.
     // An isolated pair makes that visual contract independent of the variable
     // heights and mixed ordering in the long progressive feed above.
     const pairFixture = document.createElement('div'); pairFixture.id = 'video-pair-preview'; pairFixture.style.width = '1120px';
@@ -664,7 +673,7 @@ async function browserChecks(sources) {
       pairFixture.style.zoom = nativePairFixture.style.zoom = String(zoom);
       const columns = Math.max(1, Math.min(10, Math.floor((nativePairGrid.clientWidth + 24) / 280)));
       nativePairGrid.style.gridTemplateColumns = `repeat(${columns},minmax(256px,1fr))`;
-      nativePairPoster.style.gridColumn = `span ${Math.min(2, columns)}`;
+      nativePairPoster.style.gridColumn = 'span 1';
       window.dispatchEvent(new Event('resize')); await settle();
       const label = `nativeVideoWidth${width}zoom${zoom}`;
       const pairGrid = pairSection.querySelector('.gdl-community-grid');
@@ -675,14 +684,14 @@ async function browserChecks(sources) {
         `${label}: native section margins and rounded client width produce the same responsive column count`);
       if (nativePairGrid.clientWidth >= 256) {
         check(Math.abs(actual.width - nativeBox.width) <= 1.1 && Math.abs(actualPoster.height - nativeBox.height) <= 1.1,
-          `${label}: the video matches the installed native grid's exact poster width and height`);
+          `${label}: the video fits one ordinary grid cell with a complete 16:9 poster`);
       } else {
         check(Math.abs(actual.width - pairGrid.getBoundingClientRect().width) <= 1.1
           && Math.abs(actualPoster.height - actual.width * 9 / 16) <= 1.1,
           `${label}: below the native 256px minimum, the single-column fallback fits the feed with a complete 16:9 poster`);
       }
-      if (width === 1118.4) check(columns === 4 && Math.abs(actual.width - 671.5) <= 1.1,
-        `${label}: the reported native view retains four normal columns and a 671.5px two-column video`);
+      if (width === 1118.4) check(columns === 4 && Math.abs(actual.width - 320.75) <= 1.1,
+        `${label}: the reported view retains four normal columns and a 320.75px single-cell video`);
       if (width === 1115.6) check(columns === 4,
         `${label}: rounding clientWidth retains the native fourth column immediately below the fractional breakpoint`);
       assertPosters(label, pairCards);
@@ -690,23 +699,23 @@ async function browserChecks(sources) {
         nativeVideoWidth: nativeBox.width, actualVideoWidth: actual.width, nativePosterHeight: nativeBox.height, actualPosterHeight: actualPoster.height };
     }
     nativePairFixture.remove(); pairFixture.style.zoom = '1';
-    for (const [width, columns] of [[1120, 4], [840, 3], [240, 1]]) {
+    for (const [width, columns] of [[1120, 4], [840, 3], [560, 2], [240, 1]]) {
       pairFixture.style.width = `${width}px`; window.dispatchEvent(new Event('resize')); await settle();
       const pairGrid = pairSection.querySelector('.gdl-community-grid'), gridBox = pairGrid.getBoundingClientRect();
       const gridWidth = Number.parseFloat(getComputedStyle(pairGrid).width), columnWidth = (gridWidth - (columns - 1) * 24) / columns;
-      const span = Math.min(2, columns), videoWidth = span * columnWidth + (span - 1) * 24;
+      const span = 1, videoWidth = columnWidth;
       const boxes = pairCards.map(card => card.getBoundingClientRect());
       assertPosters(`videoPair${width}`, pairCards);
       check(Number(pairGrid.style.getPropertyValue('--gdl-community-columns')) === columns,
         `videoPair${width}: the real renderer uses ${columns} normal responsive columns`);
       check(boxes.every(box => Math.abs(box.width - videoWidth) <= 1.1)
         && pairCards.every(card => Math.abs(card.querySelector('.gdl-community-video-thumb').getBoundingClientRect().height - videoWidth * 9 / 16) <= 1.1),
-        `videoPair${width}: each video occupies ${span} native column${span === 1 ? '' : 's'} with an exact 16:9 poster`);
+        `videoPair${width}: each video occupies one ordinary column with an exact 16:9 poster`);
       check(Math.abs(boxes[0].left - gridBox.left) <= 1.1 && Math.abs(boxes[0].top - gridBox.top) <= 1.1,
         `videoPair${width}: the first video starts at the native grid origin`);
-      if (columns === 4) {
+      if (columns >= 2) {
         check(Math.abs(boxes[1].left - boxes[0].right - 24) <= 1.1 && Math.abs(boxes[1].top - boxes[0].top) <= 1.1,
-          'videoPair1120: two enlarged videos share a full four-column row with the native 24px gutter');
+          `videoPair${width}: two distinct videos share a row with the native 24px gutter`);
       } else {
         check(Math.abs(boxes[1].left - boxes[0].left) <= 1.1 && Math.abs(boxes[1].top - boxes[0].bottom - 32) <= 1.1,
           `videoPair${width}: videos wrap completely with the native 32px vertical gap`);
@@ -729,7 +738,7 @@ async function browserChecks(sources) {
     adaptiveHost.id = 'controller-layout-preview';
     adaptiveHost.className = '_27RcNu8aXKBpYkHcNNrt-X';
     adaptiveHost.style.cssText = 'position:relative';
-    adaptiveHost.innerHTML = '<div class="OhSdLYuggDtBcWjYP0j_9"><aside class="_2aor4XVOYzN1PBSREk0UbO"><div data-native-notes style="height:74px;margin-bottom:26px">Notes</div><div data-native-media style="height:134px;margin-bottom:26px">Recordings &amp; Screenshots</div></aside><main class="_1sZgBDTw5NH-yuVDZK1SUU"><div style="display:flex;flex-direction:column;align-items:stretch;width:calc(67% - 32px);overflow:visible"><div style="height:300px;flex:none">One news item and the end of activity</div></div></main></div>';
+    adaptiveHost.innerHTML = '<div class="OhSdLYuggDtBcWjYP0j_9"><aside class="_2aor4XVOYzN1PBSREk0UbO"><div data-native-notes style="height:74px;margin-bottom:26px">Notes</div><div data-native-media style="height:134px;margin-bottom:26px">Recordings &amp; Screenshots</div></aside><main class="_1sZgBDTw5NH-yuVDZK1SUU"><div id="gdl-main-content-stack" style="display:flex;flex-direction:column;align-items:stretch;width:calc(67% - 32px);overflow:visible"><div class="_2r4TK4BAuU-J4FuF_O7v_5" style="height:300px;flex:none">One news item and the end of activity</div></div></main></div>';
     fixture.after(adaptiveHost);
     const adaptiveSidebar = adaptiveHost.querySelector('aside'), adaptiveMain = adaptiveHost.querySelector('main');
     const adaptiveStack = adaptiveMain.firstElementChild, adaptiveActivity = adaptiveStack.firstElementChild;
@@ -741,12 +750,25 @@ async function browserChecks(sources) {
     const adaptive = ui.insertCommunitySection(document, { sidebarColumn: adaptiveSidebar, contentColumn: adaptiveMain, twoColumnRow: adaptiveRow },
       adaptiveActivity, ui.renderCommunityContentHtml({}, videos.slice(0, 2)));
     const firstCommunityBox = adaptive.getBoundingClientRect();
-    check(adaptive.classList.contains('gdl-community-wide')
+    const nativeHeader = document.createElement('h2');
+    nativeHeader.className = '_3A_c3YHYd4YIjA8Y-olnPl _1Q2q_tQ9_Eq8YdEHNAHS3F _3jY6xWI4URhFyYsanh9VKL _2lNdDLgjQdeBXmMlPO8lvq';
+    nativeHeader.textContent = 'Community content';
+    adaptiveHost.append(nativeHeader);
+    check(Math.abs(adaptive.querySelector('.gdl-community-native-header').getBoundingClientRect().height
+      - nativeHeader.getBoundingClientRect().height) <= 0.1,
+      'Community header height matches the installed native SectionHeader and HeaderStyles');
+    const nativeBody = document.createElement('div');
+    nativeBody.className = '_31ptFGGMZrSQc5BCX1e5lm _2G5B7o_YoI__u11--EFjal';
+    adaptiveHost.append(nativeBody);
+    const headerGap = parseFloat(getComputedStyle(adaptive.querySelector('.gdl-community-native-header')).marginBottom);
+    check(headerGap === 16 && headerGap > parseFloat(getComputedStyle(nativeBody).marginTop),
+      'Community header reserves a clear 16px gap before the content cards');
+    nativeHeader.remove(); nativeBody.remove();
+    check(adaptive.parentElement === adaptiveMain
       && Math.abs(firstCommunityBox.width - adaptiveMain.getBoundingClientRect().width) <= 1.1,
       'Community publishes the whole detail width synchronously before the first column layout or paint');
-    check(Math.abs(firstCommunityBox.top - Math.max(adaptiveActivity.getBoundingClientRect().bottom + 34,
-      adaptiveSidebar.getBoundingClientRect().bottom)) <= 1.1,
-      'Community publishes its initial sidebar clearance before the first paint');
+    check(Math.abs(firstCommunityBox.top - (adaptiveActivity.getBoundingClientRect().bottom + parseFloat(getComputedStyle(adaptiveActivity).marginBottom))) <= 1.1,
+      'Community starts immediately after Activity before the first paint');
     await decode([...adaptive.querySelectorAll('img')]);
     const adaptiveCards = [...adaptive.querySelectorAll('[data-gdl-community-card]')];
     const adaptivePlaybackThumb = adaptive.querySelector('.gdl-community-video-thumb');
@@ -782,15 +804,29 @@ async function browserChecks(sources) {
         const label = `adaptive${width}zoom${zoom}/${state.name}`;
         const actual = adaptive.getBoundingClientRect(), mainBox = adaptiveMain.getBoundingClientRect();
         const activityBox = adaptiveActivity.getBoundingClientRect(), sidebarBox = adaptiveSidebar.getBoundingClientRect();
-        const expectedTop = Math.max(activityBox.bottom + 34 * zoom, state.hidden ? 0 : sidebarBox.bottom);
-        check(adaptive.classList.contains('gdl-community-wide'), `${label}: controller connection preserves full-width Community`);
+        const expectedTop = activityBox.bottom + parseFloat(getComputedStyle(adaptiveActivity).marginBottom) * zoom;
+        check(adaptive.parentElement === adaptiveMain, `${label}: Community remains outside the narrow Activity stack`);
         check(Math.abs(actual.width - mainBox.width) <= 1.1,
           `${label}: Community occupies the whole native LeftColumn without applying zoom twice`);
         check(Math.abs(actual.top - expectedTop) <= 1.1,
-          `${label}: Community follows the taller column with the logical native section gap`);
+          `${label}: Community starts after Activity without waiting for the sidebar`);
+        const heading = adaptive.querySelector('.gdl-community-native-header').getBoundingClientRect();
+        const leading = adaptive.querySelector('.gdl-community-leading-row');
+        if (!state.hidden && !state.stacked && sidebarBox.bottom > heading.bottom + 16 * zoom) {
+          check(Boolean(leading), `${label}: overlapping content has a leading native-width row`);
+          const leadingBox = leading.getBoundingClientRect();
+          check(Math.abs(leadingBox.top - heading.bottom - 16 * zoom) <= 1.1,
+            `${label}: first row preserves the 16px header gap without clearing the sidebar`);
+          check(Math.abs(leadingBox.width - heading.width) <= 1.1 && leadingBox.right <= sidebarBox.left + 1.1,
+            `${label}: first row uses exactly the native header's available width beside the sidebar`);
+          const lower = adaptive.querySelector('.gdl-community-grid').getBoundingClientRect();
+          check(lower.top >= sidebarBox.bottom - 1.1 && Math.abs(lower.width - (actual.width - 20 * zoom)) <= 1.1,
+            `${label}: later rows recover the full width after the sidebar`);
+        }
         const media = [...adaptive.querySelectorAll('img')];
-        check(media.every((image, index) => image === adaptiveMedia[index]), `${label}: width changes retain every live media node`);
-        check(adaptiveCards.every((card, index) => card === adaptive.querySelectorAll('[data-gdl-community-card]')[index]),
+        check(media.length === adaptiveMedia.length && media.every(image => adaptiveMedia.includes(image)),
+          `${label}: width changes retain every live media node`);
+        check(adaptiveCards.every(card => [...adaptive.querySelectorAll('[data-gdl-community-card]')].includes(card)),
           `${label}: connection changes retain the same cards`);
         check(adaptivePlayer === adaptivePlaybackThumb.querySelector('iframe'), `${label}: the playing video remains mounted`);
         check(notes.outerHTML.replace(/ hidden=""/g, '') === sidebarMarkup[0]
@@ -814,6 +850,11 @@ async function browserChecks(sources) {
       activity: adaptiveActivity.getBoundingClientRect().toJSON(), sidebar: adaptiveSidebar.getBoundingClientRect().toJSON(),
       main: adaptiveMain.getBoundingClientRect().toJSON() };
     geometry.controllerConnection = connectedPreview;
+    ui.setupCommunityProgressiveReveal(document, adaptive); await settle(); await settle();
+    check(adaptiveCards.every(card => [...adaptive.querySelectorAll('[data-gdl-community-card]')].includes(card)),
+      'Reinstalling Community observers retains cards from both the leading rows and the full-width grid');
+    check(adaptivePlayer === adaptivePlaybackThumb.querySelector('iframe'),
+      'Reinstalling row layout preserves the active video element');
     ui.disposeCommunitySection(adaptive);
     const adaptiveMarkup = adaptive.outerHTML;
     adaptiveSidebar.style.display = ''; adaptiveSidebar.style.height = '400px';
@@ -903,7 +944,9 @@ try {
         const scale = canvas.width / window.innerWidth;
         return [...document.querySelectorAll('#video-pair-preview .gdl-community-video-thumb')].flatMap(thumb => {
           const box = thumb.getBoundingClientRect();
-          return [[.15,.03],[.85,.03],[.02,.5],[.98,.5],[.02,.75],[.98,.75]].map(([x,y]) => {
+          // Compact posters have captions covering the lower quarter. Probe
+          // the upper side edges so caption gradients are not mistaken for bars.
+          return [[.15,.03],[.85,.03],[.02,.25],[.98,.25],[.02,.5],[.98,.5]].map(([x,y]) => {
             const pixelX = Math.floor((box.left + box.width*x)*scale), pixelY = Math.floor((box.top + box.height*y)*scale);
             return {x:pixelX,y:pixelY,rgba:[...context.getImageData(pixelX,pixelY,1,1).data]};
           });
@@ -927,11 +970,11 @@ try {
 } finally { socket?.close(); child.kill(); }
 fs.writeFileSync(path.join(scratch, 'report.json'), JSON.stringify(report, null, 2));
 assert(report.ok, `${report.error}\nPassed ${report.results.length} assertions; last checks: ${report.results.slice(-6).join('; ')}\nFixture: ${htmlPath}`);
-console.log(`Community layout browser passed: ${report.checks} assertions; aligned native rows and footer baselines against installed Steam CSS, portrait/panorama/video spans with 24px/32px gutters, native video width at fractional breakpoints and captured poster pixels without black bands, real 16:9 playback and failed-thumbnail recovery, stable progressive player rectangles and scroll, complete final cards inside clipped native hosts, native caption/guide line limits, 125%/150% zoom, lazy/error/retry media, zero stable writes and untouched native Community.`);
+console.log(`Community layout browser passed: ${report.checks} assertions; native aligned grid rows, regular opening media, portrait/panorama spans and single-cell videos with 24px/32px gutters, a clear 16px header gap, compact video widths at fractional breakpoints and captured poster pixels without black bands, real 16:9 playback and failed-thumbnail recovery, stable progressive player rectangles and scroll, complete final cards inside clipped native hosts, native caption/guide line limits, 125%/150% zoom, lazy/error/retry media, zero stable writes and untouched native Community.`);
 console.log(`Screenshot: ${screenshot}`);
 console.log(`Splitter resize work: ${JSON.stringify(report.geometry.splitterResizeWork)}`);
 console.log(`Two-video screenshot: ${videoPairScreenshot}`);
-console.log(`Native CSS row oracle screenshot: ${nativeRowsScreenshot}`);
+console.log(`Native CSS reference screenshot: ${nativeRowsScreenshot}`);
 console.log(`Controller connection layout screenshot: ${controllerLayoutScreenshot}`);
-for (const { columns, file } of rowScreenshots) console.log(`Aligned ${columns}-column screenshot: ${file}`);
+for (const { columns, file } of rowScreenshots) console.log(`Native grid ${columns}-column screenshot: ${file}`);
 

@@ -4,31 +4,22 @@ export function ensureControllerStyles(doc: Document): void {
 	injectLibraryStyle(doc, 'gdl-controller-card-style', `
 		/* Steam's controller capability surface matching official native layout */
 		#gdl-controller-section { margin: 0 !important; }
-		.gdl-controller-card {
+		#gdl-controller-section .gdl-native-sidebar-panel.gdl-controller-card {
 			height: auto !important;
 			min-height: unset !important;
 			padding: 11px 16px 11px 12px !important;
 			box-sizing: border-box !important;
-			/* Native-like glass matching native Steam right sidebar panels. */
-			background: rgba(20, 27, 36, .30) !important;
-			border: 1px solid rgba(255, 255, 255, .085) !important;
+			/* Steam's cloned section container paints the surface. Its native
+			   ControllerSectionBody is transparent, with no second glass layer. */
+			background: transparent !important;
+			border: 0 !important;
 			border-radius: 0 !important;
-			box-shadow: inset 0 1px 0 rgba(255, 255, 255, .018) !important;
+			box-shadow: none !important;
 			backdrop-filter: none !important;
 			-webkit-backdrop-filter: none !important;
-			transition: background-color .20s ease, border-color .20s ease, box-shadow .20s ease !important;
 			cursor: pointer;
 			position: relative;
 			padding: 12px 14px;
-		}
-		#gdl-controller-section[data-gdl-controller-scrolled="1"] .gdl-controller-card {
-			background: rgba(16, 22, 30, .14) !important;
-			border-color: rgba(255, 255, 255, .06) !important;
-			box-shadow: inset 0 1px 0 rgba(255, 255, 255, .012) !important;
-		}
-		.gdl-controller-card:hover {
-			border-color: rgba(255, 255, 255, .12) !important;
-			box-shadow: inset 0 1px 0 rgba(255, 255, 255, .045) !important;
 		}
 		/* Steam Webpack Module 10191 Controller Classes & Semantic Fallbacks */
 		#gdl-controller-section ._2A8NghNvAnMQQTHsudFu7H,

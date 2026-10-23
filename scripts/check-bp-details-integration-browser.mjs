@@ -72,6 +72,23 @@ await runBPBrowserScenario(sources, async fixture => {
     client, root, mapping, A, B, frame, check, listeners } = fixture;
   const logs = [], actions = [], nativeProps = [], modelReads = [];
   const runtime = dependencies['../../steam/modules/SteamWebpackRuntime'].steamWebpackRuntime;
+	const legacySteamOptions = () => ({ enabled: false, card_border: 'normal', card_ids: [], badge_id: null });
+	const communityOptions = new Map([[String(A) + ':550', legacySteamOptions()], [String(B) + ':550', legacySteamOptions()]]);
+	const optionsKey = (shortcut, appid) => {
+		if (!/^[1-9]\d*$/.test(shortcut) || !/^[1-9]\d*$/.test(appid)) throw Error('Invalid scoped card options fixture');
+		return shortcut + ':' + appid;
+	};
+	dependencies['../../core/community-item-options'] = {
+		communityCardId: card => 'card:' + Boolean(card.foil) + ':' + card.image,
+		communityBadgeId: badge => 'badge:' + Boolean(badge.foil) + ':' + Number(badge.level || 0) + ':' + badge.image,
+		getCachedCommunityItemOptions: (_doc, shortcut, appid) => communityOptions.get(optionsKey(shortcut, appid)) || null,
+		getCommunityItemOptions: async (_doc, shortcut, appid) => {
+			const key = optionsKey(shortcut, appid);
+			if (!communityOptions.has(key)) communityOptions.set(key, { enabled: true, card_border: 'foil', card_ids: [], badge_id: null, auto_foil: true });
+			return communityOptions.get(key);
+		},
+		subscribeCommunityItemOptions: (_doc, shortcut, appid) => { optionsKey(shortcut, appid); return () => {}; },
+	};
   dependencies['../library/linked-card-presentation'] = load('linked-card-presentation');
   const originalRuntime = { ...runtime };
   const factoryReads = [];
@@ -119,7 +136,8 @@ await runBPBrowserScenario(sources, async fixture => {
     '../../steam/css': { PLAYBAR_CLASSES: () => ({}), APP_DETAILS_CLASSES: () => ({}) },
     './PlaybarControllerIcons': { mountPlaybarControllerIcons: () => () => {}, disposePlaybarControllerIcons() {} },
     '../achievements/lifecycle': { ACHIEVEMENT_REFRESH_STORAGE_KEY: 'fixture-achievement-refresh' },
-    '../library/community-items': { getCachedOfficialCommunityItems: () => null, getOfficialCommunityItems: async () => null,
+    '../library/community-items': { getCachedOfficialCommunityItems: () => null, getImmediateOfficialCommunityItems: () => null,
+			subscribeOfficialCommunityItems: () => () => {}, getOfficialCommunityItems: async () => null,
       normalizeCommunityAssetUrl: value => String(value || '') },
     '../library/artwork': { linkedShortcutPortrait: (_id, appid) => `https://fixture.invalid/${appid}/library_600x900.jpg` },
     '../library/news': { getCachedCommunityContent: () => null, getCachedNews: () => null,
@@ -498,7 +516,8 @@ await runBPBrowserScenario(sources, async fixture => {
     && !catalogCard.classList.contains(tradingCardClasses.Owned), 'Public catalog cards retain unknown ownership instead of borrowing an Owned style');
   check(!root.querySelector('img[src*="catalog-foil-badge"]') && !root.querySelector('img[data-gdl-badge-preview="1"]'),
     'Unknown personal inventory keeps public catalogue cards without inventing an earned foil badge');
-  const badgeProgress = [...root.querySelectorAll('button')].find(button => button.textContent.includes('Ver progreso de la insignia'));
+  const badgeProgress = root.querySelector('[data-gdl-focus-key="trading-cards-badge-550"]');
+  check(badgeProgress?.tagName === 'BUTTON', 'The localized badge-page action retains its stable exact-AppID focus key');
   badgeProgress.click(); check(actions.at(-1)?.[2] === 'https://steamcommunity.com/my/gamecards/550',
     'Catalog badge availability provides only the explicit personal badge-progress URL');
   for (const name of ['screenshots', 'notes']) {

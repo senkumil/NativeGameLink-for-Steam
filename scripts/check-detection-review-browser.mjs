@@ -12,6 +12,8 @@ const sources = Object.fromEntries(Object.entries({
   details: 'frontend/steam/library-details.ts', modal: 'frontend/core/modal.ts',
   launchDetails: 'frontend/steam/shortcut-details.ts',
   properties: 'frontend/features/shortcuts/properties.ts',
+  propertyDetection: 'frontend/features/shortcuts/properties-detection.ts',
+  propertySummary: 'frontend/features/shortcuts/properties-summary.ts',
 }).map(([key, file]) => [key, ts.transpileModule(fs.readFileSync(key === 'manual' && process.env.DETECTION_REVIEW_MANUAL_SOURCE
   ? process.env.DETECTION_REVIEW_MANUAL_SOURCE : file, 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
@@ -50,13 +52,15 @@ try {
       getShortcutDetailsBackend: async () => { state.events.push('context'); state.detailsCalls++; return state.details(); },
       detectGameCandidatesLocalBackend: async ({ request_json }) => { const request = JSON.parse(request_json); state.events.push('local'); state.requests.push(request); const value = await state.local(request); return Array.isArray(value) ? { candidates: value } : value; },
       detectGameCandidatesBackend: async ({ request_json }) => { const request = JSON.parse(request_json); state.requests.push(request); const value = await state.remote(request); return Array.isArray(value) ? { candidates: value } : value; },
-      getAllShortcutRecords: () => state.records || [record], shortcutAlreadyLinked: () => false, findMappingForShortcut: () => null,
+      getAllShortcutRecords: () => state.records || [record], shortcutAlreadyLinked: () => false, findMappingForShortcut: () => state.linkedMapping || null,
+      unlinkShortcutFromSteam: async () => { state.linkedMapping = null; return state.unlinkResult; },
       isShortcutDismissed: () => false, undismissShortcut() {},
       shortcutRuntimeHost: () => ({ getMainWindowDoc: () => document }),
       navigateToLibraryShortcut: (_doc, shortcutId) => { state.navigated = shortcutId; },
       getGameData: async appid => { state.officialCalls.push(appid); return null; },
       getPendingLinkJob: () => state.job || null, getLinkJobCompletion: () => state.completed,
       getLinkJobCompletedShortcutAppId: () => state.completed ? state.completedId || id : null,
+      getLinkJobResourcesPending: () => false,
       PENDING_LINK_JOBS_CHANGED_EVENT: 'gdl:pending-link-jobs-changed', shouldAutoApplyNoLauncher: () => false,
       isShortcutIdentityMutationInProgress: () => false, clearShortcutEdition() {}, saveShortcutEdition() {},
       stageLinkJobForRecovery() {}, cancelPendingLinkJobs: (...args) => state.cancelled.push(args),
@@ -66,6 +70,7 @@ try {
       rememberedShortcutSteamAppId: () => state.remembered || '',
       findNativePropertiesPage: doc => doc.getElementById('fixture-properties'), tryInjectNativePropertiesField() {}, tryInjectCustomizationArtwork() {},
       bindShortcutAchievementSettings: () => ({ sync() {} }), shortcutAchievementSettingsHtml: () => '',
+      bindShortcutCommunityItemSettings: () => ({ sync() {}, dispose() {} }), shortcutCommunityItemSettingsHtml: () => '',
       bindShortcutPlaytimeProperties: () => ({ sync() {} }), shortcutPlaytimePropertiesHtml: () => '', hasPendingLinkJob: () => false,
     };
     const load = key => {
@@ -73,7 +78,7 @@ try {
       const exports = {}; modules[key] = exports;
       const require = spec => {
         const selected = { './detection': 'detection', './candidate-merger': 'merger', './manual-link-review': 'review', '../../steam/shortcuts': 'shortcuts',
-          '../../steam/library-details': 'details', '../../core/modal': 'modal', './manual-link-progress': 'progress', '../../steam/shortcut-details': 'launchDetails' }[spec];
+          '../../steam/library-details': 'details', '../../core/modal': 'modal', './manual-link-progress': 'progress', '../../steam/shortcut-details': 'launchDetails', './properties-detection': 'propertyDetection', './properties-summary': 'propertySummary' }[spec];
         return selected ? load(selected) : mocks;
       };
       new Function('require', 'exports', sources[key])(require, exports); return exports;
@@ -148,7 +153,7 @@ try {
     manual.requestNativeAddShortcutReview(id, 'bf3', document);
     await waitFor(() => modal() && selected().value === strong.appid, 'Full-path first phase did not select BF3');
     check(state.events[0] === 'context' && state.events[1] === 'local', 'VDF hydration starts concurrently before fast local discovery finishes');
-    check(detection.DETECTION_MODEL_VERSION === 'v12', 'Changed detection behavior uses a fresh frontend cache model');
+    check(detection.DETECTION_MODEL_VERSION === 'v13', 'Changed detection behavior uses a fresh frontend cache model');
     check(state.requests[0].exe_path === exe && state.requests[0].start_dir === folder && state.requests[0].title === 'bf3',
       'The first production backend request preserves E:\\Juegos\\Battlefield 3\\bf3.exe and its folder');
     check(title() === 'Steam game detected' && name() === strong.name, 'Actual path evidence can immediately present the correct BF3 review');
@@ -363,11 +368,11 @@ try {
     await waitFor(() => state.job && !modal().querySelector('.gdl-manual-link-cancel').disabled, 'Partial setup was not queued');
     check(state.job.shortcutExecutable === exe && state.job.existingLaunchOptions === context.launchOptions,
       'A late different launch definition cannot retarget the queued continuation away from the executable and options confirmed at submission');
-    check(!modal().querySelector('.gdl-manual-link-status').textContent.includes('Linked.') && confirm().disabled, 'Partial setup remains pending without a premature linked/success message');
+    check(modal().querySelector('.gdl-manual-link-status').textContent.includes('Linked.') && confirm().style.display === 'none', 'A committed link is successful while optional images continue in the background');
     const latePaste = modal().querySelector('.gdl-manual-link-manual-appid'); latePaste.value = weak.appid; latePaste.dispatchEvent(new Event('input', { bubbles: true }));
     check(latePaste.value === '' && confirm().disabled, 'A late clipboard input cannot replace or re-enable a queued link selection');
     state.job.status = 'failed'; window.dispatchEvent(new Event('gdl:pending-link-jobs-changed'));
-    check(!confirm().disabled && confirm().style.display !== 'none' && !selected().disabled, 'Failed background resources restore a visible retry action and unlock selection');
+    check(confirm().style.display === 'none' && selected().disabled, 'Optional artwork repair cannot turn a confirmed link back into a failed association');
     close();
     const enqueueFixture = async () => {
       state.job = null; state.completed = undefined;
@@ -398,7 +403,7 @@ try {
     check((await detection.detectShortcutCandidatesLocal(context)).candidates[0].appid === strong.appid, 'A timed-out local request cannot poison the next successful detection');
     state.remote = () => new Promise(() => {});
     check(await detection.enrichShortcutCandidatesRemote(context, [strong]) === null, 'Unresponsive remote enrichment ends without blocking manual linking or preserving a forever-loading state');
-    state.local = () => ({ candidates: [], transient_error: true }); state.remote = () => null;
+    state.local = () => ({ candidates: [], transient_error: true }); state.remote = () => [];
     manual.requestNativeAddShortcutReview(id, 'bf3', document);
     await waitFor(() => modal()?.querySelector('.gdl-manual-link-status').textContent.includes('Steam search could not finish'),
       'Transient local and unavailable remote detection must settle as unavailable in the production review workflow');
@@ -417,7 +422,51 @@ try {
       'Retrying a transient search preserves manual AppID input and does not silently select the recovered automatic candidate');
     check(retry.style.display === 'none' && !modal().querySelector('.gdl-manual-link-status').textContent.includes('could not finish'),
       'A successful retry clears the unavailable state and hides its retry control');
-    close(); state.local = () => [strong];
+    close();
+    manual.showShortcutManualLinkModal(document, context, { candidates: [strong], transient_error: true });
+    const retryLocalRequests = [];
+    state.local = () => new Promise(resolve => retryLocalRequests.push(resolve)); state.remote = () => [];
+    manual.requestManualShortcutLink(id, 'bf3', document);
+    await waitFor(() => retryLocalRequests.length >= 2 && modal()?.querySelector('.gdl-manual-link-retry-search').style.display !== 'none', 'Retained-candidate retry did not settle');
+    check(selected().value === strong.appid && [...selected().options].some(option => option.value === strong.appid) && !confirm().disabled,
+      'Retry keeps an automatically shown candidate when the same launch context cannot obtain new local evidence');
+    close(); retryLocalRequests.forEach(resolve => resolve([strong]));
+
+    const lateLocalRequests = [];
+    state.local = () => new Promise(resolve => lateLocalRequests.push(resolve)); state.remote = () => [];
+    manual.requestNativeAddShortcutReview(id, 'bf3', document);
+    await waitFor(() => lateLocalRequests.length >= 2 && modal()?.querySelector('.gdl-manual-link-retry-search').style.display !== 'none', 'Queued-local cold lookup did not expose retry');
+    check(!modal().querySelector('.gdl-manual-link-dialog-message').textContent.includes('No reliable match'),
+      'A clean empty remote response cannot turn locally timed-out evidence into a definitive no-match');
+    lateLocalRequests[0]([strong]);
+    await waitFor(() => selected().value === strong.appid, 'The queued local result was discarded after its fast budget');
+    check(modal().querySelector('.gdl-manual-link-retry-search').style.display === 'none',
+      'A valid late local completion clears the failed-search state without starting another native link operation');
+    const replacementContext = { ...context, title: 'Replacement', exePath: 'C:\\Games\\Replacement\\replacement.exe', startDir: 'C:\\Games\\Replacement' };
+    manual.showShortcutManualLinkModal(document, replacementContext, { candidates: [rocket] });
+    lateLocalRequests[1]([strong]); await new Promise(resolve => setTimeout(resolve, 20));
+    check(selected().value === rocket.appid && modal().querySelector('.gdl-manual-link-exe-summary').textContent === `Game path: ${replacementContext.exePath}`,
+      'A late result cannot repaint the same modal after its executable context is replaced');
+    close();
+
+    let rejectedLateLocal;
+    state.local = () => rejectedLateLocal ? [] : new Promise(resolve => { rejectedLateLocal = resolve; });
+    state.remote = () => ({ candidates: [], rejected_appids: [strong.appid] });
+    manual.requestNativeAddShortcutReview(id, 'bf3', document);
+    await waitFor(() => rejectedLateLocal && modal()?.querySelector('.gdl-manual-link-select').textContent.includes('No automatic suggestions'), 'Official rejection fixture did not finish');
+    rejectedLateLocal([strong]); await new Promise(resolve => setTimeout(resolve, 20));
+    check(![...selected().options].some(option => option.value === strong.appid) && confirm().disabled,
+      'Late local completion cannot resurrect an officially rejected AppID');
+    close();
+    const closedLocalRequests = [];
+    state.local = () => new Promise(resolve => closedLocalRequests.push(resolve)); state.remote = () => [];
+    manual.requestNativeAddShortcutReview(id, 'bf3', document);
+    await waitFor(() => closedLocalRequests.length >= 2 && modal()?.querySelector('.gdl-manual-link-retry-search').style.display !== 'none', 'Closed late-local fixture did not settle');
+    const closedReview = modal(); close(); closedLocalRequests.forEach(resolve => resolve([strong]));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    check(!modal() && !closedReview.isConnected && !closedReview.querySelector('select').textContent.includes(strong.name),
+      'Closing a timed-out lookup prevents queued local results from repainting or reopening the retired review');
+    state.local = () => [strong];
     window.setTimeout = originalTimeout; state.remote = () => [weak];
 
     const propertiesApi = load('properties');
@@ -442,6 +491,11 @@ try {
     check(document.querySelector('#fixture-properties .gdl-auto-candidate-preview').style.display === 'none', 'Properties does not display unrelated weak-candidate artwork before selection');
     chooseProperty(weak.appid);
     check(propsInput().value === weak.appid && !propsSave().disabled && !propsTitle().includes('Detected:'), 'Properties permits explicit uncertain selection with a warning rather than an automatic detection claim');
+    check(document.querySelector('#fixture-properties .gdl-link-section').dataset.linked === 'false'
+      && !document.querySelector('#fixture-properties .gdl-linked-game-id').textContent,
+      'Choosing a suggestion never presents it as an already committed link in the compact summary');
+    check(document.querySelector('#fixture-properties .gdl-auto-candidate-strip').hidden,
+      'A single candidate does not repeat its selected thumbnail in a second strip');
     check(document.querySelector('#fixture-properties .gdl-candidate-meta').textContent.includes('7/100') && propsSelect().textContent.includes('7/100'), 'Properties preview and suggestion scores use points consistently');
     propsInput().value = 'https://store.steampowered.com/app/123456/'; propsInput().dispatchEvent(new Event('input', { bubbles: true }));
     releaseRemote([strong]); await waitFor(() => hasPropertyCandidate(strong.appid), 'Properties remote enrichment did not finish');
@@ -486,6 +540,62 @@ try {
       await waitFor(() => state.links.length > before && state.cancelled.length >= cancelled + 2 && !propsSave().disabled, 'Terminal Properties identity failure was not cancelled');
       check(!state.queued.length && state.links.at(-1).shortcutExecutable === exe, `Properties ${thrown ? 'thrown' : 'returned'} ${code} never queues an automatic retry against another executable`);
     }
+    window.setTimeout = (callback, delay, ...args) => originalTimeout(callback, [1800, 6500].includes(delay) ? 30 : delay, ...args);
+    state.local = () => ({ candidates: [], transient_error: true }); state.remote = () => [];
+    mountProperties();
+    await waitFor(() => document.querySelector('#fixture-properties .gdl-auto-detect-retry')?.hidden === false, 'Incomplete Properties lookup did not expose retry');
+    check(propsTitle().includes('Steam search could not finish') && !propsSelect().textContent.includes('No automatic suggestions'),
+      'Properties distinguishes an incomplete local search from a completed empty result');
+    state.local = () => [strong]; document.querySelector('#fixture-properties .gdl-auto-detect-retry').click();
+    await waitFor(() => propsSelect().value === strong.appid, 'Properties retry failed to recover its local match');
+    check(document.querySelector('#fixture-properties .gdl-auto-detect-retry').hidden,
+      'A successful Properties retry clears the unavailable state');
+
+    state.local = () => [strong]; state.remote = () => ({ candidates: [], transient_error: true }); mountProperties();
+    await waitFor(() => hasPropertyCandidate(strong.appid) && document.querySelector('#fixture-properties .gdl-auto-detect-retry')?.hidden === false, 'Known Properties candidate fixture did not settle');
+    const pendingPropertyRetries = [];
+    state.local = () => new Promise(resolve => pendingPropertyRetries.push(resolve)); state.remote = () => [];
+    document.querySelector('#fixture-properties .gdl-auto-detect-retry').click();
+    await waitFor(() => pendingPropertyRetries.length && document.querySelector('#fixture-properties .gdl-auto-detect-retry').hidden === false, 'Known Properties retry did not settle');
+    check(propsSelect().value === strong.appid && hasPropertyCandidate(strong.appid),
+      'Properties retry preserves its automatically shown candidate when new local evidence times out');
+    pendingPropertyRetries.forEach(resolve => resolve([]));
+
+    let latePropertyLocal;
+    state.local = () => new Promise(resolve => { latePropertyLocal = resolve; }); state.remote = () => [];
+    mountProperties();
+    await waitFor(() => document.querySelector('#fixture-properties .gdl-auto-detect-retry')?.hidden === false, 'Queued Properties local lookup did not settle');
+    latePropertyLocal([strong]); await waitFor(() => propsSelect().value === strong.appid, 'Properties discarded its bounded late local result');
+    check(document.querySelector('#fixture-properties .gdl-auto-detect-retry').hidden,
+      'Properties can recover from an already queued local result without another query');
+    state.local = () => new Promise(resolve => { latePropertyLocal = resolve; }); mountProperties();
+    await waitFor(() => document.querySelector('#fixture-properties .gdl-auto-detect-retry')?.hidden === false, 'Stale Properties fixture did not settle');
+    const retiredPropertyLocal = latePropertyLocal;
+    state.local = () => [weak]; mountProperties(); await waitFor(() => hasPropertyCandidate(weak.appid), 'Replacement Properties fixture missing');
+    retiredPropertyLocal([strong]); await new Promise(resolve => setTimeout(resolve, 20));
+    check(hasPropertyCandidate(weak.appid) && !hasPropertyCandidate(strong.appid),
+      'Late local results from a removed Properties section cannot update its replacement');
+    window.setTimeout = originalTimeout;
+    state.linkedMapping = strong.appid; state.unlinkResult = { ok: false, error: 'steam_appid_file_restore_failed' };
+    state.local = () => [strong]; mountProperties();
+    const propsUnlink = () => document.querySelector('#fixture-properties .gdl-unlink-btn');
+    await waitFor(() => propsUnlink() && !propsUnlink().disabled, 'Linked Properties did not enable Unlink');
+    check(!document.querySelector('#fixture-properties .gdl-link-section').open
+      && document.querySelector('#fixture-properties .gdl-linked-game-id').textContent.includes(strong.appid),
+      'Already linked Properties starts with a compact closed summary of its committed AppID');
+    propsInput().value = weak.appid; propsInput().dispatchEvent(new Event('input', { bubbles: true }));
+    check(document.querySelector('#fixture-properties .gdl-linked-game-id').textContent.includes(strong.appid),
+      'Editing a replacement AppID leaves the summary attached to the committed link');
+    propsUnlink().click();
+    await waitFor(() => propsUnlink().textContent === 'Retry', 'Restore failure did not leave an actionable retry');
+    check(propsSave().textContent !== 'Linked' && !propsUnlink().disabled,
+      'Failed file restoration does not recreate a removed mapping and retains an enabled retry');
+    check(document.querySelector('#fixture-properties .gdl-link-section').dataset.linked === 'false'
+      && !document.querySelector('#fixture-properties .gdl-linked-game-id').textContent,
+      'The compact summary clears the removed link even when file restoration needs retry');
+    state.unlinkResult = { ok: true }; propsUnlink().click();
+    await waitFor(() => propsUnlink().disabled, 'A successful restoration retry did not finish');
+    check(propsUnlink().textContent === 'Unlinked', 'Confirmed restoration completes the Properties unlink state');
     document.getElementById('fixture-properties')?.remove(); window.dispatchEvent(new Event('gdl:pending-link-jobs-changed'));
     return { checks: results.length, results };
   }, sources);

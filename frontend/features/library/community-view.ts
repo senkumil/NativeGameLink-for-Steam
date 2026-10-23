@@ -9,7 +9,7 @@ import { orderCommunityItems } from './community-order';
 
 const progressiveRevealCleanup = new WeakMap<HTMLElement, () => void>();
 const deferredHydrationCleanup = new WeakMap<HTMLElement, () => void>();
-const adaptiveWidthCleanup = new WeakMap<HTMLElement, () => void>();
+const communitySidebars = new WeakMap<HTMLElement, HTMLElement>();
 const columnLayoutCleanup = new WeakMap<HTMLElement, () => void>();
 const communityLayoutRequests = new WeakMap<HTMLElement, () => void>();
 const communityRowBatches = new WeakMap<HTMLElement, number[]>();
@@ -31,7 +31,7 @@ export function disposeCommunityProgressiveReveal(root: HTMLElement): void {
 /** Dispose every observer owned by a Community section before removing it. */
 export function disposeCommunitySection(root: HTMLElement): void {
 	disposeCommunityProgressiveReveal(root);
-	adaptiveWidthCleanup.get(root)?.();
+	communitySidebars.delete(root);
 	columnLayoutCleanup.get(root)?.();
 }
 
@@ -55,6 +55,14 @@ function setupCommunityColumns(doc: Document, root: HTMLElement): void {
 			image: media?.querySelector<HTMLImageElement>('.gdl-community-preview'),
 			video: card.classList.contains('gdl-community-card-video') }];
 	}));
+	const leadingRows: HTMLElement[] = [];
+	const move = (parent: HTMLElement, child: HTMLElement, before: Element | null): void => {
+		if (child.parentElement === parent && child.nextElementSibling === before) return;
+		// Atomic moves preserve a playing iframe when a row changes on resize.
+		const atomic = parent as HTMLElement & { moveBefore?: (node: Node, before: Node | null) => void };
+		if (atomic.moveBefore && child.isConnected && parent.isConnected) atomic.moveBefore(child, before);
+		else parent.insertBefore(child, before);
+	};
 	const imageFor = (card: HTMLElement): HTMLImageElement | null | undefined => {
 		const binding = mediaBindings.get(card)!;
 		if (binding.firstChild !== binding.media?.firstElementChild) {
@@ -119,25 +127,114 @@ function setupCommunityColumns(doc: Document, root: HTMLElement): void {
 	const layout = (): void => {
 		if (disposed || !root.isConnected || !grid.isConnected) return;
 		styleWrites = []; mediaStates = [];
+		// Steam lets each row flow beside its right float independently. A single
+		// grid establishes one formatting context and traps every later row at
+		// that first narrow width. Keep only the overlapping rows separate.
+		const sidebar = communitySidebars.get(root);
+		const side = sidebar?.getBoundingClientRect();
+		const rootBox = root.getBoundingClientRect();
+		const rootWidth = Number.parseFloat(view?.getComputedStyle(root).width || '') || root.offsetWidth;
+		const scale = rootWidth > 0 ? rootBox.width / rootWidth : 1;
+		const beside = side && sidebar && view?.getComputedStyle(sidebar).display !== 'none'
+			&& side.width > 1 && side.left > rootBox.left + 1 && side.left < rootBox.right;
+		let visibleCards = cards.filter(card => !card.hidden);
+		if (visibleCards.length < (batchEnds[batchEnds.length - 1] || 0)) batchEnds.length = 0;
+		if (visibleCards.length > (batchEnds[batchEnds.length - 1] || 0)) batchEnds.push(visibleCards.length);
+		// Keep Steam's card sizes and aligned rows. Only the opening row needs
+		// regular proportions; portraits and panoramas retain their later slots.
+		const heading = root.querySelector('.gdl-community-native-header')!.getBoundingClientRect();
+		const firstRowBeside = beside && heading.bottom + 16 * scale < side.bottom - 1;
+		const firstRowWidth = firstRowBeside ? heading.width / scale : grid.clientWidth;
+		const firstRowCount = Math.max(1, Math.min(10, Math.floor((firstRowWidth + 24) / 280)));
+		const opening = visibleCards.slice(0, batchEnds[0]).filter(card => {
+			if (mediaBindings.get(card)!.video || card.classList.contains('gdl-community-card-guide')) return true;
+			const image = imageFor(card);
+			if (!image?.complete || !image.naturalWidth || !image.naturalHeight) return false;
+			const aspect = image.naturalWidth / image.naturalHeight;
+			return aspect > 0.8 && aspect <= 2.5;
+		}).slice(0, firstRowCount);
+		const openingSet = new Set(opening);
+		if (opening.length) visibleCards = [...opening, ...visibleCards.filter(card => !openingSet.has(card))];
+		const pending = visibleCards.map((card, index) => ({ card, batch: batchEnds.findIndex(end => index < end) }));
+		const leading = new Set<HTMLElement>();
+		let rowIndex = 0;
+		let top = root.querySelector('.gdl-community-native-header')!.getBoundingClientRect().bottom + 16 * scale;
+		while (beside && top < side.bottom - 1 && pending.length) {
+			let row = leadingRows[rowIndex];
+			if (!row) {
+				row = doc.createElement('div'); row.className = 'gdl-community-leading-row';
+				leadingRows.push(row); grid.before(row);
+				observer?.observe(row);
+			}
+			// The native header already resolves the float's inline margin and
+			// narrow-window gutter. Reuse that available width for the first rows.
+			const available = Math.max(1, root.querySelector('.gdl-community-native-header')!.getBoundingClientRect().width / scale);
+			const count = Math.max(1, Math.floor((available + 24) / 280));
+			if (row.style.width !== `${available}px`) row.style.width = `${available}px`;
+			const template = `repeat(${count}, minmax(0px, 1fr))`;
+			if (row.style.gridTemplateColumns !== template) row.style.gridTemplateColumns = template;
+			let used = 0;
+			const selected: HTMLElement[] = [];
+			const batch = pending[0].batch;
+			const spanFor = (card: HTMLElement): number => {
+				const binding = mediaBindings.get(card)!;
+				const image = imageFor(card);
+				const aspect = image?.naturalWidth && image.naturalHeight ? image.naturalWidth / image.naturalHeight : 0;
+				return Math.min(count, !binding.video && aspect > 2.5 ? 3 : 1);
+			};
+			while (pending.length && used < count) {
+				// Native Steam searches its remaining pool for the first item that
+				// fits. A wide next item must not strand a usable cell beside it.
+				// Keep new reveal batches in new rows so active players stay put.
+				const index = pending.findIndex(item => item.batch === batch && spanFor(item.card) <= count - used
+					&& (rowIndex > 0 || !opening.length || openingSet.has(item.card)));
+				if (index < 0) break;
+				const { card } = pending.splice(index, 1)[0], span = spanFor(card);
+				if (row.children[selected.length] !== card) move(row, card, row.children[selected.length] || null);
+				selected.push(card); leading.add(card); used += span;
+				if (card.style.gridColumn !== `span ${span}`) card.style.gridColumn = `span ${span}`;
+				if (card.style.gridRow !== 'auto') card.style.gridRow = 'auto';
+				syncMedia(card, (available - (count - 1) * 24) / count * span + 24 * (span - 1));
+			}
+			for (const child of Array.from(row.children)) {
+				if (!selected.includes(child as HTMLElement)) move(grid, child as HTMLElement, grid.firstElementChild);
+			}
+			top = row.getBoundingClientRect().bottom + 32 * scale;
+			rowIndex++;
+		}
+		for (const row of leadingRows.slice(rowIndex)) {
+			for (const card of Array.from(row.children)) move(grid, card as HTMLElement, grid.firstElementChild);
+			observer?.unobserve(row);
+			row.remove();
+		}
+		leadingRows.length = rowIndex;
+		const remaining = visibleCards.filter(card => !leading.has(card));
+		const remainingBatchEnds = [...new Set(batchEnds.map(end => visibleCards.slice(0, end).filter(card => !leading.has(card)).length))].filter(Boolean);
+		const tail = cards.filter(card => !leading.has(card));
+		for (let index = tail.length - 1; index >= 0; index--) {
+			const card = tail[index];
+			move(grid, card, index + 1 < tail.length ? tail[index + 1] : null);
+			if (card.style.gridColumn.includes('span')) { card.style.gridColumn = ''; card.style.gridRow = ''; placementKey = ''; }
+		}
 		// Computed dimensions are CSS pixels even when Steam uses a zoom factor.
 		const width = Number.parseFloat(view?.getComputedStyle(grid).width || '') || grid.clientWidth;
 		if (!(width > 0)) return;
 		const count = Math.max(1, Math.min(10, Math.floor((grid.clientWidth + 24) / 280)));
 		const cardWidth = (width - (count - 1) * 24) / count;
 		setStyle(grid, '--gdl-community-columns', String(count));
-		const visible = cards.filter(card => !card.hidden);
-		if (visible.length < (batchEnds[batchEnds.length - 1] || 0)) batchEnds.length = 0;
-		if (visible.length > (batchEnds[batchEnds.length - 1] || 0)) batchEnds.push(visible.length);
+		const visible = remaining;
 		const spans = visible.map(card => {
 			const video = mediaBindings.get(card)!.video;
 			const image = video ? null : imageFor(card);
 			const aspect = image?.naturalWidth && image.naturalHeight ? image.naturalWidth / image.naturalHeight : 0;
-			const columns = video ? Math.min(2, count) : aspect > 2.5 ? Math.min(3, count) : 1;
+			// Keep videos in individual cells so the adjacent slot shows another
+			// item instead of turning one player into a full-width filler.
+			const columns = !video && aspect > 2.5 ? Math.min(3, count) : 1;
 			const rows = aspect > 0 && aspect <= 0.8 ? 2 : 1;
 			syncMedia(card, cardWidth * columns + 24 * (columns - 1));
 			return { columns, rows };
 		});
-		const nextPlacementKey = `${count}|${batchEnds.join(',')}|${visible.map((card, index) =>
+		const nextPlacementKey = `${count}|${opening.map(card => card.dataset.gdlCommunityCard).join(',')}|${remainingBatchEnds.join(',')}|${visible.map((card, index) =>
 			`${card.dataset.gdlCommunityCard}:${spans[index].columns}:${spans[index].rows}`).join(';')}`;
 		if (placementKey !== nextPlacementKey) {
 			placementKey = nextPlacementKey;
@@ -148,14 +245,14 @@ function setupCommunityColumns(doc: Document, root: HTMLElement): void {
 			}
 			let rowOffset = 0;
 			let batchStart = 0;
-			for (const batchEnd of batchEnds) {
+			for (const batchEnd of remainingBatchEnds) {
 				// Fill whole grid cells densely within the published batch. Newly
 				// revealed cards start in new rows, as in Steam, so they cannot grow
 				// a previously visible row and displace an active video.
 				const occupied: boolean[][] = [];
 				for (let index = batchStart; index < batchEnd; index++) {
 					const span = spans[index];
-					let row = 0;
+					let row = rowOffset === 0 && !leading.size && opening.length && !openingSet.has(visible[index]) ? 1 : 0;
 					let column = 0;
 					findSlot: for (;; row++) {
 						for (column = 0; column <= count - span.columns; column++) {
@@ -202,97 +299,32 @@ function setupCommunityColumns(doc: Document, root: HTMLElement): void {
 	const Observer = view?.ResizeObserver;
 	const observer = typeof Observer === 'function' ? new Observer(queue) : null;
 	observer?.observe(grid);
+	const sidebar = communitySidebars.get(root);
+	if (sidebar) observer?.observe(sidebar);
+	if (root.previousElementSibling) observer?.observe(root.previousElementSibling);
 	for (const ancestor of ancestors) observer?.observe(ancestor);
-	grid.addEventListener('load', queue, true);
-	grid.addEventListener('error', queue, true);
+	root.addEventListener('load', queue, true);
+	root.addEventListener('error', queue, true);
 	view?.addEventListener('resize', queue, { passive: true });
 	communityLayoutRequests.set(root, layout);
 	columnLayoutCleanup.set(root, () => {
 		disposed = true;
 		if (frame) view?.cancelAnimationFrame(frame);
 		observer?.disconnect();
-		grid.removeEventListener('load', queue, true);
-		grid.removeEventListener('error', queue, true);
+		root.removeEventListener('load', queue, true);
+		root.removeEventListener('error', queue, true);
 		view?.removeEventListener('resize', queue);
 		columnLayoutCleanup.delete(root);
 		communityLayoutRequests.delete(root);
 		root.style.removeProperty('--gdl-community-bottom-clearance');
+		if (leadingRows.length) {
+			for (let index = cards.length - 1; index >= 0; index--) {
+				move(grid, cards[index], index + 1 < cards.length ? cards[index + 1] : null);
+			}
+			for (const row of leadingRows) row.remove();
+		}
 	});
 	layout();
-}
-
-/**
- * Keep Community below both columns at the full detail-pane width. The right
- * float can grow after controller connection or sidebar hydration; narrowing
- * the whole feed then leaves even its lower rows trapped in the activity width.
- */
-function setupCommunityAdaptiveWidth(
-	doc: Document,
-	root: HTMLElement,
-	activity: HTMLElement,
-	layout: NativeLibraryLayout,
-): void {
-	adaptiveWidthCleanup.get(root)?.();
-	const sidebar = layout.sidebarColumn;
-	const content = layout.contentColumn;
-	if (!sidebar || !content) return;
-	const win = doc.defaultView;
-	let frame = 0;
-	let disposed = false;
-	const update = (): void => {
-		frame = 0;
-		if (disposed || !root.isConnected || !activity.isConnected || !sidebar.isConnected || !content.isConnected) return;
-		const sidebarStyle = win?.getComputedStyle(sidebar);
-		const sidebarRect = sidebar.getBoundingClientRect();
-		const activityRect = activity.getBoundingClientRect();
-		const contentRect = content.getBoundingClientRect();
-		const contentStyle = win?.getComputedStyle(content);
-		let contentWidth = Number.parseFloat(contentStyle?.width || '') || content.clientWidth;
-		if (contentStyle?.boxSizing !== 'border-box') {
-			for (const value of [contentStyle?.paddingLeft, contentStyle?.paddingRight,
-				contentStyle?.borderLeftWidth, contentStyle?.borderRightWidth]) contentWidth += Number.parseFloat(value || '') || 0;
-		}
-		// Steam can zoom the whole desktop surface. DOM rectangles include that
-		// zoom; an inline CSS width and the native 34px section gap do not.
-		const scale = contentWidth > 0 ? contentRect.width / contentWidth : 1;
-		const sidebarVisible = sidebarStyle?.display !== 'none' && sidebarStyle?.visibility !== 'hidden'
-			&& sidebarRect.width > 1 && sidebarRect.height > 1;
-		const topGap = sidebarVisible && scale > 0
-			? Math.max(34, (sidebarRect.bottom - activityRect.bottom) / scale)
-			: 34;
-		const gap = `${Math.round(topGap * 1000) / 1000}px`;
-		const width = `${Math.max(0, contentWidth)}px`;
-		if (!root.classList.contains('gdl-community-wide')) root.classList.add('gdl-community-wide');
-		if (root.style.getPropertyValue('--gdl-community-top-gap') !== gap) {
-			root.style.setProperty('--gdl-community-top-gap', gap);
-		}
-		if (root.style.getPropertyValue('--gdl-community-wide-width') !== width) {
-			root.style.setProperty('--gdl-community-wide-width', width);
-		}
-	};
-	const queueUpdate = (): void => {
-		if (disposed || frame) return;
-		frame = win?.requestAnimationFrame(update) || 0;
-		if (!frame) update();
-	};
-	const ResizeObserverCtor = win?.ResizeObserver;
-	const observer = typeof ResizeObserverCtor === 'function' ? new ResizeObserverCtor(queueUpdate) : null;
-	observer?.observe(activity);
-	observer?.observe(sidebar);
-	observer?.observe(content);
-	win?.addEventListener('resize', queueUpdate, { passive: true });
-	const cleanup = (): void => {
-		if (disposed) return;
-		disposed = true;
-		if (frame) win?.cancelAnimationFrame(frame);
-		observer?.disconnect();
-		win?.removeEventListener('resize', queueUpdate);
-		adaptiveWidthCleanup.delete(root);
-	};
-	adaptiveWidthCleanup.set(root, cleanup);
-	// The column layout below runs immediately. Publish its full width and
-	// clearance before that first pass so no narrow initial frame is painted.
-	update();
 }
 
 /** Progressive reveal that owns and disposes every listener/observer it installs. */
@@ -552,8 +584,10 @@ export function insertCommunitySection(
 	inner.id = 'gdl-community-inner';
 	inner.innerHTML = communityHtml || '';
 	node.appendChild(inner);
-	activityWrapper.parentElement.insertBefore(node, activityWrapper.nextSibling);
-	setupCommunityAdaptiveWidth(doc, node, activityWrapper, _layout);
+	const stack = activityWrapper.parentElement;
+	const anchor = stack.id === 'gdl-main-content-stack' ? stack : activityWrapper;
+	anchor.parentElement!.insertBefore(node, anchor.nextSibling);
+	if (_layout.sidebarColumn) communitySidebars.set(node, _layout.sidebarColumn);
 
 	if (communityHtml) {
 		setupCommunityProgressiveReveal(doc, node);

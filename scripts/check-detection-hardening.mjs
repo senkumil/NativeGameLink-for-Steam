@@ -366,18 +366,20 @@ function createCandidate(overrides = {}) {
 }
 
 // --------------------------------------------------------------------------
-// D16: Top #4 adaptive validation in Lua engine
+// D16: Bounded adaptive validation in Lua engine
 // --------------------------------------------------------------------------
 {
 	const luaDetectorSource = readFileSync(new URL('../backend/lib/shortcut_detection.lua', import.meta.url), 'utf8');
 	const initialValidation = luaDetectorSource.includes('for i = 1, math.min(#candidates, 3) do validate_candidate(candidates[i]) end')
 		|| luaDetectorSource.includes('initial_validation_count = strong_local_candidate and 1 or math.min(#candidates, 3)');
 	if (!initialValidation
-		|| !luaDetectorSource.includes('for i = 4, math.min(#candidates, 6) do validate_candidate(candidates[i]) end')
+		|| !luaDetectorSource.includes('if validated >= 6 then break end')
+		|| !luaDetectorSource.includes('if not candidate._validated then validate_candidate(candidate); validated = validated + 1 end')
+		|| !luaDetectorSource.includes('rank_viable()')
 		|| !luaDetectorSource.includes('top_gap < 15')) {
-		throw new Error('D16 Failed: Lua detection engine missing adaptive validation expanding to candidates 4..6.');
+		throw new Error('D16 Failed: Lua detection engine missing bounded adaptive validation of surviving candidates.');
 	}
-	console.log('✓ D16 Passed: Adaptive validation expanding to candidates 4..6 verified.');
+	console.log('✓ D16 Passed: Adaptive validation covers surviving candidates within a six-AppID limit.');
 }
 
 // --------------------------------------------------------------------------
@@ -446,8 +448,10 @@ function createCandidate(overrides = {}) {
 	const detectionSource = readFileSync(new URL('../frontend/features/shortcuts/detection.ts', import.meta.url), 'utf8');
 	const match = detectionSource.match(/export const DETECTION_MODEL_VERSION = '([^']+)';/);
 	const modelVersion = match ? match[1] : null;
-	if (modelVersion !== 'v12') {
-		throw new Error(`D20 Failed: Expected DETECTION_MODEL_VERSION to be 'v12', got '${modelVersion}'.`);
+	const backendSource = readFileSync(new URL('../backend/lib/shortcut_detection.lua', import.meta.url), 'utf8');
+	const backendVersion = backendSource.match(/DETECTION_MODEL_VERSION = "([^"]+)"/)?.[1];
+	if (!/^v\d+$/.test(modelVersion || '') || Number(modelVersion.slice(1)) < 13 || backendVersion !== modelVersion) {
+		throw new Error(`D20 Failed: Detection models must agree and invalidate v12 results; frontend '${modelVersion}', backend '${backendVersion}'.`);
 	}
 	const factoryResetSource = readFileSync(new URL('../frontend/features/shortcuts/factory-reset.ts', import.meta.url), 'utf8');
 	if (!factoryResetSource.includes('clearShortcutDetectionCache()')) {
@@ -457,7 +461,7 @@ function createCandidate(overrides = {}) {
 		|| !detectionSource.includes('cacheKey = [DETECTION_MODEL_VERSION,')) {
 		throw new Error('D20 Failed: Detection cache does not incorporate DETECTION_MODEL_VERSION or lack clear function.');
 	}
-	console.log('✓ D20 Passed: Factory reset invalidates shortcut detection cache with model version v12.');
+	console.log(`✓ D20 Passed: Factory reset invalidates shortcut detection cache with matching model ${modelVersion}.`);
 }
 
 // --------------------------------------------------------------------------

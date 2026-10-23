@@ -131,7 +131,7 @@ function desktopDetailsClasses(doc: Document): typeof DESKTOP_DETAILS_CLASSES {
 		&& module.RightColumn && module.SeekTarget), DESKTOP_DETAILS_CLASSES, doc).classes as typeof DESKTOP_DETAILS_CLASSES;
 }
 
-function nativeSectionClass(doc: Document): string {
+export function nativeSectionClass(doc: Document): string {
 	return resolveClassModule(module => Boolean(module.AppDetailsSection && module.AppDetailsSectionContainer
 		&& module.RightColumnSection), NATIVE_SECTION_CLASSES, doc).classes.AppDetailsSection;
 }

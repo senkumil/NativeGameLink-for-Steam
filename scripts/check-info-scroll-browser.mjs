@@ -15,7 +15,7 @@ let chromium;
 try { ({ chromium } = require('playwright')); }
 catch { ({ chromium } = require(path.join(bundledPackages, 'playwright'))); }
 const sources = Object.fromEntries([
-  ['class-module-cache', 'frontend/steam/class-module-cache.ts'],
+  ['pure-class-factory', 'frontend/steam/gamepad/components/pure-class-factory.ts'], ['class-module-cache', 'frontend/steam/class-module-cache.ts'],
   ['css', 'frontend/steam/css.ts'], ['native-dom', 'frontend/steam/native-dom.ts'],
   ['library-details', 'frontend/steam/library-details.ts'], ['dom', 'frontend/core/dom.ts'],
   ['achievement-playbar-space', 'frontend/steam/achievement-playbar-space.ts'],
@@ -31,7 +31,7 @@ async function browserChecks({ sources, foreignOnly = false }) {
   const flush = (delay = 90) => new Promise(resolve => setTimeout(resolve, delay));
   const shortcutId = 3000000001, gameKey = '1790600';
   let route = shortcutId;
-  const classes = { Container: 'SteamPlaybarContainer', InPage: 'SteamInPage', MenuButton: 'SteamMenuButton',
+  const classes = { Container: 'SteamPlaybarContainer', InPage: 'SteamInPage', MenuButton: 'SteamMenuButton', MenuActive: 'SteamMenuActive',
     PlayBarDetailLabel: 'SteamPlayBarDetailLabel', GameStatsSection: 'SteamGameStatsSection',
     PlayBarCloudStatusContainer: 'SteamPlayBarCloudStatusContainer', AppButtonsContainer: 'SteamAppButtonsContainer',
     FavoriteButton: 'SteamFavoriteButton', DotDotDot: 'SteamDotDotDot' };
@@ -222,8 +222,16 @@ async function browserChecks({ sources, foreignOnly = false }) {
     const topButton = freshButton.cloneNode(true); freshButton.replaceWith(topButton);
     info.ensureNativeInfoButton(document, model); await flush(); await flush();
     check(topButton.dataset.gdlScrollTopActive === '0', 'A rebuilt top-of-page control stays in Information mode');
+    topButton.setAttribute('aria-expanded', 'true'); topButton.classList.add(classes.MenuActive);
+    info.ensureNativeInfoButton(document, model);
+    check(topButton.getAttribute('aria-expanded') === 'false' && !topButton.classList.contains(classes.MenuActive),
+      'A rebuilt control discards stale expanded attributes and lighting from a different panel state');
     topButton.click();
     check(panel.dataset.expanded === '1', 'A rebuilt Information button toggles its panel exactly once');
+    topButton.setAttribute('aria-expanded', 'false'); topButton.classList.remove(classes.MenuActive);
+    info.ensureNativeInfoButton(document, model);
+    check(topButton.getAttribute('aria-expanded') === 'true' && topButton.classList.contains(classes.MenuActive),
+      'A rebuilt control adopts the currently open panel rather than its cloned collapsed attributes');
     topButton.click();
     check(panel.dataset.expanded === '0', 'The same rebuilt Information button closes its panel exactly once');
 

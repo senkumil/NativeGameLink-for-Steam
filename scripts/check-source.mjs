@@ -308,10 +308,15 @@ try {
 	}
 	if (!communityBackendSource.includes('result.transient_error =')
 		|| !communityBackendSource.includes('COMMUNITY_ITEMS_FAILURE_CACHE_SECONDS = 10')
-		|| !communityItemsSource.includes('value.transient_error !== true')
-		|| !communityItemsSource.includes('if (!backendTransient) cacheSet(')) {
+		|| !communityItemsSource.includes('const failed = !indexed || Boolean(indexed.error || indexed.transient_error)')
+		|| !communityItemsSource.includes('failedParts.add(part)')
+		|| !communityItemsSource.includes('entry.failed = failedParts.size > 0 && !completeCatalog(entry.definitions)')
+		|| !communityItemsSource.includes('entry.expiresAt = entry.failed ? 0 :')
+		|| !communityItemsSource.includes('if (!ready?.cards_complete || !ready.badges_complete) return')
+		|| !communityItemsSource.includes('definitions.cards_complete ? definitions.cards')
+		|| !communityItemsSource.includes('if (!entry.failed && entry.snapshot?.cards_complete && entry.snapshot.badges_complete)')) {
 		fail(path.join(frontendRoot, 'features', 'library', 'community-items.ts'),
-			'partial community-item responses must remain visible but retryable instead of becoming fresh empty snapshots');
+			'partial HTTP catalogues must stay retryable; only complete native definitions can supersede those failures and only complete sets can become fresh');
 	}
 	if (!resourceCacheSource.includes('invalidateActivityFeedCaches(ids)')
 		|| !resourceCacheSource.includes('invalidateLocalAchievementGameInfoCache(ids)')
@@ -369,31 +374,30 @@ if (historicalSidebarSource.includes('developers?.join(')
 }
 if (!communityStylesSource.includes('.gdl-community-grid { display:grid;position:relative;')
 	|| !communityStylesSource.includes('grid-auto-flow:row dense;gap:32px 24px;align-items:stretch;')
-	|| !communityViewSource.includes("'--gdl-community-card-rows', String(spans[index].rows)")
-	|| !communityViewSource.includes('placementKey !== nextPlacementKey')
+	|| !communityStylesSource.includes('grid-row-end:span var(--gdl-community-card-rows,1)')
+	|| !communityViewSource.includes("setStyle(visible[index], 'grid-column-start'")
+	|| !communityViewSource.includes("setStyle(visible[index], 'grid-row-start'")
 	|| !communityViewSource.includes('observer?.observe(grid)')
-	|| !communityViewSource.includes("grid.addEventListener('load', queue, true)")
-	|| !communityViewSource.includes("grid.addEventListener('error', queue, true)")
+	|| !communityViewSource.includes("root.addEventListener('load', queue, true)")
+	|| !communityViewSource.includes("root.addEventListener('error', queue, true)")
 	|| !communityViewSource.includes('orderCommunityItems(sortByLanguage(filteredItems))')
 	|| !communityStylesSource.includes('-webkit-line-clamp:6;')
-	|| !communityStylesSource.includes('#gdl-community-inner { width:100%;min-width:0;max-width:100%;overflow:hidden')) {
-	fail(communityStylesFile, 'community cards must follow native aligned rows, dense placement, guide excerpts and late image sizing within their own main-content container');
+	|| !communityStylesSource.includes('#gdl-community-inner { width:100%;min-width:0;max-width:100%;overflow:visible')) {
+	fail(communityStylesFile, 'community cards must retain native aligned grid rows and spans, respond to media loading, and stay within their main-content container');
 }
 if (communityStylesSource.includes('#gdl-community-content { margin-top:34px;overflow:visible;contain:inline-size;')
 	|| communityStylesSource.includes('#gdl-community-content,#gdl-community-content>*')) {
 	fail(communityStylesFile, 'the outer community section must retain Steam\'s native column geometry instead of forcing a full-row width');
 }
 if (communityViewSource.includes('buildNativeSidebarSection')
-	|| !communityViewSource.includes('activityWrapper.parentElement.insertBefore(node, activityWrapper.nextSibling)')) {
+	|| !communityViewSource.includes('anchor.parentElement!.insertBefore(node, anchor.nextSibling)')) {
 	fail(communityViewFile, 'Community Content must use its own main-column section immediately after Activity, never a cloned sidebar shell');
 }
-if (!communityViewSource.includes('setupCommunityAdaptiveWidth(doc, node, activityWrapper, _layout)')
-	|| !communityViewSource.includes('Math.max(34, (sidebarRect.bottom - activityRect.bottom) / scale)')
-	|| !communityViewSource.includes('contentRect.width / contentWidth')
-	|| !communityViewSource.includes("root.classList.add('gdl-community-wide')")
-	|| !communityStylesSource.includes('margin-top:var(--gdl-community-top-gap,34px)')
-	|| !communityStylesSource.includes('#gdl-community-content.gdl-community-wide')) {
-	fail(communityViewFile, 'Community must retain the full detail width below Activity and the live sidebar, including controller connection and UI zoom');
+if (!communityViewSource.includes('communitySidebars.set(node, _layout.sidebarColumn)')
+    || !communityViewSource.includes("stack.id === 'gdl-main-content-stack' ? stack : activityWrapper")
+    || !communityViewSource.includes('gdl-community-leading-row')
+    || communityViewSource.includes('setupCommunityAdaptiveWidth')) {
+    fail(communityViewFile, 'Community must follow Activity with independently flowing rows beside the native sidebar');
 }
 if (!rendererSource.includes("mainContentStack.id = 'gdl-main-content-stack'")
 	|| !rendererSource.includes('mainContentStack.appendChild(activity)')
